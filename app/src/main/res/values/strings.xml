@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Seal</string>
+    <string name="app_name" translatable="false">Selkie</string>
     <string name="video_directory">Video folder</string>
     <string name="extract_audio">Save as audio</string>
     <string name="create_thumbnail">Save thumbnail</string>
@@ -185,6 +185,8 @@
     <string name="aria2_desc">Use aria2c as the external downloader</string>
     <string name="ghost_engine" translatable="false">Ghost engine</string>
     <string name="ghost_engine_desc">Download with the Ghost engine (multi-thread segmented HTTP and HLS); falls back to yt-dlp while unavailable</string>
+    <string name="ghost_engine_self_test">Engine self-test</string>
+    <string name="ghost_engine_self_test_desc">Download a 25 MB test payload through the embedded engine and report the speed</string>
     <string name="cookies">Cookies</string>
     <string name="cookies_desc">Use Netscape formatted cookies for downloads</string>
     <string name="cookies_file_name" translatable="false">cookies.txt</string>

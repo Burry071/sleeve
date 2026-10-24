@@ -1,4 +1,11 @@
 pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "com.chaquo.python") {
+                useModule("com.chaquo.python:gradle:17.1.0")
+            }
+        }
+    }
     repositories {
         gradlePluginPortal()
         google()
@@ -16,6 +23,6 @@ dependencyResolutionManagement {
         mavenLocal()
     }
 }
-rootProject.name = "Seal"
+rootProject.name = "Selkie"
 include (":app")
 include(":color")

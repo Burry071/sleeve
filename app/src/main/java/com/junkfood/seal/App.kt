@@ -58,6 +58,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         MMKV.initialize(this)
+        com.junkfood.seal.ghostengine.GhostEngine.init(this)
 
         startKoin {
             androidLogger()

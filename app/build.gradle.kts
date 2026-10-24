@@ -12,6 +12,7 @@ plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.room)
     alias(libs.plugins.ktfmt.gradle)
+    id("com.chaquo.python")
 }
 
 val keystorePropertiesFile: File = rootProject.file("keystore.properties")
@@ -24,6 +25,13 @@ val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86" to 3, "x86_64" 
 
 val baseVersionName = currentVersion.name
 val currentVersionCode = currentVersion.code.toInt()
+
+chaquopy {
+    defaultConfig {
+        version = "3.13"
+        buildPython("C:/Users/User/AppData/Local/Python/bin/python.exe")
+    }
+}
 
 android {
     compileSdk = 35
@@ -44,7 +52,7 @@ android {
     buildFeatures { buildConfig = true }
 
     defaultConfig {
-        applicationId = "com.junkfood.seal"
+        applicationId = "com.selkie.app"
         minSdk = 24
         targetSdk = 35
         versionCode = 200_000_150
@@ -53,6 +61,9 @@ android {
         versionName = baseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // Chaquopy requires explicit abiFilters; also the ABI set for no-splits builds.
+        ndk { abiFilters.addAll(abiFilterList) }
 
         if (splitApks) {
             splits {

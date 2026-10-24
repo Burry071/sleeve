@@ -86,6 +86,14 @@ object UpdateUtil {
         }
 
     fun checkForUpdate(context: Context = App.context): Release? {
+        // Selkie fork: self-update disabled. Auto-updating would replace this fork
+        // with upstream Seal and silently remove the embedded engine. yt-dlp
+        // component updates remain enabled via YtdlpUpdater.
+        return null
+    }
+
+    @Suppress("unused")
+    private fun upstreamCheckForUpdate(context: Context = App.context): Release? {
         val currentVersion = context.getCurrentVersion()
         val latestRelease = getLatestRelease()
         val latestVersion = latestRelease.name.toVersion()
