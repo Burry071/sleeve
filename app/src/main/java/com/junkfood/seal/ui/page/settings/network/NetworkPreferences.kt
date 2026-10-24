@@ -38,6 +38,7 @@ import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.COOKIES
 import com.junkfood.seal.util.CUSTOM_COMMAND
 import com.junkfood.seal.util.FORCE_IPV4
+import com.junkfood.seal.util.GHOST_ENGINE
 import com.junkfood.seal.util.PROXY
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
@@ -57,6 +58,7 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
     var showRateLimitDialog by remember { mutableStateOf(false) }
     var showProxyDialog by remember { mutableStateOf(false) }
     var aria2c by remember { mutableStateOf(ARIA2C.getBoolean()) }
+    var ghostEngine by remember { mutableStateOf(GHOST_ENGINE.getBoolean()) }
     var proxy by PROXY.booleanState
     var isCookiesEnabled by COOKIES.booleanState
     var forceIpv4 by FORCE_IPV4.booleanState
@@ -126,6 +128,18 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                         onClick = {
                             aria2c = !aria2c
                             updateValue(ARIA2C, aria2c)
+                        },
+                    )
+                }
+                item {
+                    PreferenceSwitch(
+                        title = stringResource(R.string.ghost_engine),
+                        icon = Icons.Outlined.Speed,
+                        description = stringResource(R.string.ghost_engine_desc),
+                        isChecked = ghostEngine,
+                        onClick = {
+                            ghostEngine = !ghostEngine
+                            updateValue(GHOST_ENGINE, ghostEngine)
                         },
                     )
                 }
