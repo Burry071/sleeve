@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -99,13 +100,13 @@ object GhostEngine {
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
+                // Options cross as a JSON string: Chaquopy's Java Map proxies are
+                // not iterable from Python, and the JSON-string bridge is the
+                // established contract for this boundary.
+                val optionsJson =
+                    """{"headers":${json.encodeToString<Map<String, String>>(headers)},"outputDir":${json.encodeToString<String>(outputDir ?: "")},"fileName":${json.encodeToString<String>(fileName ?: "")},"subworkerCount":$subworkerCount}"""
                 val taskId =
-                    call("add_uri", url, mapOf(
-                        "headers" to headers,
-                        "outputDir" to (outputDir ?: ""),
-                        "fileName" to (fileName ?: ""),
-                        "subworkerCount" to subworkerCount,
-                    )) { it["taskId"]!!.jsonPrimitive.content }
+                    call("add_uri", url, optionsJson) { it["taskId"]!!.jsonPrimitive.content }
                 progress.value = EngineProgress(taskId, TaskState.RUNNING, 0, 0, 0)
                 taskId
             }

@@ -555,6 +555,7 @@ object Downloader {
         updateState(State.Idle)
         clearProgressState(isFinished = false)
         taskState.value.taskId.run {
+            DownloadUtil.cancelGhostTask(this)
             YoutubeDL.destroyProcessById(this)
             NotificationUtil.cancelNotification(this.toNotificationId())
         }

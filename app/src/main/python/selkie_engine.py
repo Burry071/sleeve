@@ -236,19 +236,37 @@ class SegmentedHttpStep:
         self._cancel.set()
 
 
+def _java_to_dict(m):
+    """Chaquopy passes Kotlin Maps as java.util.Map objects, which Python's
+    dict() cannot iterate. Convert through keySet()/get() explicitly."""
+    if m is None:
+        return {}
+    result = {}
+    try:
+        for k in m.keySet():
+            result[str(k)] = m.get(k)
+    except AttributeError:
+        try:
+            result = dict(m)
+        except Exception:
+            result = {}
+    return result
+
+
 class Task:
     def __init__(self, url, options):
+        opts = _java_to_dict(options)
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.step = SegmentedHttpStep(
             url,
             output_path=os.path.join(
-                options.get("outputDir") or os.getcwd(),
-                options.get("fileName") or os.path.basename(urllib.parse.urlsplit(url).path) or "download.bin",
+                str(opts.get("outputDir") or os.getcwd()),
+                str(opts.get("fileName") or os.path.basename(urllib.parse.urlsplit(url).path) or "download.bin"),
             ),
-            headers=options.get("headers") or {},
-            user_agent=options.get("userAgent"),
-            subworkers=options.get("subworkerCount") or 8,
+            headers=_java_to_dict(opts.get("headers")),
+            user_agent=opts.get("userAgent"),
+            subworkers=int(opts.get("subworkerCount") or 8),
         )
         self.thread = threading.Thread(target=self.step.run, daemon=True)
 
@@ -261,7 +279,10 @@ _TASKS: dict[str, Task] = {}
 
 
 def add_uri(url, options=None):
-    opts = dict(options or {})
+    if isinstance(options, str):
+        opts = json.loads(options) if options else {}
+    else:
+        opts = _java_to_dict(options)
     task = Task(url, opts)
     with _ENGINE_LOCK:
         _TASKS[task.id] = task

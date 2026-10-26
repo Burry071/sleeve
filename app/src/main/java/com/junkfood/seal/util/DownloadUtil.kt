@@ -21,6 +21,8 @@ import com.junkfood.seal.Downloader.toNotificationId
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.database.objects.DownloadedVideoInfo
+import com.junkfood.seal.ghostengine.GhostEngine
+import com.junkfood.seal.ghostengine.GhostEngine.TaskState
 import com.junkfood.seal.ui.page.settings.network.Cookie
 import com.junkfood.seal.util.FileUtil.getArchiveFile
 import com.junkfood.seal.util.FileUtil.getConfigFile
@@ -39,10 +41,15 @@ import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 object DownloadUtil {
 
@@ -656,6 +663,171 @@ object DownloadUtil {
             )
         }
 
+    /** processId -> embedded-engine task id, for cancellation routing. */
+    private val ghostTasks = ConcurrentHashMap<String, String>()
+
+    fun cancelGhostTask(taskId: String) {
+        ghostTasks.remove(taskId)?.let { GhostEngine.cancel(it) }
+    }
+
+    /**
+     * Ghost engine handoff (Ghost Downloader ADR-0007 pattern): yt-dlp extracts,
+     * the embedded engine transfers the bytes. Eligible only when the selected
+     * format is a single progressive HTTP stream and nothing requires yt-dlp's
+     * post-processing; anything else fails open to the stock path.
+     *
+     * @return null when this download was NOT handled (caller falls back to yt-dlp).
+     */
+    private fun runGhostDownloadIfEligible(
+        videoInfo: VideoInfo,
+        preferences: DownloadPreferences,
+        taskId: String,
+        progressCallback: ((Float, Long, String) -> Unit)?,
+    ): Result<List<String>>? {
+        if (!GHOST_ENGINE.getBoolean()) {
+            Log.d(TAG, "Ghost handoff skipped: engine disabled")
+            return null
+        }
+        Log.d(TAG, "Ghost handoff check: taskId=$taskId formatIdString=${preferences.formatIdString}")
+
+        val eligibleFormat =
+            with(preferences) {
+                if (downloadPlaylist ||
+                        extractAudio ||
+                        convertAudio ||
+                        sponsorBlock ||
+                        createThumbnail ||
+                        cropArtwork ||
+                        embedThumbnail ||
+                        downloadSubtitle ||
+                        embedSubtitle ||
+                        keepSubtitle ||
+                        autoSubtitle ||
+                        autoTranslatedSubtitles ||
+                        convertSubtitle != 0 ||
+                        aria2c ||
+                        rateLimit ||
+                        cookies ||
+                        sdcard ||
+                        useDownloadArchive ||
+                        videoClips.isNotEmpty() ||
+                        splitByChapter
+                ) {
+                    Log.d(TAG, "Ghost handoff skipped: yt-dlp post-processing requested")
+                    return null
+                }
+                if (formatIdString.contains('+')) {
+                    Log.d(TAG, "Ghost handoff skipped: merged video+audio formats")
+                    return null
+                }
+
+                val formats =
+                    (videoInfo.requestedFormats.orEmpty() + videoInfo.formats.orEmpty())
+                        .filter { !it.url.isNullOrBlank() }
+                        .distinctBy { it.formatId to it.url }
+                Log.d(
+                    TAG,
+                    "Ghost handoff formats: ids=${formats.map { it.formatId }} requestedIds=${videoInfo.requestedFormats?.map { it.formatId }}",
+                )
+                val candidate =
+                    if (formatIdString.isNotEmpty())
+                        formats.firstOrNull { it.formatId == formatIdString }
+                            ?: formats.firstOrNull {
+                                it.formatId != null && formatIdString.startsWith(it.formatId!!)
+                            }
+                    else formats.singleOrNull()
+                if (candidate == null) {
+                    Log.d(TAG, "Ghost handoff skipped: no matching single format")
+                    return null
+                }
+                // A single selected format is the exact file yt-dlp would save —
+                // unknown codecs (generic extractor reports acodec=null) are fine.
+
+                val url = candidate.url!!
+                if (!url.startsWith("http")) {
+                    Log.d(TAG, "Ghost handoff skipped: non-http url")
+                    return null
+                }
+                val lower = url.lowercase()
+                if (listOf("m3u8", "mpd", "manifest", "hls", "dash").any { it in lower }) {
+                    Log.d(TAG, "Ghost handoff skipped: segmented manifest url")
+                    return null
+                }
+                candidate
+            }
+
+        val ext = eligibleFormat.ext?.takeIf { it.isNotBlank() } ?: "bin"
+        val baseName =
+            preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
+                .ifBlank { "download" }
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val fileName = "$baseName.$ext"
+        val downloadDir =
+            if (preferences.privateDirectory) App.privateDownloadDir
+            else
+                if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
+
+        val enqueued =
+            runBlocking {
+                GhostEngine.download(
+                    url = eligibleFormat.url!!,
+                    headers = mapOf("User-Agent" to preferences.userAgentString),
+                    outputDir = downloadDir,
+                    fileName = fileName,
+                )
+            }
+        val engineTaskId =
+            enqueued.getOrElse {
+                Log.w(TAG, "Ghost engine unavailable, falling back to yt-dlp: ${it.message}")
+                return null
+            }
+        ghostTasks[taskId] = engineTaskId
+        Log.i(TAG, "Ghost engine took over $taskId -> $engineTaskId ($fileName)")
+
+        val outcome =
+            runBlocking {
+                val settle = async { GhostEngine.watch(engineTaskId) }
+                val bridge =
+                    launch(Dispatchers.IO) {
+                        GhostEngine.progressFlow.collect { p ->
+                            if (p?.taskId != engineTaskId) return@collect
+                            if (p.totalBytes > 0) {
+                                progressCallback?.invoke(
+                                    p.downloadedBytes * 100f / p.totalBytes,
+                                    0,
+                                    "Ghost: %.1f / %.1f MB • %.1f MB/s".format(
+                                        p.downloadedBytes / 1_048_576.0,
+                                        p.totalBytes / 1_048_576.0,
+                                        p.speedBps / 1_048_576.0,
+                                    ),
+                                )
+                            } else if (p.state == TaskState.RUNNING) {
+                                progressCallback?.invoke(-1f, 0, "Ghost: downloading…")
+                            }
+                        }
+                    }
+                settle.await()
+                bridge.cancel()
+                GhostEngine.progressFlow.value
+            }
+        ghostTasks.remove(taskId)
+
+        return when (outcome?.state) {
+            TaskState.COMPLETED ->
+                onFinishDownloading(
+                    preferences = preferences,
+                    videoInfo = videoInfo,
+                    downloadPath = downloadDir,
+                    sdcardUri = preferences.sdcardUri,
+                )
+            else -> {
+                val reason =
+                    outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
+                Result.failure(YoutubeDLException("Ghost engine: $reason"))
+            }
+        }
+    }
+
     @CheckResult
     fun downloadVideo(
         videoInfo: VideoInfo? = null,
@@ -677,6 +849,17 @@ object DownloadUtil {
                             Throwable(context.getString(R.string.fetch_info_error_msg))
                         )
                 }
+
+            // Ghost engine handoff: when the embedded engine can transfer this
+            // download itself, it reports progress through the same callback and
+            // finishes through the same history insertion as the yt-dlp path.
+            runGhostDownloadIfEligible(
+                videoInfo = videoInfo,
+                preferences = downloadPreferences,
+                taskId = taskId,
+                progressCallback = progressCallback,
+            )?.let { return it }
+
             val request = YoutubeDLRequest(url)
             val pathBuilder = StringBuilder()
             val outputBuilder = StringBuilder()
