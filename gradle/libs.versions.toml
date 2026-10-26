@@ -63,7 +63,9 @@ androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 
 androidx-compose-material = { group = "androidx.compose.material", name = "material" }
 
-androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# Explicit version (overrides the BOM): 1.4.0-alpha09+ ships the Expressive
+# wavy progress indicators; alpha11 is the newest that builds against this BOM.
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version = "1.4.0-alpha11" }
 androidx-compose-material3-windowSizeClass = { group = "androidx.compose.material3", name = "material3-window-size-class" }
 
 androidx-graphics-shapes = { group = "androidx.graphics", name = "graphics-shapes", version.ref = "graphics" }

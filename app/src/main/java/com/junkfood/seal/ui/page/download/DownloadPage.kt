@@ -48,6 +48,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
@@ -586,16 +587,13 @@ fun InputUrl(
                     targetValue = progress / 100f,
                     animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
                 )
-            // This material3 build has no wavy indicator yet; LoadingIndicator
-            // below carries the Expressive signature until the BOM bumps.
+            // M3 Expressive wavy progress: the wave amplitude grows with progress.
             if (progressAnimationValue < 0)
-                LinearProgressIndicator(
-                    modifier = Modifier.weight(0.75f).clip(MaterialTheme.shapes.large)
-                )
+                LinearWavyProgressIndicator(modifier = Modifier.weight(0.75f))
             else
-                LinearProgressIndicator(
+                LinearWavyProgressIndicator(
                     progress = { progressAnimationValue },
-                    modifier = Modifier.weight(0.75f).clip(MaterialTheme.shapes.large),
+                    modifier = Modifier.weight(0.75f),
                 )
             Text(
                 text = if (progress < 0) "0%" else "$progress%",
