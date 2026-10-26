@@ -63,6 +63,7 @@ import com.junkfood.seal.ui.component.BackButton
 import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.page.downloadv2.ActionButton
 import com.junkfood.seal.ui.page.downloadv2.CardStateIndicator
 import com.junkfood.seal.ui.page.downloadv2.VideoCardV2
@@ -193,32 +194,35 @@ fun AppearancePreferences(onNavigateBack: () -> Unit, onNavigateTo: (String) -> 
                     indicatorHeight = 6.dp,
                     indicatorWidth = 6.dp,
                 )
-                if (DynamicColors.isDynamicColorAvailable()) {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.dynamic_color),
-                        description = stringResource(id = R.string.dynamic_color_desc),
-                        icon = Icons.Outlined.Colorize,
-                        isChecked = LocalDynamicColorSwitch.current,
-                        onClick = { PreferenceUtil.switchDynamicColor() },
+                PreferencesGroupCard(modifier = Modifier.padding(vertical = 6.dp)) {
+                    if (DynamicColors.isDynamicColorAvailable()) {
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.dynamic_color),
+                            description = stringResource(id = R.string.dynamic_color_desc),
+                            icon = Icons.Outlined.Colorize,
+                            isChecked = LocalDynamicColorSwitch.current,
+                            onClick = { PreferenceUtil.switchDynamicColor() },
+                        )
+                    }
+                    val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
+                    PreferenceSwitchWithDivider(
+                        title = stringResource(id = R.string.dark_theme),
+                        icon =
+                            if (isDarkTheme) Icons.Outlined.DarkMode else Icons.Outlined.LightMode,
+                        isChecked = isDarkTheme,
+                        description = LocalDarkTheme.current.getDarkThemeDesc(),
+                        onChecked = {
+                            PreferenceUtil.modifyDarkThemePreference(if (isDarkTheme) OFF else ON)
+                        },
+                        onClick = { onNavigateTo(Route.DARK_THEME) },
                     )
-                }
-                val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
-                PreferenceSwitchWithDivider(
-                    title = stringResource(id = R.string.dark_theme),
-                    icon = if (isDarkTheme) Icons.Outlined.DarkMode else Icons.Outlined.LightMode,
-                    isChecked = isDarkTheme,
-                    description = LocalDarkTheme.current.getDarkThemeDesc(),
-                    onChecked = {
-                        PreferenceUtil.modifyDarkThemePreference(if (isDarkTheme) OFF else ON)
-                    },
-                    onClick = { onNavigateTo(Route.DARK_THEME) },
-                )
-                PreferenceItem(
-                    title = stringResource(R.string.language),
-                    icon = Icons.Outlined.Language,
-                    description = Locale.getDefault().toDisplayName(),
-                ) {
-                    onNavigateTo(Route.LANGUAGES)
+                    PreferenceItem(
+                        title = stringResource(R.string.language),
+                        icon = Icons.Outlined.Language,
+                        description = Locale.getDefault().toDisplayName(),
+                    ) {
+                        onNavigateTo(Route.LANGUAGES)
+                    }
                 }
             }
         },

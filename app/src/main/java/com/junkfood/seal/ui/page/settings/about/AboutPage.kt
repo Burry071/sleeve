@@ -42,6 +42,7 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ui.component.BackButton
 import com.junkfood.seal.ui.component.ConfirmButton
 import com.junkfood.seal.ui.component.PreferenceItem
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.ToastUtil
 
 private const val repoUrl = "https://github.com/JunkFood02/Seal"
@@ -93,46 +94,43 @@ fun AboutPage(
         content = {
             LazyColumn(modifier = Modifier.padding(it)) {
                 item {
-                    PreferenceItem(
-                        title = stringResource(R.string.based_on_seal),
-                        description = stringResource(R.string.based_on_seal_desc),
-                        icon = Icons.Outlined.Description,
-                    ) {
-                        openUrl(repoUrl)
-                    }
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(R.string.engine_design),
-                        description = stringResource(R.string.engine_design_desc),
-                        icon = Icons.Outlined.Bolt,
-                    ) {
-                        openUrl(engineUrl)
-                    }
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.credits),
-                        description = stringResource(id = R.string.credits_desc),
-                        icon = Icons.Outlined.AutoAwesome,
-                    ) {
-                        onNavigateToCreditsPage()
-                    }
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(R.string.version),
-                        description = versionName,
-                        icon = Icons.Outlined.Info,
-                    ) {
-                        clipboardManager.setText(AnnotatedString(info))
-                        ToastUtil.makeToast(R.string.info_copied)
-                    }
-                }
-                item {
-                    PreferenceItem(title = "Package name", description = context.packageName) {
-                        clipboardManager.setText(AnnotatedString(context.packageName))
-                        ToastUtil.makeToast(R.string.info_copied)
+                    PreferencesGroupCard {
+                        PreferenceItem(
+                            title = stringResource(R.string.based_on_seal),
+                            description = stringResource(R.string.based_on_seal_desc),
+                            icon = Icons.Outlined.Description,
+                        ) {
+                            openUrl(repoUrl)
+                        }
+                        PreferenceItem(
+                            title = stringResource(R.string.engine_design),
+                            description = stringResource(R.string.engine_design_desc),
+                            icon = Icons.Outlined.Bolt,
+                        ) {
+                            openUrl(engineUrl)
+                        }
+                        PreferenceItem(
+                            title = stringResource(id = R.string.credits),
+                            description = stringResource(id = R.string.credits_desc),
+                            icon = Icons.Outlined.AutoAwesome,
+                        ) {
+                            onNavigateToCreditsPage()
+                        }
+                        PreferenceItem(
+                            title = stringResource(R.string.version),
+                            description = versionName,
+                            icon = Icons.Outlined.Info,
+                        ) {
+                            clipboardManager.setText(AnnotatedString(info))
+                            ToastUtil.makeToast(R.string.info_copied)
+                        }
+                        PreferenceItem(
+                            title = "Package name",
+                            description = context.packageName
+                        ) {
+                            clipboardManager.setText(AnnotatedString(context.packageName))
+                            ToastUtil.makeToast(R.string.info_copied)
+                        }
                     }
                 }
             }

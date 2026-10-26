@@ -43,6 +43,7 @@ import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
 import com.junkfood.seal.util.AUDIO_CONVERT
 import com.junkfood.seal.util.CROP_ARTWORK
@@ -129,126 +130,89 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
                     }
                 item { PreferenceSubtitle(text = stringResource(id = R.string.audio)) }
                 item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.extract_audio),
-                        description = stringResource(id = R.string.extract_audio_summary),
-                        icon = Icons.Outlined.MusicNote,
-                        isChecked = audioSwitch,
-                        enabled = !isCustomCommandEnabled,
-                        onClick = {
-                            audioSwitch = !audioSwitch
-                            PreferenceUtil.updateValue(EXTRACT_AUDIO, audioSwitch)
-                        },
-                    )
-                }
-                //                item {
-                //                    PreferenceItem(title = stringResource(id =
-                // R.string.audio_format_preference),
-                //                        description = audioFormat,
-                //                        icon = Icons.Outlined.AudioFile,
-                //                        enabled = !isCustomCommandEnabled &&
-                // !isFormatSortingEnabled,
-                //                        onClick = { showAudioFormatDialog = true })
-                //                }
-                //                item {
-                //                    PreferenceItem(
-                //                        title = stringResource(id = R.string.audio_quality),
-                //                        description = audioQuality,
-                //                        icon = Icons.Outlined.HighQuality,
-                //                        onClick = { showAudioQualityDialog = true },
-                //                        enabled = !isCustomCommandEnabled &&
-                // !isFormatSortingEnabled
-                //                    )
-                //                }
-                item {
-                    PreferenceSwitchWithDivider(
-                        title = stringResource(R.string.convert_audio_format),
-                        description = PreferenceStrings.getAudioConvertDesc(convertFormat),
-                        icon = Icons.Outlined.Sync,
-                        enabled = audioSwitch && !isCustomCommandEnabled,
-                        onClick = { showAudioConvertDialog = true },
-                        isChecked = convertAudio,
-                        onChecked = {
-                            convertAudio = !convertAudio
-                            AUDIO_CONVERT.updateBoolean(convertAudio)
-                        },
-                    )
-                }
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.embed_metadata),
-                        description = stringResource(id = R.string.embed_metadata_desc),
-                        enabled = audioSwitch && !isCustomCommandEnabled,
-                        isChecked = embedMetadata,
-                        icon = Icons.Outlined.ArtTrack,
-                        onClick = {
-                            embedMetadata = !embedMetadata
-                            EMBED_METADATA.updateBoolean(embedMetadata)
-                        },
-                    )
-                }
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(R.string.crop_artwork),
-                        description = stringResource(R.string.crop_artwork_desc),
-                        icon = Icons.Outlined.Crop,
-                        enabled = embedMetadata && audioSwitch && !isCustomCommandEnabled,
-                        isChecked = isArtworkCroppingEnabled,
-                    ) {
-                        isArtworkCroppingEnabled = !isArtworkCroppingEnabled
-                        PreferenceUtil.updateValue(CROP_ARTWORK, isArtworkCroppingEnabled)
+                    PreferencesGroupCard {
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.extract_audio),
+                            description = stringResource(id = R.string.extract_audio_summary),
+                            icon = Icons.Outlined.MusicNote,
+                            isChecked = audioSwitch,
+                            enabled = !isCustomCommandEnabled,
+                            onClick = {
+                                audioSwitch = !audioSwitch
+                                PreferenceUtil.updateValue(EXTRACT_AUDIO, audioSwitch)
+                            },
+                        )
+                        PreferenceSwitchWithDivider(
+                            title = stringResource(R.string.convert_audio_format),
+                            description = PreferenceStrings.getAudioConvertDesc(convertFormat),
+                            icon = Icons.Outlined.Sync,
+                            enabled = audioSwitch && !isCustomCommandEnabled,
+                            onClick = { showAudioConvertDialog = true },
+                            isChecked = convertAudio,
+                            onChecked = {
+                                convertAudio = !convertAudio
+                                AUDIO_CONVERT.updateBoolean(convertAudio)
+                            },
+                        )
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.embed_metadata),
+                            description = stringResource(id = R.string.embed_metadata_desc),
+                            enabled = audioSwitch && !isCustomCommandEnabled,
+                            isChecked = embedMetadata,
+                            icon = Icons.Outlined.ArtTrack,
+                            onClick = {
+                                embedMetadata = !embedMetadata
+                                EMBED_METADATA.updateBoolean(embedMetadata)
+                            },
+                        )
+                        PreferenceSwitch(
+                            title = stringResource(R.string.crop_artwork),
+                            description = stringResource(R.string.crop_artwork_desc),
+                            icon = Icons.Outlined.Crop,
+                            enabled = embedMetadata && audioSwitch && !isCustomCommandEnabled,
+                            isChecked = isArtworkCroppingEnabled,
+                        ) {
+                            isArtworkCroppingEnabled = !isArtworkCroppingEnabled
+                            PreferenceUtil.updateValue(CROP_ARTWORK, isArtworkCroppingEnabled)
+                        }
                     }
                 }
                 item { PreferenceSubtitle(text = stringResource(id = R.string.video)) }
                 item {
-                    PreferenceItem(
-                        title = stringResource(R.string.video_format_preference),
-                        description = PreferenceStrings.getVideoFormatLabel(videoFormat),
-                        icon = Icons.Outlined.VideoFile,
-                        enabled = !audioSwitch && !isCustomCommandEnabled && !isFormatSortingEnabled,
-                    ) {
-                        showVideoFormatDialog = true
+                    PreferencesGroupCard {
+                        PreferenceItem(
+                            title = stringResource(R.string.video_format_preference),
+                            description = PreferenceStrings.getVideoFormatLabel(videoFormat),
+                            icon = Icons.Outlined.VideoFile,
+                            enabled =
+                                !audioSwitch && !isCustomCommandEnabled && !isFormatSortingEnabled,
+                        ) {
+                            showVideoFormatDialog = true
+                        }
+                        PreferenceItem(
+                            title = stringResource(id = R.string.video_quality),
+                            description = PreferenceStrings.getVideoResolutionDesc(videoQuality),
+                            icon = Icons.Outlined.HighQuality,
+                            enabled =
+                                !audioSwitch && !isCustomCommandEnabled && !isFormatSortingEnabled,
+                        ) {
+                            showVideoQualityDialog = true
+                        }
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.remux_container_mkv),
+                            description = stringResource(id = R.string.remux_container_mkv_desc),
+                            isChecked = (downloadSubtitle && embedSubtitle) || remuxToMkv,
+                            icon = Icons.Outlined.Movie,
+                            enabled =
+                                !(downloadSubtitle && embedSubtitle) &&
+                                    !isCustomCommandEnabled &&
+                                    !audioSwitch,
+                            onClick = {
+                                remuxToMkv = !remuxToMkv
+                                MERGE_OUTPUT_MKV.updateBoolean(remuxToMkv)
+                            },
+                        )
                     }
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.video_quality),
-                        description = PreferenceStrings.getVideoResolutionDesc(videoQuality),
-                        icon = Icons.Outlined.HighQuality,
-                        enabled = !audioSwitch && !isCustomCommandEnabled && !isFormatSortingEnabled,
-                    ) {
-                        showVideoQualityDialog = true
-                    }
-                } /*                item {
-                      var embedThumbnail by EMBED_THUMBNAIL.booleanState
-
-                      PreferenceSwitch(
-                          title = stringResource(id = R.string.embed_thumbnail),
-                          description = stringResource(id = R.string.embed_thumbnail_desc),
-                          icon = Icons.Outlined.Photo,
-                          isChecked = embedThumbnail,
-                          enabled = !isCustomCommandEnabled && !audioSwitch
-                      ) {
-                          embedThumbnail = !embedThumbnail
-                          EMBED_THUMBNAIL.updateBoolean(embedThumbnail)
-                      }
-                  }*/
-
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.remux_container_mkv),
-                        description = stringResource(id = R.string.remux_container_mkv_desc),
-                        isChecked = (downloadSubtitle && embedSubtitle) || remuxToMkv,
-                        icon = Icons.Outlined.Movie,
-                        enabled =
-                            !(downloadSubtitle && embedSubtitle) &&
-                                !isCustomCommandEnabled &&
-                                !audioSwitch,
-                        onClick = {
-                            remuxToMkv = !remuxToMkv
-                            MERGE_OUTPUT_MKV.updateBoolean(remuxToMkv)
-                        },
-                    )
                 }
                 if (downloadSubtitle && embedSubtitle) {
                     item {
@@ -258,72 +222,66 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
 
                 item { PreferenceSubtitle(text = stringResource(id = R.string.advanced_settings)) }
                 item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.subtitle),
-                        icon = Icons.Outlined.Subtitles,
-                        enabled = !isCustomCommandEnabled,
-                        description = stringResource(id = R.string.subtitle_desc),
-                    ) {
-                        navigateToSubtitlePage()
-                    }
-                }
-                item {
-                    PreferenceSwitchWithDivider(
-                        title = stringResource(id = R.string.format_sorting),
-                        icon = Icons.Outlined.Sort,
-                        description = stringResource(id = R.string.format_sorting_desc),
-                        enabled = !isCustomCommandEnabled,
-                        isChecked = isFormatSortingEnabled,
-                        onChecked = {
-                            isFormatSortingEnabled = !isFormatSortingEnabled
-                            FORMAT_SORTING.updateBoolean(isFormatSortingEnabled)
-                        },
-                        onClick = { showFormatSorterDialog = true },
-                    )
-                }
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.format_selection),
-                        icon = Icons.Outlined.VideoSettings,
-                        enabled = !isCustomCommandEnabled,
-                        description = stringResource(id = R.string.format_selection_desc),
-                        isChecked = isFormatSelectionEnabled,
-                    ) {
-                        isFormatSelectionEnabled = !isFormatSelectionEnabled
-                        PreferenceUtil.updateValue(FORMAT_SELECTION, isFormatSelectionEnabled)
-                    }
-                }
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.clip_video),
-                        description = stringResource(id = R.string.clip_video_desc),
-                        icon = Icons.Outlined.ContentCut,
-                        isChecked = isVideoClipEnabled,
-                        enabled = !isCustomCommandEnabled && isFormatSelectionEnabled,
-                    ) {
-                        if (!isVideoClipEnabled) showVideoClipDialog = true
-                        else {
-                            isVideoClipEnabled = false
-                            VIDEO_CLIP.updateBoolean(false)
+                    PreferencesGroupCard {
+                        PreferenceItem(
+                            title = stringResource(id = R.string.subtitle),
+                            icon = Icons.Outlined.Subtitles,
+                            enabled = !isCustomCommandEnabled,
+                            description = stringResource(id = R.string.subtitle_desc),
+                        ) {
+                            navigateToSubtitlePage()
                         }
-                    }
-                }
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.merge_audiostream),
-                        description = stringResource(id = R.string.merge_audiostream_desc),
-                        isChecked = mergeAudioStream,
-                        icon = Icons.Outlined.SpatialAudioOff,
-                        onClick = {
-                            if (mergeAudioStream) {
-                                mergeAudioStream = false
-                                MERGE_MULTI_AUDIO_STREAM.updateBoolean(false)
-                            } else {
-                                showMergeAudioDialog = true
+                        PreferenceSwitchWithDivider(
+                            title = stringResource(id = R.string.format_sorting),
+                            icon = Icons.Outlined.Sort,
+                            description = stringResource(id = R.string.format_sorting_desc),
+                            enabled = !isCustomCommandEnabled,
+                            isChecked = isFormatSortingEnabled,
+                            onChecked = {
+                                isFormatSortingEnabled = !isFormatSortingEnabled
+                                FORMAT_SORTING.updateBoolean(isFormatSortingEnabled)
+                            },
+                            onClick = { showFormatSorterDialog = true },
+                        )
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.format_selection),
+                            icon = Icons.Outlined.VideoSettings,
+                            enabled = !isCustomCommandEnabled,
+                            description = stringResource(id = R.string.format_selection_desc),
+                            isChecked = isFormatSelectionEnabled,
+                        ) {
+                            isFormatSelectionEnabled = !isFormatSelectionEnabled
+                            PreferenceUtil.updateValue(FORMAT_SELECTION, isFormatSelectionEnabled)
+                        }
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.clip_video),
+                            description = stringResource(id = R.string.clip_video_desc),
+                            icon = Icons.Outlined.ContentCut,
+                            isChecked = isVideoClipEnabled,
+                            enabled = !isCustomCommandEnabled && isFormatSelectionEnabled,
+                        ) {
+                            if (!isVideoClipEnabled) showVideoClipDialog = true
+                            else {
+                                isVideoClipEnabled = false
+                                VIDEO_CLIP.updateBoolean(false)
                             }
-                        },
-                        enabled = !isCustomCommandEnabled && isFormatSelectionEnabled,
-                    )
+                        }
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.merge_audiostream),
+                            description = stringResource(id = R.string.merge_audiostream_desc),
+                            isChecked = mergeAudioStream,
+                            icon = Icons.Outlined.SpatialAudioOff,
+                            onClick = {
+                                if (mergeAudioStream) {
+                                    mergeAudioStream = false
+                                    MERGE_MULTI_AUDIO_STREAM.updateBoolean(false)
+                                } else {
+                                    showMergeAudioDialog = true
+                                }
+                            },
+                            enabled = !isCustomCommandEnabled && isFormatSelectionEnabled,
+                        )
+                    }
                 }
             }
         },

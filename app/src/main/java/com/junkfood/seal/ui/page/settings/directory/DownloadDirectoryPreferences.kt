@@ -89,6 +89,7 @@ import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.component.PreferencesHintCard
 import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.util.COMMAND_DIRECTORY
@@ -275,113 +276,107 @@ fun DownloadDirectoryPreferences(onNavigateBack: () -> Unit) {
                     }
                 }
             item { PreferenceSubtitle(text = stringResource(R.string.general_settings)) }
-            if (!isCustomCommandEnabled) {
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.video_directory),
-                        description = videoDirectoryText,
-                        enabled = !isPrivateDirectoryEnabled && !sdcardDownload,
-                        icon = Icons.Outlined.VideoLibrary,
-                    ) {
-                        openDirectoryChooser(directory = Directory.VIDEO)
-                    }
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.audio_directory),
-                        description = audioDirectoryText,
-                        enabled = !isPrivateDirectoryEnabled && !sdcardDownload,
-                        icon = Icons.Outlined.LibraryMusic,
-                    ) {
-                        openDirectoryChooser(directory = Directory.AUDIO)
-                    }
-                }
-            }
             item {
-                PreferenceItem(
-                    title = stringResource(id = R.string.custom_command_directory),
-                    description =
-                        customCommandDirectory.ifEmpty {
-                            stringResource(id = R.string.set_directory_desc)
-                        },
-                    icon = Icons.Outlined.Folder,
-                ) {
-                    showCustomCommandDirectoryDialog = true
-                }
-            }
-            item {
-                PreferenceSwitchWithDivider(
-                    title = stringResource(id = R.string.sdcard_directory),
-                    description =
-                        sdcardUri.ifEmpty { stringResource(id = R.string.set_directory_desc) },
-                    isChecked = sdcardDownload,
-                    enabled = !isCustomCommandEnabled,
-                    isSwitchEnabled = !isCustomCommandEnabled,
-                    onChecked = {
-                        if (sdcardUri.isNotEmpty()) {
-                            sdcardDownload = !sdcardDownload
-                            PreferenceUtil.updateValue(SDCARD_DOWNLOAD, sdcardDownload)
-                        } else {
-                            openDirectoryChooser(Directory.SDCARD)
+                PreferencesGroupCard {
+                    if (!isCustomCommandEnabled) {
+                        PreferenceItem(
+                            title = stringResource(id = R.string.video_directory),
+                            description = videoDirectoryText,
+                            enabled = !isPrivateDirectoryEnabled && !sdcardDownload,
+                            icon = Icons.Outlined.VideoLibrary,
+                        ) {
+                            openDirectoryChooser(directory = Directory.VIDEO)
                         }
-                    },
-                    icon = Icons.Outlined.SdCard,
-                    onClick = { openDirectoryChooser(Directory.SDCARD) },
-                )
-            }
-            item {
-                PreferenceItem(
-                    title = stringResource(id = R.string.subdirectory),
-                    description = stringResource(id = R.string.subdirectory_desc),
-                    icon = Icons.Outlined.SnippetFolder,
-                    enabled = !isCustomCommandEnabled && !sdcardDownload,
-                ) {
-                    showSubdirectoryDialog = true
+                        PreferenceItem(
+                            title = stringResource(id = R.string.audio_directory),
+                            description = audioDirectoryText,
+                            enabled = !isPrivateDirectoryEnabled && !sdcardDownload,
+                            icon = Icons.Outlined.LibraryMusic,
+                        ) {
+                            openDirectoryChooser(directory = Directory.AUDIO)
+                        }
+                    }
+                    PreferenceItem(
+                        title = stringResource(id = R.string.custom_command_directory),
+                        description =
+                            customCommandDirectory.ifEmpty {
+                                stringResource(id = R.string.set_directory_desc)
+                            },
+                        icon = Icons.Outlined.Folder,
+                    ) {
+                        showCustomCommandDirectoryDialog = true
+                    }
+                    PreferenceSwitchWithDivider(
+                        title = stringResource(id = R.string.sdcard_directory),
+                        description =
+                            sdcardUri.ifEmpty { stringResource(id = R.string.set_directory_desc) },
+                        isChecked = sdcardDownload,
+                        enabled = !isCustomCommandEnabled,
+                        isSwitchEnabled = !isCustomCommandEnabled,
+                        onChecked = {
+                            if (sdcardUri.isNotEmpty()) {
+                                sdcardDownload = !sdcardDownload
+                                PreferenceUtil.updateValue(SDCARD_DOWNLOAD, sdcardDownload)
+                            } else {
+                                openDirectoryChooser(Directory.SDCARD)
+                            }
+                        },
+                        icon = Icons.Outlined.SdCard,
+                        onClick = { openDirectoryChooser(Directory.SDCARD) },
+                    )
+                    PreferenceItem(
+                        title = stringResource(id = R.string.subdirectory),
+                        description = stringResource(id = R.string.subdirectory_desc),
+                        icon = Icons.Outlined.SnippetFolder,
+                        enabled = !isCustomCommandEnabled && !sdcardDownload,
+                    ) {
+                        showSubdirectoryDialog = true
+                    }
                 }
             }
             item { PreferenceSubtitle(text = stringResource(R.string.privacy)) }
             item {
-                PreferenceSwitch(
-                    title = stringResource(id = R.string.private_directory),
-                    description = stringResource(R.string.private_directory_desc),
-                    icon = Icons.Outlined.TabUnselected,
-                    enabled = !showDirectoryAlert && !sdcardDownload && !isCustomCommandEnabled,
-                    isChecked = isPrivateDirectoryEnabled,
-                    onClick = {
-                        isPrivateDirectoryEnabled = !isPrivateDirectoryEnabled
-                        PreferenceUtil.updateValue(PRIVATE_DIRECTORY, isPrivateDirectoryEnabled)
-                    },
-                )
+                PreferencesGroupCard {
+                    PreferenceSwitch(
+                        title = stringResource(id = R.string.private_directory),
+                        description = stringResource(R.string.private_directory_desc),
+                        icon = Icons.Outlined.TabUnselected,
+                        enabled = !showDirectoryAlert && !sdcardDownload && !isCustomCommandEnabled,
+                        isChecked = isPrivateDirectoryEnabled,
+                        onClick = {
+                            isPrivateDirectoryEnabled = !isPrivateDirectoryEnabled
+                            PreferenceUtil.updateValue(PRIVATE_DIRECTORY, isPrivateDirectoryEnabled)
+                        },
+                    )
+                }
             }
             item { PreferenceSubtitle(text = stringResource(R.string.advanced_settings)) }
             item {
-                PreferenceItem(
-                    title = stringResource(R.string.output_template),
-                    description = stringResource(id = R.string.output_template_desc),
-                    icon = Icons.Outlined.FolderSpecial,
-                    enabled = !isCustomCommandEnabled && !sdcardDownload,
-                    onClick = { showOutputTemplateDialog = true },
-                )
-            }
-            item {
-                var restrictFilenames by RESTRICT_FILENAMES.booleanState
-                PreferenceSwitch(
-                    title = stringResource(id = R.string.restrict_filenames),
-                    icon = Icons.Outlined.Spellcheck,
-                    description = stringResource(id = R.string.restrict_filenames_desc),
-                    isChecked = restrictFilenames,
-                ) {
-                    restrictFilenames = !restrictFilenames
-                    RESTRICT_FILENAMES.updateBoolean(restrictFilenames)
+                PreferencesGroupCard {
+                    PreferenceItem(
+                        title = stringResource(R.string.output_template),
+                        description = stringResource(id = R.string.output_template_desc),
+                        icon = Icons.Outlined.FolderSpecial,
+                        enabled = !isCustomCommandEnabled && !sdcardDownload,
+                        onClick = { showOutputTemplateDialog = true },
+                    )
+                    var restrictFilenames by RESTRICT_FILENAMES.booleanState
+                    PreferenceSwitch(
+                        title = stringResource(id = R.string.restrict_filenames),
+                        icon = Icons.Outlined.Spellcheck,
+                        description = stringResource(id = R.string.restrict_filenames_desc),
+                        isChecked = restrictFilenames,
+                    ) {
+                        restrictFilenames = !restrictFilenames
+                        RESTRICT_FILENAMES.updateBoolean(restrictFilenames)
+                    }
+                    PreferenceItem(
+                        title = stringResource(R.string.clear_temp_files),
+                        description = stringResource(R.string.clear_temp_files_desc),
+                        icon = Icons.Outlined.FolderDelete,
+                        onClick = { showClearTempDialog = true },
+                    )
                 }
-            }
-            item {
-                PreferenceItem(
-                    title = stringResource(R.string.clear_temp_files),
-                    description = stringResource(R.string.clear_temp_files_desc),
-                    icon = Icons.Outlined.FolderDelete,
-                    onClick = { showClearTempDialog = true },
-                )
             }
         }
     }

@@ -37,6 +37,7 @@ import com.junkfood.seal.ui.component.PreferenceInfo
 import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithContainer
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.AUTO_SUBTITLE
 import com.junkfood.seal.util.AUTO_TRANSLATED_SUBTITLES
 import com.junkfood.seal.util.EMBED_SUBTITLE
@@ -108,85 +109,67 @@ fun SubtitlePreference(onNavigateBack: () -> Unit) {
         content = {
             LazyColumn(modifier = Modifier, contentPadding = it) {
                 item {
-                    PreferenceSwitchWithContainer(
-                        title = stringResource(id = R.string.download_subtitles),
-                        isChecked = downloadSubtitle,
-                        onClick = {
-                            downloadSubtitle = !downloadSubtitle
-                            SUBTITLE.updateBoolean(downloadSubtitle)
-                        },
-                        icon = null,
-                    )
-                }
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.subtitle_language),
-                        icon = Icons.Outlined.Language,
-                        description = subtitleLang,
-                        onClick = { showLanguageDialog = true },
-                    )
-                }
-
-                item {
-                    PreferenceItem(
-                        title = stringResource(id = R.string.convert_subtitle),
-                        description = subtitleFormatText,
-                        icon = Icons.Outlined.Sync,
-                    ) {
-                        showConversionDialog = true
-                    }
-                }
-
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.auto_subtitle),
-                        icon = Icons.Outlined.ClosedCaption,
-                        description = stringResource(id = R.string.auto_subtitle_desc),
-                        isChecked = autoSubtitle,
-                        onClick = {
-                            autoSubtitle = !autoSubtitle
-                            AUTO_SUBTITLE.updateBoolean(autoSubtitle)
-                        },
-                    )
-                }
-
-                item {
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.auto_translated_subtitles),
-                        icon = Icons.Outlined.Translate,
-                        isChecked = autoTranslatedSubtitle,
-                        enabled = autoSubtitle,
-                    ) {
-                        if (!autoTranslatedSubtitle) {
-                            showAutoTranslateDialog = true
-                        } else {
-                            autoTranslatedSubtitle = false
-                            AUTO_TRANSLATED_SUBTITLES.updateBoolean(false)
+                    PreferencesGroupCard {
+                        PreferenceSwitchWithContainer(
+                            title = stringResource(id = R.string.download_subtitles),
+                            isChecked = downloadSubtitle,
+                            onClick = {
+                                downloadSubtitle = !downloadSubtitle
+                                SUBTITLE.updateBoolean(downloadSubtitle)
+                            },
+                            icon = null,
+                        )
+                        PreferenceItem(
+                            title = stringResource(id = R.string.subtitle_language),
+                            icon = Icons.Outlined.Language,
+                            description = subtitleLang,
+                            onClick = { showLanguageDialog = true },
+                        )
+                        PreferenceItem(
+                            title = stringResource(id = R.string.convert_subtitle),
+                            description = subtitleFormatText,
+                            icon = Icons.Outlined.Sync,
+                        ) {
+                            showConversionDialog = true
                         }
-                    }
-                }
-
-                item {
-                    androidx.compose.material3.HorizontalDivider()
-                    PreferenceSwitch(
-                        title = stringResource(id = R.string.embed_subtitles),
-                        description = stringResource(id = R.string.embed_subtitles_desc),
-                        isChecked = embedSubtitle,
-                        enabled = !downloadAudio,
-                        onClick = {
-                            if (embedSubtitle) {
-                                embedSubtitle = false
-                                EMBED_SUBTITLE.updateBoolean(false)
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.auto_subtitle),
+                            icon = Icons.Outlined.ClosedCaption,
+                            description = stringResource(id = R.string.auto_subtitle_desc),
+                            isChecked = autoSubtitle,
+                            onClick = {
+                                autoSubtitle = !autoSubtitle
+                                AUTO_SUBTITLE.updateBoolean(autoSubtitle)
+                            },
+                        )
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.auto_translated_subtitles),
+                            icon = Icons.Outlined.Translate,
+                            isChecked = autoTranslatedSubtitle,
+                            enabled = autoSubtitle,
+                        ) {
+                            if (!autoTranslatedSubtitle) {
+                                showAutoTranslateDialog = true
                             } else {
-                                showEmbedSubtitleDialog = true
+                                autoTranslatedSubtitle = false
+                                AUTO_TRANSLATED_SUBTITLES.updateBoolean(false)
                             }
-                        },
-                        icon = Icons.Outlined.Subtitles,
-                    )
-                }
-
-                item {
-                    Column {
+                        }
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.embed_subtitles),
+                            description = stringResource(id = R.string.embed_subtitles_desc),
+                            isChecked = embedSubtitle,
+                            enabled = !downloadAudio,
+                            onClick = {
+                                if (embedSubtitle) {
+                                    embedSubtitle = false
+                                    EMBED_SUBTITLE.updateBoolean(false)
+                                } else {
+                                    showEmbedSubtitleDialog = true
+                                }
+                            },
+                            icon = Icons.Outlined.Subtitles,
+                        )
                         var keepSubtitles by KEEP_SUBTITLE_FILES.booleanState
                         PreferenceSwitch(
                             title = stringResource(id = R.string.keep_subtitle_files),

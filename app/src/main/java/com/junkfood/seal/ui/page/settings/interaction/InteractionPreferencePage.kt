@@ -19,6 +19,7 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ui.component.BackButton
 import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.DOWNLOAD_TYPE_INITIALIZATION
 import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.PreferenceUtil.updateInt
@@ -51,16 +52,18 @@ fun InteractionPreferencePage(modifier: Modifier = Modifier, onBack: () -> Unit)
             }
 
             item {
-                PreferenceItem(
-                    title = stringResource(id = R.string.download_type),
-                    description =
-                        when (initialType) {
-                            USE_PREVIOUS_SELECTION ->
-                                stringResource(id = R.string.use_previous_selection)
-                            else -> stringResource(id = R.string.none)
-                        },
-                ) {
-                    showDownloadTypeDialog = true
+                PreferencesGroupCard {
+                    PreferenceItem(
+                        title = stringResource(id = R.string.download_type),
+                        description =
+                            when (initialType) {
+                                USE_PREVIOUS_SELECTION ->
+                                    stringResource(id = R.string.use_previous_selection)
+                                else -> stringResource(id = R.string.none)
+                            },
+                    ) {
+                        showDownloadTypeDialog = true
+                    }
                 }
             }
         }
