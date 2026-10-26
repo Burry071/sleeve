@@ -50,6 +50,7 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.Route
 import com.junkfood.seal.ui.common.intState
 import com.junkfood.seal.ui.component.BackButton
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.component.PreferencesHintCard
 import com.junkfood.seal.ui.component.SettingItem
 import com.junkfood.seal.util.EXTRACT_AUDIO
@@ -139,89 +140,83 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
                 }
             }
             item {
-                SettingItem(
-                    title = stringResource(id = R.string.general_settings),
-                    description = stringResource(id = R.string.general_settings_desc),
-                    icon = Icons.Rounded.SettingsApplications,
-                ) {
-                    onNavigateTo(Route.GENERAL_DOWNLOAD_PREFERENCES)
+                PreferencesGroupCard {
+                    SettingItem(
+                        title = stringResource(id = R.string.general_settings),
+                        description = stringResource(id = R.string.general_settings_desc),
+                        icon = Icons.Rounded.SettingsApplications,
+                    ) {
+                        onNavigateTo(Route.GENERAL_DOWNLOAD_PREFERENCES)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.download_directory),
+                        description = stringResource(id = R.string.download_directory_desc),
+                        icon = Icons.Rounded.Folder,
+                    ) {
+                        onNavigateTo(Route.DOWNLOAD_DIRECTORY)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.format),
+                        description = stringResource(id = R.string.format_settings_desc),
+                        icon =
+                            if (EXTRACT_AUDIO.getBoolean()) Icons.Rounded.AudioFile
+                            else Icons.Rounded.VideoFile,
+                    ) {
+                        onNavigateTo(Route.DOWNLOAD_FORMAT)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.network),
+                        description = stringResource(id = R.string.network_settings_desc),
+                        icon =
+                            if (App.connectivityManager.isActiveNetworkMetered)
+                                Icons.Rounded.SignalCellular4Bar
+                            else Icons.Rounded.SignalWifi4Bar,
+                    ) {
+                        onNavigateTo(Route.NETWORK_PREFERENCES)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.custom_command),
+                        description = stringResource(id = R.string.custom_command_desc),
+                        icon = Icons.Rounded.Terminal,
+                    ) {
+                        onNavigateTo(Route.TEMPLATE)
+                    }
                 }
             }
             item {
-                SettingItem(
-                    title = stringResource(id = R.string.download_directory),
-                    description = stringResource(id = R.string.download_directory_desc),
-                    icon = Icons.Rounded.Folder,
-                ) {
-                    onNavigateTo(Route.DOWNLOAD_DIRECTORY)
+                PreferencesGroupCard {
+                    SettingItem(
+                        title = stringResource(id = R.string.look_and_feel),
+                        description = stringResource(id = R.string.display_settings),
+                        icon = Icons.Rounded.Palette,
+                    ) {
+                        onNavigateTo(Route.APPEARANCE)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.interface_and_interaction),
+                        description = stringResource(id = R.string.settings_before_download),
+                        icon = Icons.Rounded.ViewComfy,
+                    ) {
+                        onNavigateTo(Route.INTERACTION)
+                    }
                 }
             }
             item {
-                SettingItem(
-                    title = stringResource(id = R.string.format),
-                    description = stringResource(id = R.string.format_settings_desc),
-                    icon =
-                        if (EXTRACT_AUDIO.getBoolean()) Icons.Rounded.AudioFile
-                        else Icons.Rounded.VideoFile,
-                ) {
-                    onNavigateTo(Route.DOWNLOAD_FORMAT)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(id = R.string.network),
-                    description = stringResource(id = R.string.network_settings_desc),
-                    icon =
-                        if (App.connectivityManager.isActiveNetworkMetered)
-                            Icons.Rounded.SignalCellular4Bar
-                        else Icons.Rounded.SignalWifi4Bar,
-                ) {
-                    onNavigateTo(Route.NETWORK_PREFERENCES)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(id = R.string.custom_command),
-                    description = stringResource(id = R.string.custom_command_desc),
-                    icon = Icons.Rounded.Terminal,
-                ) {
-                    onNavigateTo(Route.TEMPLATE)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(id = R.string.look_and_feel),
-                    description = stringResource(id = R.string.display_settings),
-                    icon = Icons.Rounded.Palette,
-                ) {
-                    onNavigateTo(Route.APPEARANCE)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(id = R.string.interface_and_interaction),
-                    description = stringResource(id = R.string.settings_before_download),
-                    icon = Icons.Rounded.ViewComfy,
-                ) {
-                    onNavigateTo(Route.INTERACTION)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(R.string.trouble_shooting),
-                    description = stringResource(R.string.trouble_shooting_desc),
-                    icon = Icons.Rounded.BugReport,
-                ) {
-                    onNavigateTo(Route.TROUBLESHOOTING)
-                }
-            }
-            item {
-                SettingItem(
-                    title = stringResource(id = R.string.about),
-                    description = stringResource(id = R.string.about_page),
-                    icon = Icons.Rounded.Info,
-                ) {
-                    onNavigateTo(Route.ABOUT)
+                PreferencesGroupCard {
+                    SettingItem(
+                        title = stringResource(R.string.trouble_shooting),
+                        description = stringResource(R.string.trouble_shooting_desc),
+                        icon = Icons.Rounded.BugReport,
+                    ) {
+                        onNavigateTo(Route.TROUBLESHOOTING)
+                    }
+                    SettingItem(
+                        title = stringResource(id = R.string.about),
+                        description = stringResource(id = R.string.about_page),
+                        icon = Icons.Rounded.Info,
+                    ) {
+                        onNavigateTo(Route.ABOUT)
+                    }
                 }
             }
         }

@@ -2,6 +2,7 @@ package com.junkfood.seal.ui.component
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -28,11 +30,28 @@ fun SettingTitle(text: String) {
     )
 }
 
+// Android 15 Settings pattern: related preferences live in one tonal rounded
+// container, groups separated by the page background showing through.
+@Composable
+fun PreferencesGroupCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+    ) {
+        Column(content = content)
+    }
+}
+
 @Composable
 fun SettingItem(title: String, description: String, icon: ImageVector?, onClick: () -> Unit) {
-    Surface(modifier = Modifier.clickable { onClick() }) {
+    // Transparent so the enclosing PreferencesGroupCard's tonal container shows through.
+    Surface(modifier = Modifier.clickable { onClick() }, color = Color.Transparent) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             icon?.let {
@@ -49,7 +68,7 @@ fun SettingItem(title: String, description: String, icon: ImageVector?, onClick:
                 Text(
                     text = title,
                     maxLines = 1,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     overflow = TextOverflow.Ellipsis,
                 )
