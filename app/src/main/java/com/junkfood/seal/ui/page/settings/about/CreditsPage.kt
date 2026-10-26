@@ -37,9 +37,13 @@ private const val LGPL_V2_1 = "GNU Lesser General Public License, version 2.1"
 private const val APACHE_V2 = "Apache License, Version 2.0"
 private const val UNLICENSE = "The Unlicense"
 private const val BSD = "BSD 3-Clause License"
+private const val MIT = "MIT License"
 
 private const val youtubedlAndroidUrl = "https://github.com/yausername/youtubedl-android"
 private const val ytdlpUrl = "https://github.com/yt-dlp/yt-dlp"
+private const val sealUrl = "https://github.com/JunkFood02/Seal"
+private const val ghostUrl = "https://github.com/XiaoYouChR/Ghost-Downloader-3"
+private const val chaquopyUrl = "https://github.com/chaquo/chaquopy"
 private const val readYou = "https://github.com/Ashinch/ReadYou"
 private const val dvd = "https://github.com/yausername/dvd"
 private const val icons8 = "https://icons8.com/"
@@ -70,6 +74,10 @@ fun CreditsPage(onNavigateBack: () -> Unit) {
 
     val creditsList =
         listOf(
+            Credit("Selkie", GPL_V3, sealUrl),
+            Credit("Seal — app shell, by JunkFood02", GPL_V3, sealUrl),
+            Credit("Ghost Downloader — engine design, by XiaoYouChR", GPL_V3, ghostUrl),
+            Credit("Chaquopy — embedded Python", MIT, chaquopyUrl),
             Credit("yt-dlp", UNLICENSE, ytdlpUrl),
             Credit("Read You", GPL_V3, readYou),
             Credit("youtubedl-android", GPL_V3, youtubedlAndroidUrl),

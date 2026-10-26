@@ -95,7 +95,6 @@ const val CROP_ARTWORK = "crop_artwork"
 const val EMBED_THUMBNAIL = "embed_thumbnail"
 const val FORMAT_SELECTION = "format_selection"
 const val VIDEO_CLIP = "video_clip"
-const val SHOW_SPONSOR_MSG = "sponsor_msg_v1"
 const val PROXY = "proxy"
 const val PROXY_URL = "proxy_url"
 const val OUTPUT_TEMPLATE = "output_template"
@@ -233,7 +232,6 @@ private val IntPreferenceDefaults =
         VIDEO_QUALITY to NOT_SPECIFIED,
         VIDEO_FORMAT to FORMAT_QUALITY,
         UPDATE_CHANNEL to STABLE,
-        SHOW_SPONSOR_MSG to 0,
         CONVERT_SUBTITLE to NOT_SPECIFIED,
         DOWNLOAD_TYPE_INITIALIZATION to USE_PREVIOUS_SELECTION,
         YT_DLP_UPDATE_CHANNEL to YT_DLP_NIGHTLY,

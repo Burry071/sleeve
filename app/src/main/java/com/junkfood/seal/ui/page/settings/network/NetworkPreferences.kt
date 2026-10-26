@@ -21,15 +21,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.junkfood.seal.R
-import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ui.common.booleanState
 import com.junkfood.seal.ui.component.BackButton
 import com.junkfood.seal.ui.component.PreferenceInfo
@@ -63,7 +59,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
     var showProxyDialog by remember { mutableStateOf(false) }
     var aria2c by remember { mutableStateOf(ARIA2C.getBoolean()) }
     var ghostEngine by remember { mutableStateOf(GHOST_ENGINE.getBoolean()) }
-    var ghostSelfTestResult by remember { mutableStateOf<String?>(null) }
     var proxy by PROXY.booleanState
     var isCookiesEnabled by COOKIES.booleanState
     var forceIpv4 by FORCE_IPV4.booleanState
@@ -147,24 +142,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                             updateValue(GHOST_ENGINE, ghostEngine)
                         },
                     )
-                }
-                item {
-                    val context = LocalContext.current
-                    val scope = rememberCoroutineScope()
-                    PreferenceItem(
-                        title = stringResource(R.string.ghost_engine_self_test),
-                        description =
-                            ghostSelfTestResult
-                                ?: stringResource(R.string.ghost_engine_self_test_desc),
-                        icon = Icons.Outlined.Speed,
-                    ) {
-                        scope.launch {
-                            ghostSelfTestResult = "Running…"
-                            ghostSelfTestResult =
-                                GhostEngine.selfTest(context)
-                                    .fold({ it.summary() }) { "Engine error: ${it.message}" }
-                        }
-                    }
                 }
                 item {
                     PreferenceSwitchWithDivider(
