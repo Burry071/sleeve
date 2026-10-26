@@ -29,12 +29,13 @@ import com.junkfood.seal.ui.common.motion.materialSharedAxisXIn
 import com.junkfood.seal.ui.common.motion.materialSharedAxisXOut
 
 const val DURATION_ENTER = 400
-const val DURATION_EXIT = 200
+// Exits run at ~60-70% of entrances so leaving never feels sluggish.
+const val DURATION_EXIT = 260
 const val initialOffset = 0.10f
 
 private fun <T> enterTween() = tween<T>(durationMillis = DURATION_ENTER, easing = EmphasizeEasing)
 
-private fun <T> exitTween() = tween<T>(durationMillis = DURATION_ENTER, easing = EmphasizeEasing)
+private fun <T> exitTween() = tween<T>(durationMillis = DURATION_EXIT, easing = EmphasizeEasing)
 
 private val fadeSpring =
     spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)

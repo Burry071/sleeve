@@ -21,7 +21,7 @@ import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.RestartAlt
-import androidx.compose.material.icons.outlined.UnfoldMore
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -250,13 +250,13 @@ fun CustomCommandTaskItem(
                             if (progress < 0)
                                 CircularProgressIndicator(
                                     modifier = Modifier.padding(8.dp).size(24.dp),
-                                    strokeWidth = 5.dp,
+                                    strokeWidth = 4.dp,
                                     color = accentColor,
                                 )
                             else
                                 CircularProgressIndicator(
                                     modifier = Modifier.padding(8.dp).size(24.dp),
-                                    strokeWidth = 5.dp,
+                                    strokeWidth = 4.dp,
                                     progress = animatedProgress,
                                     color = accentColor,
                                 )
@@ -299,7 +299,7 @@ fun CustomCommandTaskItem(
                             ),
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.UnfoldMore,
+                            imageVector = Icons.Outlined.ReceiptLong,
                             contentDescription = stringResource(id = R.string.show_logs),
                         )
                     }

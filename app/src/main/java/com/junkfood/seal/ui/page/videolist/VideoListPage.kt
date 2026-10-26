@@ -502,7 +502,7 @@ fun VideoListPage(viewModel: VideoListViewModel = koinViewModel(), onNavigateBac
                 item(key = info.id, contentType = { info.videoPath.contains(AUDIO_REGEX) }) {
                     with(info) {
                         AnimatedVisibility(
-                            modifier = Modifier,
+                            modifier = Modifier.animateItem(),
                             visible = info.filterSort(viewState, filterSet),
                             exit = shrinkVertically() + fadeOut(),
                             enter = expandVertically() + fadeIn(),

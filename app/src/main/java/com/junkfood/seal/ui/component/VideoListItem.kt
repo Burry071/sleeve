@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -79,6 +81,7 @@ fun MediaListItem(
     val context = LocalContext.current
     val isFileAvailable = videoFileSize != 0L
     val fileSizeText = videoFileSize.toFileSizeText()
+    val isSelectedNow = isSelected() && isSelectEnabled()
 
     Box(
         modifier =
@@ -97,6 +100,10 @@ fun MediaListItem(
                     else selectable(selected = isSelected(), onClick = onSelect)
                 }
                 .fillMaxWidth()
+                .background(
+                    if (isSelectedNow) MaterialTheme.colorScheme.surfaceContainerHigh
+                    else Color.Transparent
+                )
     ) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             AnimatedVisibility(
@@ -134,7 +141,8 @@ fun MediaListItem(
                     modifier = Modifier.padding(top = 3.dp),
                     text =
                         if (isFileAvailable) fileSizeText else stringResource(R.string.unavailable),
-                    style = MaterialTheme.typography.labelSmall,
+                    // Tabular figures: file sizes align down the column.
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     color =
                         with(MaterialTheme.colorScheme) {
                             if (isFileAvailable) onSurfaceVariant else error
