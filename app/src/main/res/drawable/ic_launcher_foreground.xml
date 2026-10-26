@@ -3,7 +3,7 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Selkie mark: a curling seal/wave ribbon. Strokes stay inside the
+    <!-- Sleeve mark: a curling seal/wave ribbon. Strokes stay inside the
          adaptive-icon safe zone (66dp circle centered at 54,54). -->
     <path
         android:pathData="M67,37 C49,28 36,44 52,54 C68,64 61,80 41,73"

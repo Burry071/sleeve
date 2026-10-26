@@ -1,4 +1,4 @@
-"""Selkie embedded download engine — Ghost-shaped task model, standard library only.
+"""Sleeve embedded download engine — Ghost-shaped task model, standard library only.
 
 Stage B v0: the task/step lifecycle mirrors Ghost Downloader's engine
 (XiaoYouChR/Ghost-Downloader-3, GPL-3.0) so Ghost's packs can be vendored on

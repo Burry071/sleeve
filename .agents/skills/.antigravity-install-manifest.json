@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-26T20:03:27.533Z",
+  "entries": [
+    "anti-ui-slop",
+    "bug-hunter",
+    "codebase-audit-pre-push",
+    "design-token-contrast",
+    "diagnosing-bugs",
+    "five-axis-code-review",
+    "git-commit-message",
+    "improve-codebase-architecture",
+    "performance-optimizer",
+    "poka-yoke",
+    "tdd",
+    "ui-states",
+    "what-could-break"
+  ]
+}

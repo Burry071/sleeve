@@ -86,7 +86,7 @@ object UpdateUtil {
         }
 
     fun checkForUpdate(context: Context = App.context): Release? {
-        // Selkie fork: self-update disabled. Auto-updating would replace this fork
+        // Sleeve fork: self-update disabled. Auto-updating would replace this fork
         // with upstream Seal and silently remove the embedded engine. yt-dlp
         // component updates remain enabled via YtdlpUpdater.
         return null

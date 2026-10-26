@@ -16,7 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * Bridge to the embedded Selkie engine (Chaquopy + selkie_engine.py), which
+ * Bridge to the embedded Sleeve engine (Chaquopy + selkie_engine.py), which
  * follows the Ghost Downloader (GPL-3.0) task/step model. Every engine call
  * returns a JSON string, parsed here — no PyObject conversions cross the
  * boundary.

@@ -1,10 +1,10 @@
 <div align="center">
 
-# Selkie
+# Sleeve
 
 ### A Seal that shed its skin — video downloader with an embedded multi-connection engine
 
-Selkie is a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0): the same
+Sleeve is a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0): the same
 Material You yt-dlp frontend, reworked as its own app with a download engine built
 from the architecture of [Ghost Downloader](https://github.com/XiaoYouChR/Ghost-Downloader-3)
 (GPL-3.0). yt-dlp still resolves every site it knows; the embedded engine does the
@@ -23,8 +23,8 @@ downloading with parallel range requests.
 
 ## Licensing & attribution
 
-Seal and Ghost Downloader are GPL-3.0; Selkie is GPL-3.0 too. See
-[THIRD_PARTY.md](THIRD_PARTY.md) for the full component list. Selkie is not
+Seal and Ghost Downloader are GPL-3.0; Sleeve is GPL-3.0 too. See
+[THIRD_PARTY.md](THIRD_PARTY.md) for the full component list. Sleeve is not
 endorsed by either upstream project.
 
 ## Build

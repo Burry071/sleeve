@@ -52,7 +52,7 @@ android {
     buildFeatures { buildConfig = true }
 
     defaultConfig {
-        applicationId = "com.selkie.app"
+        applicationId = "com.sleeve.app"
         minSdk = 24
         targetSdk = 35
         versionCode = 200_000_150
@@ -121,7 +121,7 @@ android {
             }
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            resValue("string", "app_name", "Selkie Debug")
+            // Label intentionally identical to release: "Sleeve" on screen, no suffix.
         }
     }
 
@@ -136,7 +136,7 @@ android {
         create("githubPreview") {
             dimension = "publishChannel"
             applicationIdSuffix = ".preview"
-            resValue("string", "app_name", "Selkie Preview")
+            resValue("string", "app_name", "Sleeve Preview")
         }
 
         create("fdroid") {
@@ -150,7 +150,7 @@ android {
     applicationVariants.all {
         outputs.all {
             (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-                "Selkie-${defaultConfig.versionName}-${name}.apk"
+                "Sleeve-${defaultConfig.versionName}-${name}.apk"
         }
     }
 

@@ -23,6 +23,6 @@ dependencyResolutionManagement {
         mavenLocal()
     }
 }
-rootProject.name = "Selkie"
+rootProject.name = "Sleeve"
 include (":app")
 include(":color")

@@ -65,4 +65,4 @@ Ghost). APK grows ~40–55 MB with native engines.
 
 GPL-3.0 both sides: combined work GPL-3.0, keep copyright headers, add
 THIRD_PARTY.md listing Ghost components + versions + source commits. Rename the
-fork (e.g. "Seal Ghost"); "Ghost Downloader" is the upstream product name.
+fork (now named "Sleeve"); "Ghost Downloader" is the upstream product name.

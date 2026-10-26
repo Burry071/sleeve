@@ -1,6 +1,6 @@
-# Third-party components — Selkie
+# Third-party components — Sleeve
 
-Selkie is a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0) with an
+Sleeve is a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0) with an
 embedded download engine built from the architecture of
 [Ghost Downloader](https://github.com/XiaoYouChR/Ghost-Downloader-3) (GPL-3.0).
 
@@ -15,5 +15,5 @@ embedded download engine built from the architecture of
 | N_m3u8DL-RE (planned, Stage B v1) | nilaoda/N_m3u8DL-RE | MIT | Native HLS/DASH engine |
 
 The combined work is licensed GPL-3.0 (see LICENSE). "Ghost Downloader" and
-"Seal" are upstream project names; this fork is distributed as "Selkie" and is
+"Seal" are upstream project names; this fork is distributed as "Sleeve" and is
 not endorsed by either upstream project.

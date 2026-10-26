@@ -74,7 +74,7 @@ fun CreditsPage(onNavigateBack: () -> Unit) {
 
     val creditsList =
         listOf(
-            Credit("Selkie", GPL_V3, sealUrl),
+            Credit("Sleeve", GPL_V3, sealUrl),
             Credit("Seal — app shell, by JunkFood02", GPL_V3, sealUrl),
             Credit("Ghost Downloader — engine design, by XiaoYouChR", GPL_V3, ghostUrl),
             Credit("Chaquopy — embedded Python", MIT, chaquopyUrl),
