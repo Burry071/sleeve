@@ -5,16 +5,18 @@ Stage B v0: the task/step lifecycle mirrors Ghost Downloader's engine
 top later, while the HTTP core uses http.client threads so it runs on Android
 through Chaquopy with zero native dependencies.
 
-Public surface (called from Kotlin via Chaquopy):
-    add_uri(url, options) -> {"taskId": str}
-    progress(task_id)     -> {"state", "downloaded", "total", "speedBps", "error"}
-    cancel(task_id)       -> {"ok": bool}
-    self_test(output_dir) -> {"ok", "bytes", "seconds", "speedBps", "workers"}
+Public surface (called from Kotlin via Chaquopy) — every function returns a
+JSON string so the bridge has no PyObject conversion ambiguity:
+    add_uri(url, options) -> '{"taskId": str}'
+    progress(task_id)     -> '{"state", "downloaded", "total", "speedBps", "error"}'
+    cancel(task_id)       -> '{"ok": bool}'
+    self_test(output_dir) -> '{"ok", "bytes", "seconds", "speedBps", "workers"}'
 """
 
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import ssl
 import threading
@@ -56,7 +58,7 @@ class SegmentedHttpStep:
         self.error = ""
         self._downloaded = 0
         self.total = -1
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._samples = []
         self._cancel = threading.Event()
 
@@ -264,37 +266,43 @@ def add_uri(url, options=None):
     with _ENGINE_LOCK:
         _TASKS[task.id] = task
     task.start()
-    return {"taskId": task.id}
+    return json.dumps({"taskId": task.id})
 
 
 def progress(task_id):
     with _ENGINE_LOCK:
         task = _TASKS.get(task_id)
     if task is None:
-        return {"state": ERROR, "error": "unknown task"}
+        return json.dumps({"state": ERROR, "error": "unknown task"})
     snap = task.step.snapshot()
     snap["taskId"] = task_id
-    return snap
+    return json.dumps(snap)
 
 
 def cancel(task_id):
     with _ENGINE_LOCK:
         task = _TASKS.get(task_id)
     if task is None:
-        return {"ok": False}
+        return json.dumps({"ok": False})
     task.step.cancel()
-    return {"ok": True}
+    return json.dumps({"ok": True})
 
 
-def self_test(output_dir, url="https://speed.cloudflare.com/__down?bytes=26214400"):
-    """Download ~25MB through the full segmented path; used by the settings action."""
+def self_test(output_dir, url="https://proof.ovh.net/files/10Mb.dat"):
+    """Download ~10MB through the full segmented path; used by the settings action.
+
+    The endpoint must support Range requests (206) so the parallel path is
+    actually exercised — speed.cloudflare.com/__down ignores Range and would
+    silently degrade the test to a single stream.
+    """
     started = time.monotonic()
     task = Task(url, {"outputDir": output_dir, "fileName": "selkie-selftest.bin", "subworkerCount": 8})
     task.step.run()
     seconds = time.monotonic() - started
     snap = task.step.snapshot()
-    os.path.exists(task.step.output_path) and os.remove(task.step.output_path)
-    return {
+    if os.path.exists(task.step.output_path):
+        os.remove(task.step.output_path)
+    return json.dumps({
         "ok": snap["state"] == COMPLETED,
         "bytes": snap["downloaded"],
         "seconds": round(seconds, 2),
@@ -302,4 +310,4 @@ def self_test(output_dir, url="https://speed.cloudflare.com/__down?bytes=2621440
         "workers": task.step.subworkers,
         "state": snap["state"],
         "error": snap["error"],
-    }
+    })
