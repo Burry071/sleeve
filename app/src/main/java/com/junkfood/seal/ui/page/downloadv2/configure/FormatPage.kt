@@ -3,7 +3,10 @@ package com.junkfood.seal.ui.page.downloadv2.configure
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,8 +21,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -43,6 +48,7 @@ import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSliderState
@@ -382,8 +388,6 @@ private fun FormatPageImpl(
         }
     }
 
-    val isFabExpanded by remember { derivedStateOf { lazyGridState.firstVisibleItemIndex > 0 } }
-
     val selectedSubtitles = remember {
         mutableStateListOf<String>().apply { addAll(selectedSubtitleCodes) }
     }
@@ -408,38 +412,46 @@ private fun FormatPageImpl(
                 },
             )
         },
-        floatingActionButton = {
-            val isFormatSelected = isSuggestedFormatSelected || formatList.isNotEmpty()
-            if (isFormatSelected) {
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        onDownloadPressed(
-                            FormatConfig(
-                                formatList = formatList,
-                                videoClips =
-                                    if (isClippingVideo) listOf(VideoClip(videoClipDuration))
-                                    else emptyList(),
-                                splitByChapter = isSplittingVideo,
-                                newTitle = videoTitle,
-                                selectedSubtitles = selectedSubtitles,
-                                selectedAutoCaptions = selectedAutoCaptions,
+        bottomBar = {
+            // Pinned full-width pill CTA: the one action the screen exists for,
+            // always reachable instead of a FAB that collapses on scroll.
+            AnimatedVisibility(
+                visible = isSuggestedFormatSelected || formatList.isNotEmpty(),
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+            ) {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Button(
+                        onClick = {
+                            onDownloadPressed(
+                                FormatConfig(
+                                    formatList = formatList,
+                                    videoClips =
+                                        if (isClippingVideo) listOf(VideoClip(videoClipDuration))
+                                        else emptyList(),
+                                    splitByChapter = isSplittingVideo,
+                                    newTitle = videoTitle,
+                                    selectedSubtitles = selectedSubtitles,
+                                    selectedAutoCaptions = selectedAutoCaptions,
+                                )
                             )
-                        )
-                    },
-                    modifier = Modifier.padding(12.dp),
-                    icon = {
+                        },
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .navigationBarsPadding(),
+                    ) {
                         Icon(
                             imageVector = Icons.Outlined.FileDownload,
                             contentDescription = null,
-                            modifier = Modifier.size(24.dp),
+                            modifier = Modifier.size(18.dp),
                         )
-                    },
-                    text = { Text(stringResource(R.string.start_download)) },
-                    expanded = isFabExpanded,
-                )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.start_download))
+                    }
+                }
             }
         },
-        floatingActionButtonPosition = FabPosition.End,
     ) { paddingValues ->
         LazyVerticalGrid(
             modifier = Modifier.padding(paddingValues),

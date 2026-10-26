@@ -64,6 +64,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -451,29 +452,29 @@ private fun ErrorPreview() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FormatPage(
     modifier: Modifier = Modifier,
     state: SelectionState.FormatSelection,
     onDismissRequest: () -> Unit,
 ) {
-    val sheetState =
-        androidx.compose.material.rememberModalBottomSheetState(
-            initialValue = ModalBottomSheetValue.Hidden,
-            skipHalfExpanded = true,
-        )
-
-    LaunchedEffect(state) { sheetState.show() }
+    // M3 sheet: 32dp Expressive corners + drag handle via the shared wrapper.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
-    BackHandler { scope.launch { sheetState.hide() }.invokeOnCompletion { onDismissRequest() } }
 
-    SealModalBottomSheetM2Variant(sheetState = sheetState, sheetGesturesEnabled = false) {
+    fun close() =
+        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismissRequest() }
+
+    SealModalBottomSheet(
+        sheetState = sheetState,
+        onDismissRequest = onDismissRequest,
+        contentPadding = PaddingValues(0.dp),
+    ) {
         FormatPage(
             modifier = modifier,
             videoInfo = state.info,
-            onNavigateBack = {
-                scope.launch { sheetState.hide() }.invokeOnCompletion { onDismissRequest() }
-            },
+            onNavigateBack = { close() },
         )
     }
 }
