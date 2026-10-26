@@ -8,6 +8,10 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -97,6 +101,7 @@ import com.junkfood.seal.ui.component.MediaListItem
 import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.component.SealSearchBar
 import com.junkfood.seal.ui.component.VideoFilterChip
+import com.junkfood.seal.ui.common.motion.EmphasizedDecelerate
 import com.junkfood.seal.ui.svg.DynamicColorImageVectors
 import com.junkfood.seal.ui.svg.drawablevectors.videoSteaming
 import com.junkfood.seal.util.AUDIO_REGEX
@@ -420,23 +425,52 @@ fun VideoListPage(viewModel: VideoListViewModel = koinViewModel(), onNavigateBac
             Box(modifier = Modifier.fillMaxSize()) {
                 val painter =
                     rememberVectorPainter(image = DynamicColorImageVectors.videoSteaming())
+                // First-impression entrance: rare tier, so a gentle stagger is welcome.
+                val entered = remember { MutableTransitionState(false).apply { targetState = true } }
                 Column(
                     modifier = Modifier.align(Alignment.Center).widthIn(max = 360.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Image(
-                        painter = painter,
-                        contentDescription = null,
-                        modifier =
-                            Modifier.padding(vertical = 20.dp)
-                                .fillMaxWidth(0.5f)
-                                .widthIn(max = 240.dp),
-                    )
-                    Text(
-                        text = stringResource(R.string.no_downloaded_media),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    AnimatedVisibility(
+                        visibleState = entered,
+                        enter =
+                            fadeIn(tween(durationMillis = 400, easing = EmphasizedDecelerate)) +
+                                scaleIn(
+                                    initialScale = 0.94f,
+                                    animationSpec =
+                                        tween(durationMillis = 400, easing = EmphasizedDecelerate),
+                                ),
+                    ) {
+                        Image(
+                            painter = painter,
+                            contentDescription = null,
+                            modifier =
+                                Modifier.padding(vertical = 20.dp)
+                                    .fillMaxWidth(0.5f)
+                                    .widthIn(max = 240.dp),
+                        )
+                    }
+                    AnimatedVisibility(
+                        visibleState = entered,
+                        enter =
+                            fadeIn(
+                                tween(durationMillis = 300, delayMillis = 120, easing = EmphasizedDecelerate)
+                            ) +
+                                slideInVertically(
+                                    animationSpec =
+                                        tween(
+                                            durationMillis = 300,
+                                            delayMillis = 120,
+                                            easing = EmphasizedDecelerate,
+                                        )
+                                ) { it / 6 },
+                    ) {
+                        Text(
+                            text = stringResource(R.string.no_downloaded_media),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
