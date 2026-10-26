@@ -33,6 +33,7 @@ import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.ARIA2C
 import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.COOKIES
@@ -84,6 +85,7 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                     }
                 item { PreferenceSubtitle(text = stringResource(R.string.general_settings)) }
                 item {
+                    PreferencesGroupCard {
                     var isRateLimitEnabled by remember { mutableStateOf(RATE_LIMIT.getBoolean()) }
 
                     PreferenceSwitchWithDivider(
@@ -98,8 +100,7 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                         },
                         onClick = { showRateLimitDialog = true },
                     )
-                }
-                item {
+
                     var isDownloadWithCellularEnabled by remember {
                         mutableStateOf(CELLULAR_DOWNLOAD.getBoolean())
                     }
@@ -115,11 +116,13 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                             updateValue(CELLULAR_DOWNLOAD, isDownloadWithCellularEnabled)
                         },
                     )
+                    }
                 }
 
                 item { PreferenceSubtitle(text = stringResource(id = R.string.advanced_settings)) }
 
                 item {
+                    PreferencesGroupCard {
                     PreferenceSwitch(
                         title = stringResource(R.string.aria2),
                         icon = Icons.Outlined.Bolt,
@@ -130,8 +133,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                             updateValue(ARIA2C, aria2c)
                         },
                     )
-                }
-                item {
                     PreferenceSwitch(
                         title = stringResource(R.string.ghost_engine),
                         icon = Icons.Outlined.Speed,
@@ -142,8 +143,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                             updateValue(GHOST_ENGINE, ghostEngine)
                         },
                     )
-                }
-                item {
                     PreferenceSwitchWithDivider(
                         title = stringResource(id = R.string.proxy),
                         description = stringResource(id = R.string.proxy_desc),
@@ -156,8 +155,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                         onClick = { showProxyDialog = true },
                         enabled = !isCustomCommandEnabled,
                     )
-                }
-                item {
                     PreferenceItem(
                         title = stringResource(id = R.string.concurrent_download),
                         description = stringResource(R.string.concurrent_download_desc),
@@ -166,8 +163,6 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                     ) {
                         showConcurrentDownloadDialog = true
                     }
-                }
-                item {
                     PreferenceSwitch(
                         title = stringResource(R.string.force_ipv4),
                         description = stringResource(id = R.string.force_ipv4_desc),
@@ -178,14 +173,13 @@ fun NetworkPreferences(navigateToCookieProfilePage: () -> Unit = {}, onNavigateB
                         forceIpv4 = !forceIpv4
                         FORCE_IPV4.updateBoolean(forceIpv4)
                     }
-                }
-                item {
                     PreferenceItem(
                         title = stringResource(R.string.cookies),
                         description = stringResource(R.string.cookies_desc),
                         icon = Icons.Outlined.Cookie,
                         onClick = { navigateToCookieProfilePage() },
                     )
+                    }
                 }
             }
         },

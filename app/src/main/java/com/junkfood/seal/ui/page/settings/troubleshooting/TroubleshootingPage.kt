@@ -35,6 +35,7 @@ import com.junkfood.seal.ui.component.PreferenceInfo
 import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitch
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.page.settings.BasePreferencePage
 import com.junkfood.seal.ui.page.settings.general.YtdlpUpdateChannelDialog
 import com.junkfood.seal.util.PreferenceUtil.getString
@@ -91,6 +92,7 @@ fun TroubleShootingPage(
             }
             item { PreferenceSubtitle(text = stringResource(R.string.update)) }
             item {
+                PreferencesGroupCard {
                 var isUpdating by remember { mutableStateOf(false) }
                 var showYtdlpDialog by remember { mutableStateOf(false) }
 
@@ -159,19 +161,23 @@ fun TroubleShootingPage(
                 if (showYtdlpDialog) {
                     YtdlpUpdateChannelDialog(onDismissRequest = { showYtdlpDialog = false })
                 }
+                }
             }
 
             item { PreferenceSubtitle(text = stringResource(R.string.network)) }
             item {
+                PreferencesGroupCard {
                 PreferenceItem(
                     title = stringResource(R.string.cookies),
                     description = stringResource(R.string.cookies_desc),
                     icon = Icons.Outlined.Cookie,
                     onClick = { onNavigateTo(Route.COOKIE_PROFILE) },
                 )
+                }
             }
             item { PreferenceSubtitle(text = stringResource(R.string.download_directory)) }
             item {
+                PreferencesGroupCard {
                 var restrictFilenames by RESTRICT_FILENAMES.booleanState
                 PreferenceSwitch(
                     title = stringResource(id = R.string.restrict_filenames),
@@ -181,6 +187,7 @@ fun TroubleShootingPage(
                 ) {
                     restrictFilenames = !restrictFilenames
                     RESTRICT_FILENAMES.updateBoolean(restrictFilenames)
+                }
                 }
             }
         }

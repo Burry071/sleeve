@@ -88,6 +88,7 @@ fun PreferenceItem(
     onClick: () -> Unit = {},
 ) {
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.combinedClickable(
                 onClick = onClick,
@@ -187,6 +188,7 @@ fun PreferenceItemVariant(
     onClick: () -> Unit = {},
 ) {
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.combinedClickable(
                 enabled = enabled,
@@ -231,7 +233,10 @@ fun PreferenceSingleChoiceItem(
     contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 16.dp),
     onClick: () -> Unit,
 ) {
-    Surface(modifier = Modifier.selectable(selected = selected, onClick = onClick)) {
+    Surface(
+            color = Color.Transparent,
+            modifier = Modifier.selectable(selected = selected, onClick = onClick)
+        ) {
         Row(
             modifier = modifier.fillMaxWidth().padding(contentPadding),
             verticalAlignment = Alignment.CenterVertically,
@@ -352,6 +357,7 @@ fun PreferenceSwitchVariant(
 
     val interactionSource = remember { MutableInteractionSource() }
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.toggleable(
                 value = isChecked,
@@ -406,6 +412,7 @@ fun PreferenceSwitch(
 
     val interactionSource = remember { MutableInteractionSource() }
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.toggleable(
                 value = isChecked,
@@ -461,6 +468,7 @@ fun PreferenceSwitchWithDivider(
 ) {
 
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.clickable(
                 enabled = enabled,
@@ -699,7 +707,10 @@ fun CreditItem(
     enabled: Boolean = true,
     onClick: () -> Unit = {},
 ) {
-    Surface(modifier = Modifier.clickable { onClick() }) {
+    Surface(
+            color = Color.Transparent,
+            modifier = Modifier.clickable { onClick() }
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -742,6 +753,7 @@ fun TemplateItem(
     onLongClick: () -> Unit = {},
 ) {
     Surface(
+        color = Color.Transparent,
         modifier =
             Modifier.run {
                 if (!isMultiSelectEnabled)

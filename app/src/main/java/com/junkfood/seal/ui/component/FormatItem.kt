@@ -1,8 +1,13 @@
 package com.junkfood.seal.ui.component
 
 import android.content.res.Configuration
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,6 +28,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
@@ -367,12 +373,13 @@ fun FormatItem(
                 minLines = 2,
                 maxLines = 2,
                 color = animatedTitleColor,
-                overflow = TextOverflow.Clip,
+                overflow = TextOverflow.Ellipsis,
             )
 
             Text(
                 text = firstLineText,
-                style = MaterialTheme.typography.labelMedium,
+                // Tabular figures: sizes and bitrates align down the column.
+                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                 modifier = Modifier.padding(top = 6.dp),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
@@ -384,6 +391,20 @@ fun FormatItem(
                 modifier = Modifier.padding(top = 2.dp),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
+            )
+        }
+        // Selection needs a mark, not just a color change.
+        AnimatedVisibility(
+            modifier = Modifier.padding(top = 6.dp, end = 6.dp).align(Alignment.TopEnd),
+            visible = selected,
+            enter = scaleIn(initialScale = 0.6f, animationSpec = tween(150)) + fadeIn(tween(150)),
+            exit = scaleOut(targetScale = 0.6f, animationSpec = tween(100)) + fadeOut(tween(100)),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                tint = outlineColor,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
             )
         }
         Row(modifier = Modifier.padding(bottom = 6.dp, end = 6.dp).align(Alignment.BottomEnd)) {

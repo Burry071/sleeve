@@ -79,6 +79,7 @@ import com.junkfood.seal.ui.component.PreferenceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
+import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.util.CONFIGURE
@@ -178,6 +179,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         )
                     }
                 item {
+                    PreferencesGroupCard {
                     var ytdlpVersion by remember {
                         mutableStateOf(
                             YoutubeDL.getInstance().version(context.applicationContext)
@@ -231,8 +233,6 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             }
                         },
                     )
-                }
-                item {
                     PreferenceSwitch(
                         title = stringResource(id = R.string.download_notification),
                         description =
@@ -257,9 +257,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             }
                         },
                     )
-                }
 
-                item {
                     var configureBeforeDownload by CONFIGURE.booleanState
                     PreferenceSwitch(
                         title = stringResource(id = R.string.settings_before_download),
@@ -273,9 +271,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             PreferenceUtil.updateValue(CONFIGURE, configureBeforeDownload)
                         },
                     )
-                }
 
-                item {
                     var thumbnailSwitch by remember { mutableStateOf(THUMBNAIL.getBoolean()) }
                     PreferenceSwitch(
                         title = stringResource(id = R.string.create_thumbnail),
@@ -288,8 +284,6 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             PreferenceUtil.updateValue(THUMBNAIL, thumbnailSwitch)
                         },
                     )
-                }
-                item {
                     PreferenceSwitch(
                         title = stringResource(R.string.print_details),
                         description = stringResource(R.string.print_details_desc),
@@ -303,11 +297,13 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         },
                         isChecked = displayErrorReport,
                     )
+                    }
                 }
 
                 item { PreferenceSubtitle(text = stringResource(id = R.string.privacy)) }
 
                 item {
+                    PreferencesGroupCard {
                     PreferenceSwitch(
                         title = stringResource(R.string.private_mode),
                         description = stringResource(R.string.private_mode_desc),
@@ -321,8 +317,6 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             PreferenceUtil.updateValue(PRIVATE_MODE, isPrivateModeEnabled)
                         },
                     )
-                }
-                item {
                     PreferenceSwitch(
                         title = stringResource(R.string.disable_preview),
                         description = stringResource(R.string.disable_preview_desc),
@@ -336,10 +330,12 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             PreferenceUtil.updateValue(DISABLE_PREVIEW, isPreviewDisabled)
                         },
                     )
+                    }
                 }
 
                 item { PreferenceSubtitle(text = stringResource(R.string.advanced_settings)) }
                 item {
+                    PreferencesGroupCard {
                     PreferenceSwitch(
                         title = stringResource(id = R.string.download_playlist),
                         onClick = {
@@ -351,9 +347,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         description = stringResource(R.string.download_playlist_desc),
                         isChecked = downloadPlaylist,
                     )
-                }
 
-                item {
                     PreferenceSwitchWithDivider(
                         title = stringResource(id = R.string.download_archive),
                         onClick = {
@@ -371,9 +365,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         },
                         enabled = isPermissionGranted,
                     )
-                }
 
-                item {
                     PreferenceSwitchWithDivider(
                         title = stringResource(R.string.sponsorblock),
                         description = stringResource(R.string.sponsorblock_desc),
@@ -386,6 +378,7 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         },
                         onClick = { showSponsorBlockDialog = true },
                     )
+                    }
                 }
 
                 if (downloadSubtitle)

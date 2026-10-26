@@ -44,10 +44,12 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
@@ -545,7 +547,11 @@ fun DownloadPageImpl(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+    ExperimentalComposeUiApi::class,
+)
 @Composable
 fun InputUrl(
     url: String,
@@ -580,6 +586,8 @@ fun InputUrl(
                     targetValue = progress / 100f,
                     animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
                 )
+            // This material3 build has no wavy indicator yet; LoadingIndicator
+            // below carries the Expressive signature until the BOM bumps.
             if (progressAnimationValue < 0)
                 LinearProgressIndicator(
                     modifier = Modifier.weight(0.75f).clip(MaterialTheme.shapes.large)
@@ -608,7 +616,10 @@ fun InputUrl(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(
+    ExperimentalFoundationApi::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+)
 @Composable
 fun TitleWithProgressIndicator(
     showProgressIndicator: Boolean = true,
@@ -631,7 +642,8 @@ fun TitleWithProgressIndicator(
             )
             AnimatedVisibility(visible = showProgressIndicator) {
                 Column(modifier = Modifier.padding(start = 12.dp)) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 3.dp)
+                    // M3 Expressive morphing loading indicator.
+                    LoadingIndicator(modifier = Modifier.size(24.dp))
                 }
             }
         }
