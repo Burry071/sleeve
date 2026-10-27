@@ -18,7 +18,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * Bridge to the embedded Sleeve engine (Chaquopy + selkie_engine.py), which
+ * Bridge to the embedded Sleeve engine (Chaquopy + sleeve_engine.py), which
  * follows the Ghost Downloader (GPL-3.0) task/step model. Every engine call
  * returns a JSON string, parsed here — no PyObject conversions cross the
  * boundary.
@@ -27,7 +27,7 @@ object GhostEngine {
     private const val TAG = "GhostEngine"
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** Mirrors selkie_engine.py task states. */
+    /** Mirrors sleeve_engine.py task states. */
     enum class TaskState { WAITING, RUNNING, COMPLETED, ERROR, CANCELLED }
 
     data class EngineProgress(
@@ -72,7 +72,7 @@ object GhostEngine {
         }
     }
 
-    private fun module() = Python.getInstance().getModule("selkie_engine")
+    private fun module() = Python.getInstance().getModule("sleeve_engine")
 
     /** Call an engine function and parse its JSON reply. */
     private inline fun <reified T> call(
@@ -189,7 +189,7 @@ object GhostEngine {
             ensureStarted()
             val reply =
                 Python.getInstance()
-                    .getModule("selkie_spotify")
+                    .getModule("sleeve_spotify")
                     .callAttr("resolve", url, clientId, clientSecret)
                     .toString()
             val obj = json.parseToJsonElement(reply).jsonObject

@@ -12,7 +12,7 @@ Reverse-engineered public surfaces, tried in order:
 Spotify is used for METADATA ONLY (spotDL pattern); audio is always
 fetched from YouTube via yt-dlp. No DRM is touched.
 
-Public surface (JSON strings, like selkie_engine):
+Public surface (JSON strings, like sleeve_engine):
     resolve(url, client_id, client_secret) ->
         '{"ok": true, "kind": "...", "title": ..., "tracks":
          [{"title", "artist", "album", "durationMs", "isrc"}]}'

@@ -317,7 +317,7 @@ def self_test(output_dir, url="https://proof.ovh.net/files/10Mb.dat"):
     silently degrade the test to a single stream.
     """
     started = time.monotonic()
-    task = Task(url, {"outputDir": output_dir, "fileName": "selkie-selftest.bin", "subworkerCount": 8})
+    task = Task(url, {"outputDir": output_dir, "fileName": "sleeve-selftest.bin", "subworkerCount": 8})
     task.step.run()
     seconds = time.monotonic() - started
     snap = task.step.snapshot()
