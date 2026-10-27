@@ -399,7 +399,7 @@ object PreferenceUtil {
                     isHighContrastModeEnabled = kv.decodeBool(HIGH_CONTRAST, false),
                 ),
                 isDynamicColorEnabled =
-                    kv.decodeBool(DYNAMIC_COLOR, DynamicColors.isDynamicColorAvailable()),
+                    kv.decodeBool(DYNAMIC_COLOR, false),
                 seedColor = kv.decodeInt(THEME_COLOR, DEFAULT_SEED_COLOR),
                 paletteStyleIndex = kv.decodeInt(PALETTE_STYLE, 0),
             )

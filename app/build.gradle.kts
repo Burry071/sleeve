@@ -194,6 +194,7 @@ dependencies {
     implementation(libs.okhttp)
 
     implementation(libs.bundles.youtubedlAndroid)
+    implementation(libs.androidx.core.splashscreen)
 
     implementation(libs.mmkv)
 

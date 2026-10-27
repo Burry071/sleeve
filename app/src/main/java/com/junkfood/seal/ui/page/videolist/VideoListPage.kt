@@ -102,7 +102,7 @@ import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.component.SealSearchBar
 import com.junkfood.seal.ui.component.VideoFilterChip
 import com.junkfood.seal.ui.common.motion.EmphasizedDecelerate
-import com.junkfood.seal.ui.svg.DynamicColorImageVectors
+import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.svg.drawablevectors.videoSteaming
 import com.junkfood.seal.util.AUDIO_REGEX
 import com.junkfood.seal.util.FileUtil
@@ -424,7 +424,9 @@ fun VideoListPage(viewModel: VideoListViewModel = koinViewModel(), onNavigateBac
         if (fullVideoList.isEmpty())
             Box(modifier = Modifier.fillMaxSize()) {
                 val painter =
-                    rememberVectorPainter(image = DynamicColorImageVectors.videoSteaming())
+                    rememberVectorPainter(
+                        image = sleeveWaveMark(MaterialTheme.colorScheme.primary),
+                    )
                 // First-impression entrance: rare tier, so a gentle stagger is welcome.
                 val entered = remember { MutableTransitionState(false).apply { targetState = true } }
                 Column(

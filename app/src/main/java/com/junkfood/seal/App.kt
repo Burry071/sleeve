@@ -14,7 +14,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import androidx.core.content.getSystemService
-import com.google.android.material.color.DynamicColors
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.DownloaderV2Impl
 import com.junkfood.seal.ui.page.download.HomePageViewModel
@@ -82,7 +81,6 @@ class App : Application() {
                 else getPackageInfo(packageName, 0)
             }
         applicationScope = CoroutineScope(SupervisorJob())
-        DynamicColors.applyToActivitiesIfAvailable(this)
 
         clipboard = getSystemService()!!
         connectivityManager = getSystemService()!!

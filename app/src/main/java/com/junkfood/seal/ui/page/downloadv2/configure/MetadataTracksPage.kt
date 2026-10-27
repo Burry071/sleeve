@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
+import com.junkfood.seal.ui.common.pressScale
 import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
 import kotlinx.coroutines.launch

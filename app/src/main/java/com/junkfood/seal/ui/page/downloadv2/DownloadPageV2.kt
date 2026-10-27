@@ -114,7 +114,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
-import com.junkfood.seal.ui.svg.DynamicColorImageVectors
+import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
@@ -630,7 +630,10 @@ private fun DownloadQueuePlaceholder(modifier: Modifier = Modifier) {
                 }
             if (showImage) {
                 Image(
-                    painter = rememberVectorPainter(image = DynamicColorImageVectors.download()),
+                    painter =
+                        rememberVectorPainter(
+                            image = sleeveWaveMark(MaterialTheme.colorScheme.primary),
+                        ),
                     contentDescription = null,
                     modifier =
                         Modifier.fillMaxHeight(0.5f).widthIn(max = 240.dp).constrainAs(image) {

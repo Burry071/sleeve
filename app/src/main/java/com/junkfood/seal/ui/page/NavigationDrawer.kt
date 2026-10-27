@@ -1,5 +1,6 @@
 package com.junkfood.seal.ui.page
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +65,8 @@ import androidx.compose.ui.zIndex
 import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.LocalWindowWidthState
 import com.junkfood.seal.ui.common.Route
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.page.downloadv2.DownloadPageImplV2
 import kotlinx.coroutines.launch
 
@@ -172,7 +175,41 @@ fun NavigationDrawerSheetContent(
                 .verticalScroll(rememberScrollState())
                 .systemBarsPadding()
     ) {
-        Spacer(Modifier.height(72.dp))
+        Spacer(Modifier.height(28.dp))
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier =
+                    Modifier.size(44.dp)
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter =
+                        rememberVectorPainter(
+                            image = sleeveWaveMark(Color.White),
+                        ),
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                )
+            }
+            Column(modifier = Modifier.padding(start = 12.dp)) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.engine_design),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
         ProvideTextStyle(MaterialTheme.typography.labelLarge) {
             NavigationDrawerItem(
                 label = { Text(stringResource(R.string.download_queue)) },
