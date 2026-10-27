@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.SpatialAudioOff
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.outlined.VideoSettings
 import androidx.compose.material3.AlertDialog
@@ -45,6 +46,8 @@ import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
 import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
+import com.junkfood.seal.util.PreferenceUtil.getInt
+import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.AUDIO_CONVERT
 import com.junkfood.seal.util.CROP_ARTWORK
 import com.junkfood.seal.util.CUSTOM_COMMAND
@@ -109,6 +112,8 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
     var isFormatSelectionEnabled by FORMAT_SELECTION.booleanState
     var mergeAudioStream by MERGE_MULTI_AUDIO_STREAM.booleanState
     var showMergeAudioDialog by remember { mutableStateOf(false) }
+    var showMatchQualityDialog by remember { mutableStateOf(false) }
+    val matchStrictness by RANKING_STRICTNESS.intState
 
     Scaffold(
         modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -223,6 +228,19 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
                 item { PreferenceSubtitle(text = stringResource(id = R.string.advanced_settings)) }
                 item {
                     PreferencesGroupCard {
+                        PreferenceItem(
+                            title = stringResource(id = R.string.match_quality),
+                            icon = Icons.Outlined.Tune,
+                            enabled = !isCustomCommandEnabled,
+                            description =
+                                when (matchStrictness) {
+                                    0 -> stringResource(id = R.string.ranking_loose)
+                                    2 -> stringResource(id = R.string.ranking_strict)
+                                    else -> stringResource(id = R.string.ranking_normal)
+                                },
+                        ) {
+                            showMatchQualityDialog = true
+                        }
                         PreferenceItem(
                             title = stringResource(id = R.string.subtitle),
                             icon = Icons.Outlined.Subtitles,
@@ -355,6 +373,9 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
                 )
             },
         )
+    }
+    if (showMatchQualityDialog) {
+        MatchQualityDialog(onDismissRequest = { showMatchQualityDialog = false })
     }
     if (showMergeAudioDialog) {
         AlertDialog(

@@ -78,6 +78,7 @@ const val SPONSORBLOCK = "sponsorblock"
 const val SPONSORBLOCK_CATEGORIES = "sponsorblock_categories"
 const val ARIA2C = "aria2c"
 const val GHOST_ENGINE = "ghost_engine"
+const val RANKING_STRICTNESS = "ranking_strictness"
 const val SPOTIFY_CLIENT_ID = "spotify_client_id"
 const val SPOTIFY_CLIENT_SECRET = "spotify_client_secret"
 const val COOKIES = "cookies"
@@ -237,6 +238,7 @@ private val IntPreferenceDefaults =
         AUDIO_CONVERSION_FORMAT to NOT_SPECIFIED,
         VIDEO_QUALITY to NOT_SPECIFIED,
         VIDEO_FORMAT to FORMAT_QUALITY,
+        RANKING_STRICTNESS to 1,
         UPDATE_CHANNEL to STABLE,
         CONVERT_SUBTITLE to NOT_SPECIFIED,
         DOWNLOAD_TYPE_INITIALIZATION to USE_PREVIOUS_SELECTION,

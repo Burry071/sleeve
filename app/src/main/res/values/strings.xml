@@ -1,6 +1,11 @@
 <resources>
     <string name="app_name" translatable="false">Sleeve</string>
     <string name="tracks_queued" translatable="false">Queued %d tracks from your list</string>
+    <string name="match_quality" translatable="false">Match quality</string>
+    <string name="match_quality_desc" translatable="false">How strictly YouTube results are matched to metadata</string>
+    <string name="ranking_loose" translatable="false">Loose — more results, may pick covers</string>
+    <string name="ranking_normal" translatable="false">Normal — recommended</string>
+    <string name="ranking_strict" translatable="false">Strict — official uploads only, some tracks may be skipped</string>
     <string name="video_directory">Video folder</string>
     <string name="extract_audio">Save as audio</string>
     <string name="create_thumbnail">Save thumbnail</string>

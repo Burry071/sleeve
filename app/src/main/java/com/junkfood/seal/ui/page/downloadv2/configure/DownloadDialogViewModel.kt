@@ -11,6 +11,8 @@ import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PlaylistResult
+import com.junkfood.seal.util.PreferenceUtil.getInt
+import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
 import com.junkfood.seal.util.PreferenceUtil.getString
@@ -317,20 +319,31 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                             .filter { it.isNotBlank() }
                             .joinToString(separator = " ")
                             .let { Regex("\\s+").replace(it, " ").trim() }
+                    // YouTube Music pool first (real artist uploads, better
+                    // audio); plain YouTube search is the fallback.
                     val candidates =
                         DownloadUtil.getPlaylistOrVideoInfo(
-                                playlistURL = "ytsearch5:$query",
+                                playlistURL = "ytmsearch5:$query",
                                 downloadPreferences = preferences,
                             )
-                            .getOrThrow()
-                            .run {
-                                (this as? PlaylistResult)?.entries
-                                    ?: throw IllegalStateException("no candidates")
-                            }
+                            .map { it as? PlaylistResult }
+                            .getOrElse { null }
+                            ?.entries
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: DownloadUtil.getPlaylistOrVideoInfo(
+                                    playlistURL = "ytsearch5:$query",
+                                    downloadPreferences = preferences,
+                                )
+                                .getOrThrow()
+                                .run {
+                                    (this as? PlaylistResult)?.entries
+                                        ?: throw IllegalStateException("no candidates")
+                                }
                     val best =
                         GhostEngine.rankCandidates(
                                 track = track,
                                 candidatesJson = json.encodeToString(candidates),
+                                strictness = RANKING_STRICTNESS.getInt(),
                             )
                             .getOrThrow()
                     val url =

@@ -204,14 +204,18 @@ object GhostEngine {
      * fuzzy ratios, duration decay, forbidden-keyword penalties, "- Topic"
      * channel bonus. Candidates come from a flat ytsearch extraction.
      */
-    fun rankCandidates(track: SpotifyTrack, candidatesJson: String): Result<RankedCandidate> =
+    fun rankCandidates(
+        track: SpotifyTrack,
+        candidatesJson: String,
+        strictness: Int = 1,
+    ): Result<RankedCandidate> =
         runCatching {
             ensureStarted()
             val trackJson = json.encodeToString(track)
             val reply =
                 Python.getInstance()
                     .getModule("sleeve_spotify")
-                    .callAttr("rank_candidates", trackJson, candidatesJson)
+                    .callAttr("rank_candidates", trackJson, candidatesJson, strictness)
                     .toString()
             val obj = json.parseToJsonElement(reply).jsonObject
             if (obj["ok"]?.jsonPrimitive?.content != "true") {

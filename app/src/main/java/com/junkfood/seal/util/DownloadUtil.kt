@@ -1,9 +1,9 @@
 package com.junkfood.seal.util
 
+import android.os.Build
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteDatabase.OPEN_READONLY
 import android.media.MediaCodecList
-import android.os.Build
 import android.util.Log
 import android.webkit.CookieManager
 import androidx.annotation.CheckResult
@@ -671,6 +671,189 @@ object DownloadUtil {
         ghostTasks.remove(taskId)?.let { GhostEngine.cancel(it) }
     }
 
+    private val ELF_MACHINES =
+        mapOf(
+            "arm64-v8a" to 183L, // EM_AARCH64
+            "x86_64" to 62L, // EM_X86_64
+        )
+
+    /** True when the bundled ELF binary matches one of the device's ABIs. */
+    private fun canExecuteElf(file: File): Boolean {
+        if (!file.exists()) return false
+        return runCatching {
+            val header = file.inputStream().use { it.readNBytes(20) }
+            if (header.size < 20 || header[0] != 0x7F.toByte() || header[1] != 'E'.code.toByte())
+                return false
+            val machine = ((header[19].toLong() and 0xFF) shl 8) or (header[18].toLong() and 0xFF)
+            val abi =
+                Build.SUPPORTED_ABIS.firstOrNull { ELF_MACHINES.containsKey(it) }
+                    ?: return false
+            ELF_MACHINES[abi] == machine
+        }.getOrDefault(false)
+    }
+
+    private fun nativeBinary(name: String): File? {
+        val dir = App.context.applicationInfo.nativeLibraryDir ?: return null
+        val f = File(dir, name)
+        return if (f.exists()) f else null
+    }
+
+    /**
+     * HLS/DASH handoff to the bundled N_m3u8DL-RE (Ghost-Downloader's binary,
+     * GPL-3.0): multi-threaded segment download, AES-128 decryption, muxing.
+     * Manifest URLs only; everything else fails open to yt-dlp.
+     *
+     * @return null when this download was NOT handled (caller falls back).
+     */
+    private fun runNm3u8DlReIfEligible(
+        videoInfo: VideoInfo,
+        preferences: DownloadPreferences,
+        taskId: String,
+        progressCallback: ((Float, Long, String) -> Unit)?,
+    ): Result<List<String>>? {
+        if (!GHOST_ENGINE.getBoolean()) return null
+        val bin =
+            nativeBinary("libnm3u8dlre.so")
+                ?.takeIf { canExecuteElf(it) }
+                ?: return null.also {
+                    Log.d(TAG, "N_m3u8DL-RE skipped: binary missing or wrong arch")
+                }
+
+        val manifestUrl =
+            with(preferences) {
+                if (downloadPlaylist ||
+                        extractAudio ||
+                        convertAudio ||
+                        sponsorBlock ||
+                        createThumbnail ||
+                        cropArtwork ||
+                        embedThumbnail ||
+                        downloadSubtitle ||
+                        embedSubtitle ||
+                        keepSubtitle ||
+                        autoSubtitle ||
+                        autoTranslatedSubtitles ||
+                        convertSubtitle != 0 ||
+                        aria2c ||
+                        rateLimit ||
+                        cookies ||
+                        sdcard ||
+                        useDownloadArchive ||
+                        videoClips.isNotEmpty() ||
+                        splitByChapter
+                ) {
+                    Log.d(TAG, "N_m3u8DL-RE skipped: yt-dlp post-processing requested")
+                    return null
+                }
+                if (formatIdString.contains('+')) return null
+
+                val manifestish =
+                    (videoInfo.requestedFormats.orEmpty() + videoInfo.formats.orEmpty())
+                        .filter { !it.url.isNullOrBlank() }
+                        .filter {
+                            val lower = it.url!!.lowercase()
+                            listOf("m3u8", "mpd", "manifest").any { k -> k in lower }
+                        }
+                val pick =
+                    if (formatIdString.isNotEmpty())
+                        manifestish.firstOrNull { it.formatId == formatIdString }
+                    else
+                        manifestish.maxByOrNull { it.tbr ?: it.fileSizeApprox ?: 0.0 }
+                pick?.url ?: return null
+            }
+
+        val baseName =
+            preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
+                .ifBlank { "download" }
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val downloadDir =
+            if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
+        val fileName = "$baseName.mp4" // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
+
+        val workDir =
+            File(App.context.cacheDir, "nm3re_$taskId").apply { mkdirs() }
+        val args =
+            mutableListOf(
+                bin.absolutePath,
+                manifestUrl,
+                "--save-dir=${workDir.absolutePath}",
+                "--save-name=media",
+                "--tmp-dir=${File(workDir, "tmp").apply { mkdirs() }.absolutePath}",
+                "--thread-count=8",
+                "--download-retry-count=3",
+                "--http-request-timeout=30",
+                "--concurrent-download=true",
+                "--binary-merge=true",
+                "--del-after-done=true",
+                "--no-log=true",
+                "--no-ansi-color=true",
+                "--disable-update-check=true",
+                "--use-system-proxy=false",
+                "--auto-selection",
+            )
+        nativeBinary("libffmpeg.so")?.let {
+            args.add("--ffmpeg-binary-path=${it.absolutePath}")
+        }
+
+        Log.i(TAG, "N_m3u8DL-RE took over $taskId -> $manifestUrl")
+        val process =
+            runCatching {
+                ProcessBuilder(args)
+                    .apply { redirectErrorStream(true) }
+                    .start()
+            }.getOrElse {
+                Log.w(TAG, "N_m3u8DL-RE unavailable, falling back to yt-dlp: ${it.message}")
+                workDir.deleteRecursively()
+                return null
+            }
+
+        // Stream-copy done; the produced file is the largest under workDir.
+        val produced =
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val percent = Regex("\\[(\\d{1,3}(?:\\.\\d+)?)%").find(line)
+                    if (percent != null) {
+                        progressCallback?.invoke(
+                            percent.groupValues[1].toFloatOrNull() ?: 0f,
+                            0,
+                            "N_m3u8DL-RE: ${line.takeLast(80)}",
+                        )
+                    }
+                }
+                workDir
+                    .walkTopDown()
+                    .filter { it.isFile && !it.relativeTo(workDir).path.startsWith("tmp") }
+                    .maxByOrNull { it.length() }
+            }
+        val code = runCatching { process.waitFor() }.getOrDefault(-1)
+        if (code != 0 || produced == null || produced.length() == 0L) {
+            Log.w(TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
+            workDir.deleteRecursively()
+            return null
+        }
+
+        val target = File(downloadDir, fileName)
+        runCatching {
+            produced.copyTo(target, overwrite = true)
+            produced.delete()
+        }
+        workDir.deleteRecursively()
+
+        if (preferences.embedMetadata) {
+            embedMetadataWithFfmpeg(
+                filePath = target.absolutePath,
+                videoInfo = videoInfo,
+                preferences = preferences,
+            )
+        }
+        return onFinishDownloading(
+            preferences = preferences,
+            videoInfo = videoInfo,
+            downloadPath = downloadDir,
+            sdcardUri = preferences.sdcardUri,
+        )
+    }
+
     /**
      * Ghost engine handoff (Ghost Downloader ADR-0007 pattern): yt-dlp extracts,
      * the embedded engine transfers the bytes. Eligible only when the selected
@@ -938,6 +1121,15 @@ object DownloadUtil {
                             Throwable(context.getString(R.string.fetch_info_error_msg))
                         )
                 }
+
+            // HLS/DASH first: the bundled N_m3u8DL-RE handles segmented
+            // manifests; direct progressive files fall through to the engine.
+            runNm3u8DlReIfEligible(
+                videoInfo = videoInfo,
+                preferences = downloadPreferences,
+                taskId = taskId,
+                progressCallback = progressCallback,
+            )?.let { return it }
 
             // Ghost engine handoff: when the embedded engine can transfer this
             // download itself, it reports progress through the same callback and

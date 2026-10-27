@@ -345,11 +345,12 @@ def _duration_score(track_ms, cand_s):
     return min(100.0, 2.718281828 ** (-k * delta) * 100.0)
 
 
-def rank_candidates(track_json, candidates_json):
+def rank_candidates(track_json, candidates_json, strictness=1):
     """Pick the best YouTube candidate for a metadata track.
 
     track_json: {"title","artist","album","durationMs"}
     candidates_json: [{"id","url","title","uploader","channel","duration"}]
+    strictness: 0=loose, 1=normal, 2=strict
     returns {"ok","index","id","url","title","score"} of the winner.
     """
     try:
@@ -364,16 +365,20 @@ def rank_candidates(track_json, candidates_json):
         for i, cand in enumerate(candidates):
             cand_title = cand.get("title", "") or ""
             name = _name_score(title, artist, cand_title)
-            if name < 60.0:
+            name_floor = {0: 50.0, 1: 60.0, 2: 75.0}.get(strictness, 60.0)
+            if name < name_floor:
                 continue
             artist_s = _artist_score(artist, cand.get("uploader") or cand.get("channel") or "", cand_title)
             # Long-form uploads (audiobooks) live on channels that are not the
             # author — the artist signal is weak there; the title carries it.
-            if artist_s < 40.0 and not long_form:
+            artist_floor = {0: 0.0, 1: 40.0, 2: 60.0}.get(strictness, 40.0)
+            if artist_s < artist_floor and not (long_form and strictness < 2):
                 continue
             dur = _duration_score(duration_ms, cand.get("duration"))
             if long_form:
                 final = 0.55 * name + 0.15 * artist_s + 0.30 * dur
+            elif strictness == 2:
+                final = 0.35 * name + 0.45 * artist_s + 0.20 * dur
             else:
                 final = 0.4 * name + 0.35 * artist_s + 0.25 * dur
             if best is None or final > best["score"]:
