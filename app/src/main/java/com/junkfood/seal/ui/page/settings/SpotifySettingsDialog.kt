@@ -45,9 +45,10 @@ fun SpotifyCredentialsDialog(onDismissRequest: () -> Unit = {}) {
                 Text(
                     text =
                         "Spotify playlists are resolved for metadata and matched on " +
-                            "YouTube (spotDL pattern). Paste your own free client " +
-                            "credentials from developer.spotify.com — the shared " +
-                            "defaults are heavily rate-limited.",
+                            "YouTube (spotDL pattern). Sleeve tries public " +
+                            "no-login endpoints first; if your network is blocked, " +
+                            "paste free client credentials from " +
+                            "developer.spotify.com for a guaranteed path.",
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 6,
                     overflow = TextOverflow.Ellipsis,
@@ -55,14 +56,14 @@ fun SpotifyCredentialsDialog(onDismissRequest: () -> Unit = {}) {
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     value = clientId,
-                    label = { Text(text = "Client ID") },
+                    label = { Text(text = "Client ID (optional)") },
                     onValueChange = { clientId = it },
                     singleLine = true,
                 )
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
                     value = clientSecret,
-                    label = { Text(text = "Client secret") },
+                    label = { Text(text = "Client secret (optional)") },
                     onValueChange = { clientSecret = it },
                     singleLine = true,
                     keyboardOptions =
