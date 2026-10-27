@@ -111,6 +111,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.Config
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
+import com.junkfood.seal.ui.page.downloadv2.configure.SpotifyTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
 import com.junkfood.seal.ui.svg.DynamicColorImageVectors
@@ -285,6 +286,13 @@ fun DownloadPageV2(
             FormatPage(
                 state = selectionState,
                 onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
+            )
+
+        is DownloadDialogViewModel.SelectionState.SpotifyTracks ->
+            SpotifyTracksPage(
+                state = selectionState,
+                onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
+                onActionPost = { dialogViewModel.postAction(it) },
             )
 
         is DownloadDialogViewModel.SelectionState.PlaylistSelection -> {

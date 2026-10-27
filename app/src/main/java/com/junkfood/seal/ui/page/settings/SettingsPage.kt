@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.EnergySavingsLeaf
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.SettingsApplications
 import androidx.compose.material.icons.rounded.SignalCellular4Bar
 import androidx.compose.material.icons.rounded.SignalWifi4Bar
@@ -102,6 +103,8 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
         }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
+    var showSpotifyDialog by remember { mutableStateOf(false) }
+
     val typography = MaterialTheme.typography
 
     Scaffold(
@@ -165,6 +168,13 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
                         onNavigateTo(Route.DOWNLOAD_FORMAT)
                     }
                     SettingItem(
+                        title = "Spotify",
+                        description = "Playlist transfer credentials (spotDL pattern)",
+                        icon = Icons.Rounded.QueueMusic,
+                    ) {
+                        showSpotifyDialog = true
+                    }
+                    SettingItem(
                         title = stringResource(id = R.string.network),
                         description = stringResource(id = R.string.network_settings_desc),
                         icon =
@@ -220,5 +230,9 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
                 }
             }
         }
+    }
+
+    if (showSpotifyDialog) {
+        SpotifyCredentialsDialog(onDismissRequest = { showSpotifyDialog = false })
     }
 }

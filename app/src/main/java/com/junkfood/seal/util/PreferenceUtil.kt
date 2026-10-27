@@ -78,6 +78,8 @@ const val SPONSORBLOCK = "sponsorblock"
 const val SPONSORBLOCK_CATEGORIES = "sponsorblock_categories"
 const val ARIA2C = "aria2c"
 const val GHOST_ENGINE = "ghost_engine"
+const val SPOTIFY_CLIENT_ID = "spotify_client_id"
+const val SPOTIFY_CLIENT_SECRET = "spotify_client_secret"
 const val COOKIES = "cookies"
 const val USER_AGENT = "user_agent"
 const val USER_AGENT_STRING = "user_agent_string"
@@ -207,6 +209,10 @@ private val StringPreferenceDefaults =
         SUBTITLE_LANGUAGE to "en.*,.*-orig",
         OUTPUT_TEMPLATE to DownloadUtil.OUTPUT_TEMPLATE_ID,
         CUSTOM_OUTPUT_TEMPLATE to DownloadUtil.OUTPUT_TEMPLATE_ID,
+        // Public bundled defaults from spotDL (GPL-3.0,
+        // github.com/spotDL/spotify-downloader) — metadata access only.
+        SPOTIFY_CLIENT_ID to "5f573c9620494bae87890c0f08a60293",
+        SPOTIFY_CLIENT_SECRET to "212476d9b0f3472eaa762d90b19b0ba8",
     )
 
 private val BooleanPreferenceDefaults =

@@ -5,8 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.ghostengine.GhostEngine
+import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PlaylistResult
+import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
+import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
+import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +32,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         data class PlaylistSelection(val result: PlaylistResult) : SelectionState
 
         data class FormatSelection(val info: VideoInfo) : SelectionState
+
+        data class SpotifyTracks(
+            val playlistTitle: String,
+            val tracks: List<SpotifyTrack>,
+        ) : SelectionState
     }
 
     sealed interface SheetState {
@@ -49,6 +59,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         data object HideSheet : Action
 
         data class ShowSheet(val urlList: List<String>? = null) : Action
+
+        data class FetchSpotify(val url: String) : Action
+
+        data class DownloadSpotifyTracks(val tracks: List<SpotifyTrack>) : Action
 
         data class ProceedWithURLs(val urlList: List<String>) : Action
 
@@ -102,6 +116,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                 is Action.RunCommand -> runCommand(url, template, preferences)
                 Action.HideSheet -> hideDialog()
                 is Action.ShowSheet -> showDialog(this)
+                is Action.FetchSpotify -> fetchSpotify(this)
+                is Action.DownloadSpotifyTracks -> downloadSpotifyTracks(this)
                 Action.Cancel -> cancel()
                 Action.Reset -> resetSelectionState()
             }
@@ -109,6 +125,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun proceedWithUrls(action: Action.ProceedWithURLs) {
+        val spotifyUrl = action.urlList.firstOrNull { isSpotifyUrl(it) }
+        if (spotifyUrl != null) {
+            fetchSpotify(Action.FetchSpotify(spotifyUrl))
+            return
+        }
         mSheetStateFlow.update { SheetState.Configure(action.urlList) }
     }
 
@@ -209,12 +230,70 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun showDialog(action: Action.ShowSheet) {
         val urlList = action.urlList
+        val spotifyUrl = urlList?.firstOrNull { isSpotifyUrl(it) }
+        if (spotifyUrl != null) {
+            mSheetValueFlow.update { SheetValue.Expanded }
+            fetchSpotify(Action.FetchSpotify(spotifyUrl))
+            return
+        }
         if (!urlList.isNullOrEmpty()) {
             mSheetStateFlow.update { SheetState.Configure(urlList) }
         } else {
             mSheetStateFlow.update { SheetState.InputUrl }
         }
         mSheetValueFlow.update { SheetValue.Expanded }
+    }
+
+    private fun isSpotifyUrl(url: String) =
+        url.contains("spotify.com/") || url.startsWith("spotify:")
+
+    private fun fetchSpotify(action: Action.FetchSpotify) {
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                GhostEngine.spotifyResolve(
+                        url = action.url,
+                        clientId = SPOTIFY_CLIENT_ID.getString(),
+                        clientSecret = SPOTIFY_CLIENT_SECRET.getString(),
+                    )
+                    .onSuccess { (playlistTitle, tracks) ->
+                        withContext(Dispatchers.Main) {
+                            mSelectionStateFlow.update {
+                                SelectionState.SpotifyTracks(
+                                    playlistTitle = playlistTitle,
+                                    tracks = tracks,
+                                )
+                            }
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th ->
+                        withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                        }
+                    }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "FetchSpotify_${action.url}", job = job)
+        }
+    }
+
+    private fun downloadSpotifyTracks(action: Action.DownloadSpotifyTracks) {
+        // spotDL pattern: each track becomes a YouTube search resolved and
+        // downloaded by the normal pipeline, audio-only.
+        val preferences =
+            DownloadUtil.DownloadPreferences.createFromPreferences().copy(extractAudio = true)
+        action.tracks
+            .map { track ->
+                val query =
+                    listOf(track.artist, track.title, "audio")
+                        .filter { it.isNotBlank() }
+                        .joinToString(separator = " ")
+                        .let { Regex("\\s+").replace(it, " ").trim() }
+                "ytsearch1:$query"
+            }
+            .forEach { url -> downloader.enqueue(Task(url = url, preferences = preferences)) }
+        hideDialog()
+        resetSelectionState()
     }
 
     private fun cancel(): Boolean {

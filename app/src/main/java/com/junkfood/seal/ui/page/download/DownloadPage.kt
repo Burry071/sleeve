@@ -109,6 +109,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
+import com.junkfood.seal.ui.page.downloadv2.configure.SpotifyTracksPage
 import com.junkfood.seal.ui.theme.PreviewThemeLight
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.CELLULAR_DOWNLOAD
@@ -326,6 +327,12 @@ fun DownloadPage(
                 FormatPage(
                     state = selectionState,
                     onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
+                )
+            is DownloadDialogViewModel.SelectionState.SpotifyTracks ->
+                SpotifyTracksPage(
+                    state = selectionState,
+                    onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
+                    onActionPost = { dialogViewModel.postAction(it) },
                 )
             else -> {}
         }

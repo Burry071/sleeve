@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -166,5 +167,47 @@ object GhostEngine {
                     )
                 }
             }
+        }
+
+    /**
+     * Spotify metadata resolution (spotDL pattern): Spotify public Web API for
+     * metadata only — audio always comes from YouTube via yt-dlp.
+     */
+    data class SpotifyTrack(
+        val title: String,
+        val artist: String,
+        val album: String,
+        val durationMs: Long,
+    )
+
+    fun spotifyResolve(
+        url: String,
+        clientId: String,
+        clientSecret: String,
+    ): Result<Pair<String, List<SpotifyTrack>>> =
+        runCatching {
+            ensureStarted()
+            val reply =
+                Python.getInstance()
+                    .getModule("selkie_spotify")
+                    .callAttr("resolve", url, clientId, clientSecret)
+                    .toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "spotify resolve failed")
+            }
+            val tracks =
+                obj["tracks"]!!.jsonArray.mapNotNull { el ->
+                    runCatching {
+                        val t = el.jsonObject
+                        SpotifyTrack(
+                            title = t["title"]!!.jsonPrimitive.content,
+                            artist = t["artist"]?.jsonPrimitive?.content ?: "",
+                            album = t["album"]?.jsonPrimitive?.content ?: "",
+                            durationMs = t["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
+                        )
+                    }.getOrNull()
+                }
+            obj["title"]?.jsonPrimitive?.content.orEmpty() to tracks
         }
 }
