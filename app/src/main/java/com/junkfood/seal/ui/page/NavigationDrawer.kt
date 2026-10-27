@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package com.junkfood.seal.ui.page
 
 import androidx.compose.foundation.Image
@@ -38,7 +40,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -56,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -66,7 +68,10 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.LocalWindowWidthState
 import com.junkfood.seal.ui.common.Route
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toShape
 import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
+import com.junkfood.seal.ui.theme.SleeveFontFamily
 import com.junkfood.seal.ui.page.downloadv2.DownloadPageImplV2
 import kotlinx.coroutines.launch
 
@@ -182,8 +187,8 @@ fun NavigationDrawerSheetContent(
         ) {
             Box(
                 modifier =
-                    Modifier.size(44.dp)
-                        .clip(MaterialTheme.shapes.medium)
+                    Modifier.size(46.dp)
+                        .clip(MaterialShapes.Cookie9Sided.toShape())
                         .background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
             ) {
