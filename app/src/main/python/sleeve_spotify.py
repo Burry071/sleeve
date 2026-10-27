@@ -57,7 +57,7 @@ def _http_get(url, headers=None):
         return resp.read().decode()
 
 
-def _http_post_form(url, fields):
+def _http_post_form(url, fields, timeout=_TIMEOUT):
     body = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(
         url,
@@ -67,7 +67,7 @@ def _http_post_form(url, fields):
             "User-Agent": _UA,
         },
     )
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode()
 
 
@@ -77,7 +77,11 @@ def _api_get(url, token):
 
 # ---------------------------------------------------------------- strategy 1
 def _via_embed(kind, obj_id):
-    """The public embed page embeds entity JSON — zero auth, zero API."""
+    """The public embed page embeds entity JSON — zero auth, zero API.
+
+    Entity shapes: playlists/albums carry entity.trackList; a track embed
+    IS the entity itself (type "track", title/name, artists, duration ms).
+    """
     html = _http_get("https://open.spotify.com/embed/%s/%s" % (kind, obj_id))
     m = _NEXT_DATA_RE.search(html)
     if not m:
@@ -87,15 +91,30 @@ def _via_embed(kind, obj_id):
     if str(page.get("status")) not in (None, "None", "200"):
         raise RuntimeError("embed: page status %s" % page.get("status"))
     entity = (((page.get("state") or {}).get("data") or {}).get("entity")) or {}
-    track_list = entity.get("trackList") or []
-    if not track_list:
-        raise RuntimeError("embed: no trackList")
 
     def artist_names(t):
         arts = t.get("artists") or []
         return ", ".join(
             (a.get("name") if isinstance(a, dict) else str(a)) or "" for a in arts
         )
+
+    track_list = entity.get("trackList") or []
+    if not track_list and entity.get("type") == "track":
+        # Single-track embed: the entity is the track.
+        return {
+            "ok": True,
+            "kind": "track",
+            "title": entity.get("title") or entity.get("name") or "",
+            "tracks": [
+                _track_dto(
+                    title=entity.get("title") or entity.get("name") or "",
+                    artist=artist_names(entity),
+                    duration_ms=entity.get("duration") or 0,
+                )
+            ],
+        }
+    if not track_list:
+        raise RuntimeError("embed: no trackList and not a track entity")
 
     tracks = [
         _track_dto(
@@ -107,8 +126,6 @@ def _via_embed(kind, obj_id):
         for t in track_list[:MAX_TRACKS]
     ]
     title = entity.get("name") or ""
-    if kind == "track" and tracks:
-        title = tracks[0]["title"]
     return {"ok": True, "kind": kind, "title": title, "tracks": tracks}
 
 
@@ -209,16 +226,27 @@ def _via_anon_token(kind, obj_id):
 
 # ---------------------------------------------------------------- strategy 3
 def _via_client_credentials(kind, obj_id, client_id, client_secret):
-    data = json.loads(
-        _http_post_form(
-            "https://accounts.spotify.com/api/token",
-            {
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-        )
-    )
+    data = None
+    last_err = None
+    for attempt in range(2):
+        try:
+            data = json.loads(
+                _http_post_form(
+                    "https://accounts.spotify.com/api/token",
+                    {
+                        "grant_type": "client_credentials",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                    },
+                    timeout=30,
+                )
+            )
+            break
+        except Exception as e:  # noqa: BLE001 — one retry covers transient timeouts
+            last_err = e
+            time.sleep(1.5)
+    if data is None:
+        raise RuntimeError("creds: %s" % last_err)
     token = data.get("access_token") or ""
     if not token:
         raise RuntimeError("creds: no access_token in response")
