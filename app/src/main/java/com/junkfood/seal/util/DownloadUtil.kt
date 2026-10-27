@@ -48,6 +48,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -812,6 +813,14 @@ object DownloadUtil {
             }
         ghostTasks.remove(taskId)
 
+        if (outcome?.state == TaskState.COMPLETED && preferences.embedMetadata) {
+            embedMetadataWithFfmpeg(
+                filePath = File(downloadDir, fileName).absolutePath,
+                videoInfo = videoInfo,
+                preferences = preferences,
+            )
+        }
+
         return when (outcome?.state) {
             TaskState.COMPLETED ->
                 onFinishDownloading(
@@ -825,6 +834,86 @@ object DownloadUtil {
                     outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
                 Result.failure(YoutubeDLException("Ghost engine: $reason"))
             }
+        }
+    }
+
+    /**
+     * Best-effort metadata embed for engine-transferred files, restoring the
+     * embedMetadata post-processing the stock yt-dlp path would have run.
+     * Stream-copies (-c copy) so the transfer bytes are untouched; any ffmpeg
+     * failure keeps the original file.
+     */
+    private fun embedMetadataWithFfmpeg(
+        filePath: String,
+        videoInfo: VideoInfo,
+        preferences: DownloadPreferences,
+    ) {
+        val ffmpeg =
+            File(App.context.applicationInfo.nativeLibraryDir ?: return, "libffmpeg.so")
+                .takeIf { it.exists() } ?: return
+        val inFile = File(filePath)
+        if (!inFile.exists()) return
+        // Keep the real extension on the temp file so ffmpeg can pick the muxer.
+        val tmpOut =
+            File(
+                inFile.parentFile,
+                inFile.nameWithoutExtension + ".meta_tmp." + inFile.extension,
+            )
+
+        val title = preferences.newTitle.ifEmpty { videoInfo.title }
+        val artist = videoInfo.uploader ?: videoInfo.channel ?: ""
+        val args =
+            mutableListOf(
+                ffmpeg.absolutePath,
+                "-y",
+                "-i",
+                inFile.absolutePath,
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-metadata",
+                "title=$title",
+                "-metadata",
+                "artist=$artist",
+                "-metadata",
+                "album_artist=$artist",
+                "-metadata",
+                "comment=Sleeve",
+                tmpOut.absolutePath,
+            )
+        runCatching {
+            val proc =
+                ProcessBuilder(args)
+                    .apply {
+                        // libc++_shared.so and the libav* libs live in the
+                        // extracted ffmpeg package, where yt-dlp's own ffmpeg
+                        // invocations also load them from.
+                        environment()["LD_LIBRARY_PATH"] =
+                            File(
+                                App.context.noBackupFilesDir,
+                                "youtubedl-android/packages/ffmpeg/usr/lib",
+                            )
+                                .absolutePath
+                        redirectErrorStream(true)
+                    }
+                    .start()
+            val output = proc.inputStream.bufferedReader().readText()
+            val code = proc.waitFor()
+            if (code == 0 && tmpOut.exists() && tmpOut.length() > 0) {
+                if (inFile.delete() && tmpOut.renameTo(inFile)) {
+                    Log.i(TAG, "ffmpeg: metadata embedded into ${inFile.name}")
+                } else {
+                    Log.w(TAG, "ffmpeg: could not replace original")
+                    tmpOut.delete()
+                }
+            } else {
+                Log.w(TAG, "ffmpeg: exit $code ${output.takeLast(300)}")
+                tmpOut.delete()
+            }
+        }.onFailure {
+            Log.w(TAG, "ffmpeg: embed failed: ${it.message}")
+            tmpOut.delete()
         }
     }
 
