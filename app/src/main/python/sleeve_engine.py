@@ -258,15 +258,24 @@ class Task:
         opts = _java_to_dict(options)
         self.id = uuid.uuid4().hex[:12]
         self.url = url
+        # Defense in depth: the bridge is trusted, but never let a path
+        # separator or dot-dot through into the output file name, and keep
+        # the worker pool bounded.
+        raw_name = str(
+            opts.get("fileName")
+            or os.path.basename(urllib.parse.urlsplit(url).path)
+            or "download.bin"
+        )
+        safe_name = os.path.basename(raw_name.replace("\\", "/")) or "download.bin"
         self.step = SegmentedHttpStep(
             url,
             output_path=os.path.join(
                 str(opts.get("outputDir") or os.getcwd()),
-                str(opts.get("fileName") or os.path.basename(urllib.parse.urlsplit(url).path) or "download.bin"),
+                safe_name,
             ),
             headers=_java_to_dict(opts.get("headers")),
             user_agent=opts.get("userAgent"),
-            subworkers=int(opts.get("subworkerCount") or 8),
+            subworkers=max(1, min(int(opts.get("subworkerCount") or 8), 16)),
         )
         self.thread = threading.Thread(target=self.step.run, daemon=True)
 

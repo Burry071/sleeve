@@ -71,17 +71,22 @@ fun TroubleShootingPage(
                         modifier = Modifier,
                         text = stringResource(R.string.issue_tracker_hint),
                     )
-                    val knownIssueUrlSeal = "https://github.com/JunkFood02/Seal/issues/1399"
                     PreferenceItem(
-                        title = "Seal Issue Tracker",
-                        description = null,
+                        title = "Sleeve repository",
+                        description = "Report issues and track updates",
                         icon = Icons.AutoMirrored.Outlined.OpenInNew,
-                        onClick = { uriHandler.openUri(knownIssueUrlSeal) },
+                        onClick = { uriHandler.openUri(com.junkfood.seal.SleeveRepo.REPO_URL) },
+                    )
+                    PreferenceItem(
+                        title = "Sleeve releases",
+                        description = "New builds and updates",
+                        icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                        onClick = { uriHandler.openUri(com.junkfood.seal.SleeveRepo.RELEASES_URL) },
                     )
 
-                    val knownIssueUrlYtdlp = "https://github.com/yt-dlp/yt-dlp/issues/3766"
+                    val knownIssueUrlYtdlp = "https://github.com/yt-dlp/yt-dlp/issues"
                     PreferenceItem(
-                        title = "yt-dlp Issue Tracker",
+                        title = "yt-dlp issue tracker (upstream)",
                         description = null,
                         icon = Icons.AutoMirrored.Outlined.OpenInNew,
                         onClick = { uriHandler.openUri(knownIssueUrlYtdlp) },

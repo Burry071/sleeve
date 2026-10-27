@@ -1,0 +1,33 @@
+# Sleeve CI — mirrors .github/workflows/ci.yml for GitLab hosting.
+# Requires runners with the Android SDK (image below ships JDK 17 + SDK;
+# JDK 21 is installed inline for the Gradle build).
+
+stages:
+  - build
+
+variables:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+build:
+  stage: build
+  image: eclipse-temurin:21-jdk
+  before_script:
+    - apt-get --quiet update && apt-get --quiet install -y wget unzip
+    - export ANDROID_HOME="$PWD/.android-sdk"
+    - mkdir -p "$ANDROID_HOME/cmdline-tools"
+    - wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+    - unzip -q tools.zip -d "$ANDROID_HOME/cmdline-tools"
+    - mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+    - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+    - "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools" >/dev/null
+  script:
+    - ./gradlew :app:assembleGenericDebug
+      -PnoSplits
+      -PABI_FILTERS="arm64-v8a;x86_64"
+      --stacktrace
+  artifacts:
+    paths:
+      - app/build/outputs/apk/generic/debug/*.apk
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH

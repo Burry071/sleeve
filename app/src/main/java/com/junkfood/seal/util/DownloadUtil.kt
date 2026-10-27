@@ -671,6 +671,30 @@ object DownloadUtil {
         ghostTasks.remove(taskId)?.let { GhostEngine.cancel(it) }
     }
 
+
+    /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
+    private val PRIVATE_HOST_RE =
+        Regex(
+            "^(localhost|127\\.|10\\.|0\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\." +
+                "|\\[::1\\]|\\[fc|\\[fd|\\[fe80)",
+            RegexOption.IGNORE_CASE,
+        )
+
+    private fun isSafeRemoteUrl(url: String): Boolean {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+        val rest = url.substringAfter("://")
+        // Bracketed IPv6 hosts must not be split on ':' (would leave "[" and
+        // bypass the blocklist).
+        val hostPart =
+            if (rest.startsWith("["))
+                rest.substringBefore(']')
+            else
+                rest.substringBefore('/').substringBefore(':')
+        // Match the pattern against the token as-is: IPv6 alternatives in the
+        // blocklist are written bracketed ("[::1]", "[fc", "[fd").
+        return hostPart.length > 2 && !PRIVATE_HOST_RE.containsMatchIn(hostPart)
+    }
+
     private val ELF_MACHINES =
         mapOf(
             "arm64-v8a" to 183L, // EM_AARCH64
@@ -760,6 +784,10 @@ object DownloadUtil {
                     else
                         manifestish.maxByOrNull { it.tbr ?: it.fileSizeApprox ?: 0.0 }
                 pick?.url ?: return null
+            }
+            if (!isSafeRemoteUrl(manifestUrl)) {
+                Log.w(TAG, "N_m3u8DL-RE skipped: unsafe manifest url")
+                return null
             }
 
         val baseName =
@@ -928,8 +956,8 @@ object DownloadUtil {
                 // unknown codecs (generic extractor reports acodec=null) are fine.
 
                 val url = candidate.url!!
-                if (!url.startsWith("http")) {
-                    Log.d(TAG, "Ghost handoff skipped: non-http url")
+                if (!isSafeRemoteUrl(url)) {
+                    Log.d(TAG, "Ghost handoff skipped: unsafe url")
                     return null
                 }
                 val lower = url.lowercase()

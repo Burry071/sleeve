@@ -36,6 +36,17 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** Resolve cooldown: shared metadata-source rate limiting (ms since epoch). */
+    private val lastResolveAt = mutableMapOf<String, Long>()
+
+    private fun resolveThrottled(kind: String): Boolean {
+        val now = System.currentTimeMillis()
+        val last = lastResolveAt[kind] ?: 0L
+        if (now - last < 3000) return true
+        lastResolveAt[kind] = now
+        return false
+    }
+
     sealed interface SelectionState {
         data object Idle : SelectionState
 
@@ -272,6 +283,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     private fun isAudibleUrl(url: String) = Regex("audible\\.[a-z.]+/").containsMatchIn(url)
 
     private fun fetchSpotify(action: Action.FetchSpotify) {
+        if (resolveThrottled("spotify")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 GhostEngine.spotifyResolve(
@@ -365,6 +377,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun fetchAudible(action: Action.FetchAudible) {
+        if (resolveThrottled("audible")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 GhostEngine.audibleResolve(url = action.url)
