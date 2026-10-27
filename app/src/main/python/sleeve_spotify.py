@@ -265,3 +265,128 @@ def resolve(url, client_id="", client_secret=""):
     return json.dumps(
         {"ok": False, "error": "all strategies failed: " + "; ".join(errors) + hint}
     )
+
+
+# ------------------------------------------------------------ ranked matching
+# Quality-ranked candidate picking (spotDL-adapted recipe):
+#   - name match: difflib ratio on slugified token strings (floor 60)
+#   - artist match: uploader vs artist (+10 for YouTube's official "- Topic"
+#     artist channels), floor 40
+#   - duration: exp decay of |delta seconds| (x100), slower decay for long
+#     items (audiobooks) where YouTube copies are often split/partial
+#   - forbidden-keyword penalties: -15 per word present in the candidate
+#     title but not the track (live, remix, cover, sped up, ...)
+#   - final = 0.4*name + 0.35*artist + 0.25*duration
+
+import difflib as _difflib
+
+_FORBIDDEN_WORDS = [
+    "bassboosted", "remix", "remastered", "remaster", "reverb", "bassboost",
+    "live", "acoustic", "8daudio", "concert", "acapella", "slowed",
+    "instrumental", "cover", "karaoke", "nightcore", "spedup", "speedup",
+    "1hour", "fullalbum", "reaction",
+]
+
+
+def _slug(text):
+    text = re.sub(r"[^\w\s]", "", (text or "").lower())
+    return " ".join(text.split())
+
+
+def _ratio(a, b):
+    if not a or not b:
+        return 0.0
+    return _difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+
+
+def _name_score(track_title, track_artist, cand_title):
+    t = _slug(track_title)
+    c = _slug(cand_title)
+    score = _ratio(" ".join(sorted(t.split())), " ".join(sorted(c.split())))
+    if score <= 75.0:
+        full = _slug((track_artist + " " + track_title))
+        score = max(score, _ratio(" ".join(sorted(full.split())), " ".join(sorted(c.split()))))
+    for word in _FORBIDDEN_WORDS:
+        if word in c.replace(" ", "") and word not in (t + track_artist.lower()).replace(" ", ""):
+            score -= 15.0
+    return score
+
+
+def _artist_score(track_artist, cand_uploader, cand_title):
+    artist = _slug(track_artist).split(" ft ")[0].split(" feat ")[0].strip()
+    main = artist.split(",")[0].strip()
+    uploader = _slug(cand_uploader)
+    if not main or not uploader:
+        return 40.0
+    score = _ratio(main, uploader)
+    if score >= 85.0:
+        pass  # spelling tolerance already covered
+    elif main in uploader or uploader in main:
+        score = max(score, 90.0)
+    # Official artist topic channels ("Artist - Topic") are the auto-generated
+    # home of the real audio on YouTube.
+    if uploader.endswith("topic") and _ratio(main, uploader[:-5].strip()) >= 60.0:
+        score = min(100.0, score + 10.0)
+    if score < 50.0 and main and main.split()[0] in c_slug(_slug(cand_title)):
+        score = max(score, 55.0)
+    return score
+
+
+def c_slug(text):
+    return _slug(text)
+
+
+def _duration_score(track_ms, cand_s):
+    track_s = (track_ms or 0) / 1000.0
+    if not track_s or cand_s is None or cand_s <= 0:
+        return 55.0
+    delta = abs(track_s - float(cand_s))
+    k = 0.1 if track_s < 1800.0 else 0.02
+    return min(100.0, 2.718281828 ** (-k * delta) * 100.0)
+
+
+def rank_candidates(track_json, candidates_json):
+    """Pick the best YouTube candidate for a metadata track.
+
+    track_json: {"title","artist","album","durationMs"}
+    candidates_json: [{"id","url","title","uploader","channel","duration"}]
+    returns {"ok","index","id","url","title","score"} of the winner.
+    """
+    try:
+        track = json.loads(track_json) if isinstance(track_json, str) else dict(track_json or {})
+        candidates = json.loads(candidates_json) if isinstance(candidates_json, str) else list(candidates_json or [])
+        title = track.get("title", "")
+        artist = track.get("artist", "")
+        duration_ms = track.get("durationMs", 0)
+
+        long_form = (duration_ms or 0) > 1800_000
+        best = None
+        for i, cand in enumerate(candidates):
+            cand_title = cand.get("title", "") or ""
+            name = _name_score(title, artist, cand_title)
+            if name < 60.0:
+                continue
+            artist_s = _artist_score(artist, cand.get("uploader") or cand.get("channel") or "", cand_title)
+            # Long-form uploads (audiobooks) live on channels that are not the
+            # author — the artist signal is weak there; the title carries it.
+            if artist_s < 40.0 and not long_form:
+                continue
+            dur = _duration_score(duration_ms, cand.get("duration"))
+            if long_form:
+                final = 0.55 * name + 0.15 * artist_s + 0.30 * dur
+            else:
+                final = 0.4 * name + 0.35 * artist_s + 0.25 * dur
+            if best is None or final > best["score"]:
+                best = {
+                    "ok": True,
+                    "index": i,
+                    "id": cand.get("id") or "",
+                    "url": cand.get("url") or "",
+                    "title": cand_title,
+                    "score": round(final, 1),
+                }
+        if best is None:
+            return json.dumps({"ok": False, "error": "no candidate passed the floor"})
+        return json.dumps(best)
+    except Exception as e:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(e)})

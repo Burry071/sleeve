@@ -13,7 +13,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FileDownload
-import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -42,9 +42,9 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SpotifyTracksPage(
+fun MetadataTracksPage(
     modifier: Modifier = Modifier,
-    state: DownloadDialogViewModel.SelectionState.SpotifyTracks,
+    state: DownloadDialogViewModel.SelectionState.MetadataTracks,
     onDismissRequest: () -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
@@ -80,7 +80,10 @@ fun SpotifyTracksPage(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = state.tracks.size.toString() + " tracks • via YouTube",
+                        text =
+                            state.provider + " → YouTube • " +
+                                state.tracks.size.toString() +
+                                if (state.tracks.size == 1) " track" else " tracks",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -101,7 +104,7 @@ fun SpotifyTracksPage(
 
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Button(
-                    onClick = { onActionPost(Action.DownloadSpotifyTracks(state.tracks)) },
+                    onClick = { onActionPost(Action.DownloadMetadataTracks(state.provider, state.tracks)) },
                     modifier =
                         Modifier.fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp)
@@ -113,7 +116,9 @@ fun SpotifyTracksPage(
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
-                        text = "Download ${state.tracks.size} tracks",
+                        text =
+                            "Download " + state.tracks.size.toString() +
+                                if (state.tracks.size == 1) " track" else " tracks",
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
@@ -132,7 +137,7 @@ private fun TrackRow(index: Int, track: SpotifyTrack) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Outlined.MusicNote,
+            imageVector = Icons.Outlined.LibraryMusic,
             contentDescription = null,
             modifier = Modifier.padding(end = 12.dp).size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -157,7 +162,14 @@ private fun TrackRow(index: Int, track: SpotifyTrack) {
             )
         }
         Text(
-            text = "%d:%02d".format(track.durationMs / 60000, track.durationMs / 1000 % 60),
+            text =
+                if (track.durationMs >= 3600_000L)
+                    "%d:%02d:%02d".format(
+                        track.durationMs / 3600_000L,
+                        track.durationMs / 60_000L % 60,
+                        track.durationMs / 1000L % 60,
+                    )
+                else "%d:%02d".format(track.durationMs / 60000, track.durationMs / 1000 % 60),
             style =
                 MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
             fontFamily = FontFamily.Default,

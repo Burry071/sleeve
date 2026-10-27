@@ -27,7 +27,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Ac
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SelectionState
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
-import com.junkfood.seal.ui.page.downloadv2.configure.SpotifyTracksPage
+import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PreferenceUtil
@@ -163,8 +163,8 @@ class QuickDownloadActivity : ComponentActivity() {
                             )
                         }
 
-                        is SelectionState.SpotifyTracks ->
-                            SpotifyTracksPage(
+                        is SelectionState.MetadataTracks ->
+                            MetadataTracksPage(
                                 state = selectionState,
                                 onDismissRequest = {
                                     viewModel.postAction(Action.Reset)

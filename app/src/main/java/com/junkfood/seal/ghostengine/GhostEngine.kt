@@ -64,12 +64,22 @@ object GhostEngine {
     }
 
     private fun ensureStarted() {
-        if (!Python.isStarted()) {
-            val context =
-                appContext ?: error("GhostEngine.init(context) was not called from Application")
-            Python.start(AndroidPlatform(context))
-            Log.i(TAG, "Embedded engine runtime started")
-        }
+        if (Python.isStarted()) return
+        val context =
+            appContext ?: error("GhostEngine.init(context) was not called from Application")
+        Python.start(AndroidPlatform(context))
+        // Chaquopy rewrites the process PYTHONPATH to its own 3.13 assets. The
+        // yt-dlp subprocess (youtubedl-android's python 3.11, spawned with the
+        // parent env) then fails its path configuration on the version-mixed
+        // paths. The running interpreter built sys.path at start and does not
+        // re-read PYTHONPATH — drop it so both runtimes keep working.
+        runCatching {
+            Python.getInstance()
+                .getModule("os")
+                .get("environ")
+                ?.callAttr("pop", "PYTHONPATH", null)
+        }.onFailure { Log.w(TAG, "PYTHONPATH scrub failed: ${it.message}") }
+        Log.i(TAG, "Embedded engine runtime started")
     }
 
     private fun module() = Python.getInstance().getModule("sleeve_engine")
@@ -170,15 +180,79 @@ object GhostEngine {
         }
 
     /**
-     * Spotify metadata resolution (spotDL pattern): Spotify public Web API for
+     * Metadata track resolved from a public catalog (Spotify/Audible pattern):
      * metadata only — audio always comes from YouTube via yt-dlp.
      */
+    @kotlinx.serialization.Serializable
     data class SpotifyTrack(
         val title: String,
         val artist: String,
         val album: String,
         val durationMs: Long,
     )
+
+    data class RankedCandidate(
+        val index: Int,
+        val id: String,
+        val url: String,
+        val title: String,
+        val score: Double,
+    )
+
+    /**
+     * Quality-ranked candidate picking (spotDL-adapted scoring): name/artist
+     * fuzzy ratios, duration decay, forbidden-keyword penalties, "- Topic"
+     * channel bonus. Candidates come from a flat ytsearch extraction.
+     */
+    fun rankCandidates(track: SpotifyTrack, candidatesJson: String): Result<RankedCandidate> =
+        runCatching {
+            ensureStarted()
+            val trackJson = json.encodeToString(track)
+            val reply =
+                Python.getInstance()
+                    .getModule("sleeve_spotify")
+                    .callAttr("rank_candidates", trackJson, candidatesJson)
+                    .toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "no candidate passed")
+            }
+            RankedCandidate(
+                index = obj["index"]!!.jsonPrimitive.content.toInt(),
+                id = obj["id"]?.jsonPrimitive?.content ?: "",
+                url = obj["url"]?.jsonPrimitive?.content ?: "",
+                title = obj["title"]?.jsonPrimitive?.content ?: "",
+                score = obj["score"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+            )
+        }
+
+    /** Audible catalog metadata (public API, Libation-derived — no account). */
+    fun audibleResolve(url: String, keywords: String = ""): Result<Pair<String, List<SpotifyTrack>>> =
+        runCatching {
+            ensureStarted()
+            val reply =
+                Python.getInstance()
+                    .getModule("sleeve_audible")
+                    .callAttr("resolve", url, keywords)
+                    .toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "audible resolve failed")
+            }
+            val tracks =
+                obj["tracks"]!!.jsonArray.mapNotNull { el ->
+                    runCatching {
+                        val t = el.jsonObject
+                        SpotifyTrack(
+                            title = t["title"]!!.jsonPrimitive.content,
+                            artist = t["artist"]?.jsonPrimitive?.content ?: "",
+                            album = t["album"]?.jsonPrimitive?.content ?: "",
+                            durationMs = t["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
+                        )
+                    }.getOrNull()
+                }
+            obj["title"]?.jsonPrimitive?.content.orEmpty() to tracks
+        }
 
     fun spotifyResolve(
         url: String,

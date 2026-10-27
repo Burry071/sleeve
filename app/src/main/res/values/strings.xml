@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name" translatable="false">Sleeve</string>
+    <string name="tracks_queued" translatable="false">Queued %d tracks from your list</string>
     <string name="video_directory">Video folder</string>
     <string name="extract_audio">Save as audio</string>
     <string name="create_thumbnail">Save thumbnail</string>

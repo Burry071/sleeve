@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.App
+import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
@@ -12,6 +14,7 @@ import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
 import com.junkfood.seal.util.PreferenceUtil.getString
+import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
@@ -21,10 +24,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import android.util.Log
 
 private const val TAG = "DownloadDialogViewModel"
 
 class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel() {
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     sealed interface SelectionState {
         data object Idle : SelectionState
@@ -33,7 +41,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class FormatSelection(val info: VideoInfo) : SelectionState
 
-        data class SpotifyTracks(
+        data class MetadataTracks(
+            val provider: String,
             val playlistTitle: String,
             val tracks: List<SpotifyTrack>,
         ) : SelectionState
@@ -62,7 +71,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class FetchSpotify(val url: String) : Action
 
-        data class DownloadSpotifyTracks(val tracks: List<SpotifyTrack>) : Action
+        data class FetchAudible(val url: String) : Action
+
+        data class DownloadMetadataTracks(val provider: String, val tracks: List<SpotifyTrack>) :
+            Action
 
         data class ProceedWithURLs(val urlList: List<String>) : Action
 
@@ -117,7 +129,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                 Action.HideSheet -> hideDialog()
                 is Action.ShowSheet -> showDialog(this)
                 is Action.FetchSpotify -> fetchSpotify(this)
-                is Action.DownloadSpotifyTracks -> downloadSpotifyTracks(this)
+                is Action.FetchAudible -> fetchAudible(this)
+                is Action.DownloadMetadataTracks -> downloadMetadataTracks(this)
                 Action.Cancel -> cancel()
                 Action.Reset -> resetSelectionState()
             }
@@ -125,9 +138,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun proceedWithUrls(action: Action.ProceedWithURLs) {
-        val spotifyUrl = action.urlList.firstOrNull { isSpotifyUrl(it) }
-        if (spotifyUrl != null) {
+        action.urlList.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
             fetchSpotify(Action.FetchSpotify(spotifyUrl))
+            return
+        }
+        action.urlList.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
+            fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
         mSheetStateFlow.update { SheetState.Configure(action.urlList) }
@@ -230,10 +246,14 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun showDialog(action: Action.ShowSheet) {
         val urlList = action.urlList
-        val spotifyUrl = urlList?.firstOrNull { isSpotifyUrl(it) }
-        if (spotifyUrl != null) {
+        urlList?.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
             mSheetValueFlow.update { SheetValue.Expanded }
             fetchSpotify(Action.FetchSpotify(spotifyUrl))
+            return
+        }
+        urlList?.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
+            mSheetValueFlow.update { SheetValue.Expanded }
+            fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
         if (!urlList.isNullOrEmpty()) {
@@ -247,6 +267,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     private fun isSpotifyUrl(url: String) =
         url.contains("spotify.com/") || url.startsWith("spotify:")
 
+    private fun isAudibleUrl(url: String) = Regex("audible\\.[a-z.]+/").containsMatchIn(url)
+
     private fun fetchSpotify(action: Action.FetchSpotify) {
         val job =
             viewModelScope.launch(Dispatchers.IO) {
@@ -258,7 +280,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     .onSuccess { (playlistTitle, tracks) ->
                         withContext(Dispatchers.Main) {
                             mSelectionStateFlow.update {
-                                SelectionState.SpotifyTracks(
+                                SelectionState.MetadataTracks(
+                                    provider = "Spotify",
                                     playlistTitle = playlistTitle,
                                     tracks = tracks,
                                 )
@@ -277,23 +300,82 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         }
     }
 
-    private fun downloadSpotifyTracks(action: Action.DownloadSpotifyTracks) {
-        // spotDL pattern: each track becomes a YouTube search resolved and
-        // downloaded by the normal pipeline, audio-only.
+    private fun downloadMetadataTracks(action: Action.DownloadMetadataTracks) {
+        // spotDL pattern with quality-ranked matching: for each metadata track,
+        // pull the top YouTube candidates (flat search), let the engine score
+        // them (name/artist/duration/forbidden-keywords), and enqueue the best
+        // through the normal pipeline, audio-only. One prep lane at a time —
+        // the downloads themselves go through the pipeline's 3-slot scheduler.
         val preferences =
             DownloadUtil.DownloadPreferences.createFromPreferences().copy(extractAudio = true)
-        action.tracks
-            .map { track ->
-                val query =
-                    listOf(track.artist, track.title, "audio")
-                        .filter { it.isNotBlank() }
-                        .joinToString(separator = " ")
-                        .let { Regex("\\s+").replace(it, " ").trim() }
-                "ytsearch1:$query"
+        viewModelScope.launch(Dispatchers.IO) {
+            var queued = 0
+            for (track in action.tracks) {
+                runCatching {
+                    val query =
+                        listOf(track.artist, track.title, "audio")
+                            .filter { it.isNotBlank() }
+                            .joinToString(separator = " ")
+                            .let { Regex("\\s+").replace(it, " ").trim() }
+                    val candidates =
+                        DownloadUtil.getPlaylistOrVideoInfo(
+                                playlistURL = "ytsearch5:$query",
+                                downloadPreferences = preferences,
+                            )
+                            .getOrThrow()
+                            .run {
+                                (this as? PlaylistResult)?.entries
+                                    ?: throw IllegalStateException("no candidates")
+                            }
+                    val best =
+                        GhostEngine.rankCandidates(
+                                track = track,
+                                candidatesJson = json.encodeToString(candidates),
+                            )
+                            .getOrThrow()
+                    val url =
+                        best.url.ifBlank {
+                            "https://www.youtube.com/watch?v=" + best.id
+                        }
+                    downloader.enqueue(Task(url = url, preferences = preferences))
+                    queued++
+                }.onFailure { Log.w(TAG, "track skipped: ${track.title}: ${it.message}") }
             }
-            .forEach { url -> downloader.enqueue(Task(url = url, preferences = preferences)) }
+            withContext(Dispatchers.Main) {
+                resetSelectionState()
+                ToastUtil.makeToast(
+                    App.context.getString(R.string.tracks_queued, queued),
+                )
+            }
+        }
         hideDialog()
-        resetSelectionState()
+    }
+
+    private fun fetchAudible(action: Action.FetchAudible) {
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                GhostEngine.audibleResolve(url = action.url)
+                    .onSuccess { (bookTitle, tracks) ->
+                        withContext(Dispatchers.Main) {
+                            mSelectionStateFlow.update {
+                                SelectionState.MetadataTracks(
+                                    provider = "Audible",
+                                    playlistTitle = bookTitle,
+                                    tracks = tracks,
+                                )
+                            }
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th ->
+                        withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                        }
+                    }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "FetchAudible_${action.url}", job = job)
+        }
     }
 
     private fun cancel(): Boolean {
