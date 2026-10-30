@@ -125,10 +125,12 @@ data class FixedColorRoles(
                     secondaryFixedDim = accent2(80.toDouble()),
                     onSecondaryFixed = accent2(10.toDouble()),
                     onSecondaryFixedVariant = accent2(30.toDouble()),
-                    tertiaryFixed = accent3(90.toDouble()),
-                    tertiaryFixedDim = accent3(80.toDouble()),
-                    onTertiaryFixed = accent3(10.toDouble()),
-                    onTertiaryFixedVariant = accent3(30.toDouble()),
+                    // One-accent system: keep the tertiary family on the seed hue
+                    // (accent3 is hue-rotated ~60 deg and reads as a foreign blue).
+                    tertiaryFixed = accent1(95.toDouble()),
+                    tertiaryFixedDim = accent1(90.toDouble()),
+                    onTertiaryFixed = accent1(10.toDouble()),
+                    onTertiaryFixedVariant = accent1(30.toDouble()),
                 )
             }
         }

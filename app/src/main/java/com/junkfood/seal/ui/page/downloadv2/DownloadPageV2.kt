@@ -483,6 +483,14 @@ fun DownloadPageImplV2(
                                         (state.downloadState as? Running)
                                             ?.progress
                                             ?.takeIf { it >= 0f },
+                                    footerContent =
+                                        if (state.downloadState is Error) {
+                                            {
+                                                ErrorFooter(
+                                                    onRetry = { onActionPost(task, UiAction.Resume) }
+                                                )
+                                            }
+                                        } else null,
                                     actionButton = {
                                         ActionButton(
                                             modifier = Modifier,

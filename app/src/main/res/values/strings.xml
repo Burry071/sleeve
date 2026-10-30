@@ -169,6 +169,7 @@
     <string name="status_fetching_video_info">Fetching info</string>
     <string name="open_file">Open file</string>
     <string name="restart">Restart</string>
+    <string name="retry">Retry</string>
     <string name="status_error">Error</string>
     <string name="copy_link">Copy link</string>
     <string name="copy_error_report">Copy report</string>

@@ -63,17 +63,28 @@ fun SealTheme(
 
     val colorScheme =
         dynamicColorScheme(!darkTheme).run {
-            if (isHighContrastModeEnabled && darkTheme)
-                copy(
-                    surface = Color.Black,
-                    background = Color.Black,
-                    surfaceContainerLowest = Color.Black,
-                    surfaceContainerLow = surfaceContainerLowest,
-                    surfaceContainer = surfaceContainerLow,
-                    surfaceContainerHigh = surfaceContainerLow,
-                    surfaceContainerHighest = surfaceContainer,
-                )
-            else this
+            // One-accent system: the tonal math rotates the tertiary family ~60 deg away
+            // from the seed (teal -> blue). Fold it back into the secondary family, which
+            // shares the seed hue, so every accent in the app sits on the brand hue.
+            copy(
+                tertiary = secondary,
+                onTertiary = onSecondary,
+                tertiaryContainer = secondaryContainer,
+                onTertiaryContainer = onSecondaryContainer,
+            )
+                .run {
+                    if (isHighContrastModeEnabled && darkTheme)
+                        copy(
+                            surface = Color.Black,
+                            background = Color.Black,
+                            surfaceContainerLowest = Color.Black,
+                            surfaceContainerLow = surfaceContainerLowest,
+                            surfaceContainer = surfaceContainerLow,
+                            surfaceContainerHigh = surfaceContainerLow,
+                            surfaceContainerHighest = surfaceContainer,
+                        )
+                    else this
+                }
         }
 
     val textStyle =

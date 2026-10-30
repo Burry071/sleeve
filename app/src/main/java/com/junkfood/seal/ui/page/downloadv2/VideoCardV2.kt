@@ -33,12 +33,14 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -109,6 +111,7 @@ fun VideoCardV2(
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
+    footerContent: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
     with(viewState) {
@@ -122,6 +125,7 @@ fun VideoCardV2(
             stateIndicator = stateIndicator,
             actionButton = actionButton,
             progress = progress,
+            footerContent = footerContent,
             onButtonClick = onButtonClick,
         )
     }
@@ -256,12 +260,14 @@ fun VideoCardV2(
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
+    footerContent: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
     val containerColor =
         MaterialTheme.colorScheme.run {
             if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
         }
+    val denseBottom = (progress != null && progress >= 0f) || footerContent != null
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -286,7 +292,7 @@ fun VideoCardV2(
                     title = title,
                     uploader = uploader,
                     contentPadding =
-                        if (progress != null && progress >= 0f)
+                        if (denseBottom)
                             PaddingValues(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 8.dp)
                         else PaddingValues(16.dp),
                 )
@@ -309,7 +315,7 @@ fun VideoCardV2(
                         label = "cardProgress",
                     )
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     LinearWavyProgressIndicator(
@@ -326,6 +332,13 @@ fun VideoCardV2(
                             ),
                         color = MaterialTheme.colorScheme.primary,
                     )
+                }
+            }
+            if (footerContent != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                ) {
+                    footerContent()
                 }
             }
         }
@@ -624,6 +637,28 @@ fun ListItemStateText(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** Inline retry action rendered on failed task cards. */
+@Composable
+fun ErrorFooter(modifier: Modifier = Modifier, onRetry: () -> Unit) {
+    FilledTonalButton(
+        onClick = onRetry,
+        modifier = modifier,
+        colors =
+            ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.RestartAlt,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(text = stringResource(R.string.retry))
     }
 }
 
