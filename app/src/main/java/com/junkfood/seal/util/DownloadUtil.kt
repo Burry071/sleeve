@@ -254,6 +254,7 @@ object DownloadUtil {
         val forceIpv4: Boolean,
         val mergeAudioStream: Boolean,
         val mergeToMkv: Boolean,
+        val galleryDirect: Boolean = false,
     ) {
         companion object {
             val EMPTY =
@@ -309,6 +310,7 @@ object DownloadUtil {
                     mergeAudioStream = false,
                     mergeToMkv = false,
                     useCustomAudioPreset = false,
+                    galleryDirect = false,
                 )
 
             fun createFromPreferences(): DownloadPreferences {
@@ -368,6 +370,7 @@ object DownloadUtil {
                     mergeAudioStream = false,
                     mergeToMkv =
                         (downloadSubtitle && embedSubtitle) || MERGE_OUTPUT_MKV.getBoolean(),
+                    galleryDirect = false,
                 )
             }
         }
@@ -917,9 +920,12 @@ object DownloadUtil {
         taskId: String,
         progressCallback: ((Float, Long, String) -> Unit)?,
     ): Result<List<String>>? {
-        if (!GHOST_ENGINE.getBoolean()) {
+        if (!GHOST_ENGINE.getBoolean() && !preferences.galleryDirect) {
             Log.d(TAG, "Ghost handoff skipped: engine disabled")
             return null
+        }
+        if (preferences.galleryDirect) {
+            Log.d(TAG, "Ghost handoff: gallery direct item")
         }
         Log.d(TAG, "Ghost handoff check: taskId=$taskId formatIdString=${preferences.formatIdString}")
 
@@ -1384,6 +1390,41 @@ object DownloadUtil {
                     }
             }
         }
+
+    /**
+     * Minimal VideoInfo for a raw media URL (gallery-dl item, sniffed page
+     * asset): one synthetic "direct" format so the Ghost handoff transfers the
+     * bytes without yt-dlp extraction.
+     */
+    fun buildDirectVideoInfo(url: String, title: String): VideoInfo? {
+        if (!isSafeRemoteUrl(url)) return null
+        val cleanUrl = url.substringBefore('#')
+        val path = cleanUrl.substringBefore('?').substringAfterLast('/')
+        val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }
+        val baseName =
+            title.ifBlank { path }
+                .replace(Regex("[\\/:*?\"<>|]"), "_")
+                .take(120)
+        val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
+        return VideoInfo(
+            id = Integer.toHexString(url.hashCode()),
+            title = baseName,
+            webpageUrl = url,
+            originalUrl = url,
+            extractor = "sleeve-direct",
+            extractorKey = "SleeveDirect",
+            ext = ext ?: "bin",
+            filename = fullName,
+            formats =
+                listOf(
+                    Format(
+                        formatId = "direct",
+                        ext = ext,
+                        url = url,
+                    )
+                ),
+        )
+    }
 
     @CheckResult
     fun executeCustomCommandTask(

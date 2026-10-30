@@ -170,6 +170,7 @@
     <string name="open_file">Open file</string>
     <string name="restart">Restart</string>
     <string name="retry">Retry</string>
+    <string name="gallery_items_queued">%1$d items queued (%2$s)</string>
     <string name="status_error">Error</string>
     <string name="copy_link">Copy link</string>
     <string name="copy_error_report">Copy report</string>

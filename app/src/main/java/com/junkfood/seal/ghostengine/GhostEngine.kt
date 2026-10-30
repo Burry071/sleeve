@@ -199,6 +199,89 @@ object GhostEngine {
         val score: Double,
     )
 
+    data class GalleryItem(
+        val url: String,
+        val filename: String,
+        val referer: String,
+        val category: String,
+    )
+
+    /** True when a gallery-dl site module claims this URL. Loads lazily; call on IO. */
+    fun galleryMatches(url: String): Boolean =
+        runCatching {
+            ensureStarted()
+            module().callAttr("gallery_matches", url).toString() == "True"
+        }.getOrDefault(false)
+
+    /**
+     * Preload the gallery-dl extractor registry once per install (cold import
+     * of ~300 site modules) and surface any import error to the log.
+     */
+    fun preloadGallery() {
+        runCatching {
+            ensureStarted()
+            val reply = module().callAttr("gallery_warmup").toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content == "true") {
+                Log.i(
+                    "GhostEngine",
+                    "gallery-dl registry warm in ${obj["seconds"]?.jsonPrimitive?.content}s",
+                )
+            } else {
+                Log.w(
+                    "GhostEngine",
+                    "gallery-dl warmup failed: ${obj["error"]?.jsonPrimitive?.content}",
+                )
+            }
+        }.onFailure { Log.w("GhostEngine", "gallery-dl warmup unavailable: ${it.message}") }
+    }
+
+    /** Resolve a page into direct media items (image sites, albums, sniffed pages). */
+    fun galleryResolve(url: String): Result<Pair<String, List<GalleryItem>>> =
+        runCatching {
+            ensureStarted()
+            val reply = module().callAttr("gallery_resolve", url).toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "gallery resolve failed")
+            }
+            val items =
+                obj["items"]!!.jsonArray.mapNotNull { el ->
+                    runCatching {
+                        val t = el.jsonObject
+                        GalleryItem(
+                            url = t["url"]!!.jsonPrimitive.content,
+                            filename = t["filename"]?.jsonPrimitive?.content ?: "",
+                            referer = t["referer"]?.jsonPrimitive?.content ?: "",
+                            category = t["category"]?.jsonPrimitive?.content ?: "",
+                        )
+                    }.getOrNull()
+                }
+            obj["category"]?.jsonPrimitive?.content.orEmpty() to items
+        }
+
+    /** Last-resort HTML pass: og:video / twitter:player:stream / video src / m3u8+mpd. */
+    fun sniffMedia(url: String): Result<List<GalleryItem>> =
+        runCatching {
+            ensureStarted()
+            val reply = module().callAttr("sniff_media", url).toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "sniff failed")
+            }
+            obj["items"]!!.jsonArray.mapNotNull { el ->
+                runCatching {
+                    val t = el.jsonObject
+                    GalleryItem(
+                        url = t["url"]!!.jsonPrimitive.content,
+                        filename = t["filename"]?.jsonPrimitive?.content ?: "",
+                        referer = t["referer"]?.jsonPrimitive?.content ?: "",
+                        category = "sniff",
+                    )
+                }.getOrNull()
+            }
+        }
+
     /**
      * Quality-ranked candidate picking (spotDL-adapted scoring): name/artist
      * fuzzy ratios, duration decay, forbidden-keyword penalties, "- Topic"

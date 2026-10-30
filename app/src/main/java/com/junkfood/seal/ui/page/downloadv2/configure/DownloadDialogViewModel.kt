@@ -86,6 +86,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class FetchAudible(val url: String) : Action
 
+        data class FetchGallery(val url: String) : Action
+
         data class DownloadMetadataTracks(val provider: String, val tracks: List<SpotifyTrack>) :
             Action
 
@@ -143,6 +145,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                 is Action.ShowSheet -> showDialog(this)
                 is Action.FetchSpotify -> fetchSpotify(this)
                 is Action.FetchAudible -> fetchAudible(this)
+                is Action.FetchGallery -> fetchGallery(this)
                 is Action.DownloadMetadataTracks -> downloadMetadataTracks(this)
                 Action.Cancel -> cancel()
                 Action.Reset -> resetSelectionState()
@@ -269,12 +272,112 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
+        urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
+            // gallery-dl check runs on IO (first call loads ~300 site modules);
+            // a hit routes to the gallery flow, a miss falls through to Configure.
+            mSheetValueFlow.update { SheetValue.Expanded }
+            val job =
+                viewModelScope.launch(Dispatchers.IO) {
+                    val matched =
+                        runCatching { GhostEngine.galleryMatches(candidate) }
+                            .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
+                            .getOrDefault(false)
+                    Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
+                    withContext(Dispatchers.Main) {
+                        if (matched) {
+                            fetchGallery(Action.FetchGallery(candidate))
+                        } else {
+                            mSheetStateFlow.update { SheetState.Configure(urlList) }
+                        }
+                    }
+                }
+            mSheetStateFlow.update {
+                SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
+            }
+            return
+        }
         if (!urlList.isNullOrEmpty()) {
             mSheetStateFlow.update { SheetState.Configure(urlList) }
         } else {
             mSheetStateFlow.update { SheetState.InputUrl }
         }
         mSheetValueFlow.update { SheetValue.Expanded }
+    }
+
+private val VIDEO_FIRST_HOSTS: Regex =
+    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|instagram\\.com|reddit\\.com|redd\\.it")
+
+    /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
+    private fun isVideoFirstHost(url: String) =
+        VIDEO_FIRST_HOSTS
+            .containsMatchIn(url)
+
+    private fun fetchGallery(action: Action.FetchGallery) {
+        if (resolveThrottled("gallery")) return
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                val resolved =
+                    GhostEngine.galleryResolve(action.url).mapCatching { (site, items) ->
+                        if (items.isNotEmpty()) {
+                            "gallery:$site" to items
+                        } else {
+                            // No site module claimed a match, or it yielded nothing:
+                            // sniff the page itself for direct media candidates.
+                            "sniff" to GhostEngine.sniffMedia(action.url).getOrDefault(emptyList())
+                        }
+                    }
+                resolved
+                    .onSuccess { (source, items) ->
+                        Log.i(TAG, "gallery resolved source=$source items=${items.size}")
+                        withContext(Dispatchers.Main) {
+                            if (items.isEmpty()) {
+                                mSheetStateFlow.update {
+                                    SheetState.Error(
+                                        action,
+                                        IllegalStateException("no media found on this page"),
+                                    )
+                                }
+                            } else {
+                                items.forEach { item ->
+                                    // Direct lane: name the file and mark the task
+                                    // so a failed extraction feeds the engine handoff.
+                                    val baseName =
+                                        item.filename
+                                            .ifBlank {
+                                                item.url.substringBefore('?')
+                                                    .substringAfterLast('/')
+                                                    .substringBeforeLast('.')
+                                            }
+                                            .substringBeforeLast('.')
+                                    val preferences =
+                                        DownloadUtil.DownloadPreferences.createFromPreferences()
+                                            .copy(
+                                                galleryDirect = true,
+                                                newTitle = baseName,
+                                                formatIdString = "direct",
+                                            )
+                                    downloader.enqueue(
+                                        Task(url = item.url, preferences = preferences)
+                                    )
+                                }
+                                resetSelectionState()
+                                ToastUtil.makeToast(
+                                    App.context.getString(R.string.gallery_items_queued, items.size, source),
+                                )
+                                hideDialog()
+                            }
+                        }
+                    }
+                    .onFailure { th ->
+                        Log.e(TAG, "gallery resolve failed: ${th.message}")
+                        withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                        }
+                    }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "Gallery_${action.url}", job = job)
+        }
     }
 
     private fun isSpotifyUrl(url: String) =

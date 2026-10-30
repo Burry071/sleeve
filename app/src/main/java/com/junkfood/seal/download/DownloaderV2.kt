@@ -266,6 +266,22 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
+                        if (preferences.galleryDirect) {
+                            // gallery-dl/sniffed item: skip extraction, feed the
+                            // raw media URL to the engine handoff pipeline.
+                            val synth =
+                                DownloadUtil.buildDirectVideoInfo(
+                                    url = url,
+                                    title = viewState.title,
+                                )
+                            if (synth != null) {
+                                info = synth
+                                viewState = Task.ViewState.fromVideoInfo(synth)
+                                downloadState = ReadyWithInfo
+                                task.download()
+                                return@onFailure
+                            }
+                        }
                         task.downloadState = Error(throwable = throwable, action = FetchInfo)
                         NotificationUtil.notifyError(
                             title = viewState.title,

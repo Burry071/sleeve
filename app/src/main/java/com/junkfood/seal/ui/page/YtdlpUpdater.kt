@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.junkfood.seal.Downloader
+import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getLong
@@ -45,5 +46,15 @@ fun YtdlpUpdater() {
             }
             .onFailure { it.printStackTrace() }
         Downloader.updateState(state = Downloader.State.Idle)
+    }
+
+    // Warm the gallery-dl extractor registry off the critical path: the first
+    // import compiles ~300 site modules, so doing it here keeps the first
+    // shared gallery link instant.
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(3_000)
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            GhostEngine.preloadGallery()
+        }
     }
 }

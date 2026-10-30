@@ -287,6 +287,7 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
                 is Action.FetchFormats -> url
                 is Action.FetchPlaylist -> url
                 is Action.FetchSpotify -> url
+                is Action.FetchGallery -> url
                 else -> {
                     throw IllegalArgumentException()
                 }

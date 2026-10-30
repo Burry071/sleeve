@@ -341,3 +341,191 @@ def self_test(output_dir, url="https://proof.ovh.net/files/10Mb.dat"):
         "state": snap["state"],
         "error": snap["error"],
     })
+
+
+# ---------------------------------------------------------------------------
+# gallery-dl bridge: image/media sites yt-dlp cannot serve (Pixiv, danbooru
+# family, imagehosts, ...). The package is embedded under app/src/main/python;
+# every one of its non-stdlib dependencies is lazily imported and guarded, so
+# requests (already present) is the only hard requirement.
+# ---------------------------------------------------------------------------
+
+_GALLERY_MAX_ITEMS = 30
+_GALLERY_UA = (
+    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko)"
+    " Chrome/126.0 Mobile Safari/537.36"
+)
+
+
+def gallery_matches(url):
+    try:
+        from gallery_dl import extractor
+
+        return extractor.find(url) is not None
+    except Exception:
+        return False
+
+
+def _gallery_scan(ext, out, pages, depth):
+    from gallery_dl.extractor.message import Message
+
+    category = getattr(ext, "category", "")
+    for msg in ext:
+        if not (isinstance(msg, tuple) and len(msg) >= 2):
+            continue
+        kind, item_url, kwdict = msg[0], msg[1], msg[2] if len(msg) > 2 else {}
+        if kind == Message.Directory:
+            continue
+        if not isinstance(item_url, str) or not item_url.startswith(("http://", "https://")):
+            continue
+        if kind == Message.Queue and depth < 1 and len(pages) < 5:
+            # Child page (album/post listing): recurse one level.
+            pages.append(item_url)
+            continue
+        if kind != Message.Url:
+            continue
+        filename = ""
+        referer = ""
+        if isinstance(kwdict, dict):
+            base = kwdict.get("title") or kwdict.get("name") or kwdict.get("id") or ""
+            extn = kwdict.get("extension") or ""
+            if extn and not str(base).endswith("." + str(extn)):
+                filename = "%s.%s" % (base, extn) if base else ""
+            elif base:
+                filename = str(base)
+            headers = kwdict.get("_http_headers")
+            if isinstance(headers, dict):
+                ref = headers.get("Referer") or headers.get("referer")
+                if isinstance(ref, bytes):
+                    ref = ref.decode("latin-1", "ignore")
+                referer = str(ref or "")
+        out.append(
+            {
+                "url": item_url,
+                "filename": filename[-120:],
+                "referer": referer,
+                "category": category,
+            }
+        )
+        if len(out) >= _GALLERY_MAX_ITEMS:
+            return
+
+
+def gallery_resolve(url, max_items=None):
+    limit = max_items or _GALLERY_MAX_ITEMS
+    try:
+        from gallery_dl import extractor
+    except Exception as e:
+        return json.dumps({"ok": False, "error": "gallery-dl import failed: %s" % e})
+    try:
+        ext = extractor.find(url)
+        if ext is None:
+            return json.dumps({"ok": False, "error": "no site module matched"})
+        out, pages = [], []
+        _gallery_scan(ext, out, pages, 0)
+        for page in pages:
+            if len(out) >= limit:
+                break
+            try:
+                sub = extractor.find(page)
+                if sub is not None:
+                    _gallery_scan(sub, out, pages, 1)
+            except Exception:
+                pass
+        del out[limit:]
+        return json.dumps(
+            {
+                "ok": True,
+                "category": getattr(ext, "category", ""),
+                "items": out,
+            }
+        )
+    except Exception as e:
+        return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
+
+
+# ---------------------------------------------------------------------------
+# Generic page sniffer: last-resort pass for pages no extractor claims.
+# Pulls the HTML once and reports direct media candidates found in meta tags
+# and inline sources (og:video, twitter:player:stream, video/src, m3u8/mpd).
+# ---------------------------------------------------------------------------
+
+_SNIFF_RES = (
+    ("property", r'<meta[^>]+property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)', 0),
+    ("property", r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:video(?::secure_url)?["\']', 0),
+    ("name", r'<meta[^>]+name=["\']twitter:player:stream["\'][^>]+content=["\']([^"\']+)', 0),
+    ("source", r"<(?:video|audio|source)[^>]+src=[\"']([^\"']+)[\"']", 0),
+    ("link", r'(https?://[^\s"\'<>]+?\.(?:m3u8|mpd)(?:\?[^\s"\'<>]*)?)', 0),
+)
+
+
+def sniff_media(url):
+    try:
+        import re
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": _GALLERY_UA,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            final_url = resp.geturl()
+            charset = resp.headers.get_content_charset() or "utf-8"
+            body = resp.read(1 << 20).decode(charset, "ignore")
+    except Exception as e:
+        return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
+
+    base = final_url.rsplit("/", 1)[0] + "/"
+    out = []
+
+    def _absolute(u):
+        u = u.replace("&amp;", "&").strip()
+        if u.startswith("//"):
+            return "https:" + u
+        if u.startswith("/"):
+            m = re.match(r"^(https?://[^/]+)", final_url)
+            return m.group(1) + u if m else u
+        if not u.startswith(("http://", "https://")):
+            return base + u
+        return u
+
+    seen = set()
+    for _tag, pattern, _flags in _SNIFF_RES:
+        for match in re.findall(pattern, body, re.I):
+            item = _absolute(match)
+            if item in seen or len(item) > 2000:
+                continue
+            seen.add(item)
+            name = urllib.parse.unquote(item.rsplit("?", 1)[0].rsplit("/", 1)[-1])[:120]
+            out.append({"url": item, "filename": name, "referer": final_url})
+            if len(out) >= _GALLERY_MAX_ITEMS:
+                break
+        if len(out) >= _GALLERY_MAX_ITEMS:
+            break
+
+    return json.dumps({"ok": True, "items": out, "page": final_url})
+
+
+def gallery_warmup():
+    """Import + pattern-scan the whole gallery-dl registry once.
+
+    The first find() compiles ~300 extractor modules (slow on device); doing
+    it at app start means the first shared gallery URL feels instant. Also
+    surfaces any import error instead of swallowing it.
+    """
+    import sys as _sys
+    try:
+        from gallery_dl import extractor
+    except Exception as e:
+        print("gallery warmup import failed: %r" % (e,), file=_sys.stderr)
+        return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
+    started = time.monotonic()
+    try:
+        extractor.find("https://warmup.invalid/warmup")
+        return json.dumps({"ok": True, "seconds": round(time.monotonic() - started, 2)})
+    except Exception as e:
+        print("gallery warmup find failed: %r" % (e,), file=_sys.stderr)
+        return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})

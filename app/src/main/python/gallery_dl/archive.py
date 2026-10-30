@@ -1,0 +1,272 @@
+# -*- coding: utf-8 -*-
+
+# Copyright 2024-2026 Mike Fährmann
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+
+"""Download Archives"""
+
+import os
+import logging
+from . import util, formatter
+
+CACHE_CONNECTIONS = {}
+log = logging.getLogger("archive")
+
+
+def connect(path, prefix, format, table=None, mode=None, reuse=False,
+            pragma=None, pathfmt=None, cache_key=None):
+    keygen = formatter.parse(prefix + format).format_map
+
+    if path.__class__ is str and path.startswith(
+            ("postgres://", "postgresql://")):
+        cls = (DownloadArchivePostgresqlMemory if mode == "memory" else
+               DownloadArchivePostgresql)
+    else:
+        if path.__class__ is list:
+            path = pathfmt.generate_path(path)
+        else:
+            path = util.expand_path(path)
+        cls = DownloadArchiveMemory if mode == "memory" else DownloadArchive
+
+    if pathfmt is not None and table:
+        table = formatter.parse(table).format_map(pathfmt.kwdict)
+
+    return cls(path, keygen, table, pragma, cache_key, reuse)
+
+
+def close_cached():
+    log.debug("Closing database connections")
+    for path, con in CACHE_CONNECTIONS.items():
+        log.debug("- %s", path)
+        con.close()
+
+
+def sanitize(name):
+    return f'''"{name.replace('"', '_')}"'''
+
+
+class DownloadArchive():
+    _sqlite3 = None
+
+    def __init__(self, path, keygen, table=None, pragma=None, cache_key=None,
+                 reuse=False):
+        self.connection = con = self.connect(path, reuse, pragma)
+        self.keygen = keygen
+        self.close = util.noop if reuse else con.close
+        self.cursor = cursor = con.cursor()
+        self._cache_key = cache_key or "_archive_key"
+
+        table = "archive" if table is None else sanitize(table)
+        self._stmt_select = (
+            f"SELECT 1 "
+            f"FROM {table} "
+            f"WHERE entry=? "
+            f"LIMIT 1")
+        self._stmt_insert = (
+            f"INSERT OR IGNORE INTO {table} "
+            f"(entry) VALUES (?)")
+
+        try:
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS {table} "
+                           f"(entry TEXT PRIMARY KEY) WITHOUT ROWID")
+        except self._sqlite3.OperationalError:
+            # fallback for missing WITHOUT ROWID support (#553)
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS {table} "
+                           f"(entry TEXT PRIMARY KEY)")
+
+    def connect(self, path, reuse=False, pragma=None):
+        if reuse and (con := CACHE_CONNECTIONS.get(path)):
+            return con
+
+        if self._sqlite3 is None:
+            DownloadArchive._sqlite3 = __import__("sqlite3")
+
+        try:
+            con = self._sqlite3.connect(
+                path, timeout=60, check_same_thread=False)
+        except self._sqlite3.OperationalError:
+            os.makedirs(os.path.dirname(path))
+            con = self._sqlite3.connect(
+                path, timeout=60, check_same_thread=False)
+        con.isolation_level = None
+
+        if pragma:
+            cursor = con.cursor()
+            for stmt in pragma:
+                cursor.execute("PRAGMA " + stmt)
+        if reuse:
+            if not CACHE_CONNECTIONS:
+                import atexit
+                atexit.register(close_cached)
+            CACHE_CONNECTIONS[path] = con
+
+        return con
+
+    def add(self, kwdict):
+        """Add item described by 'kwdict' to archive"""
+        key = kwdict.get(self._cache_key) or self.keygen(kwdict)
+        self.cursor.execute(self._stmt_insert, (key,))
+
+    def check(self, kwdict):
+        """Return True if the item described by 'kwdict' exists in archive"""
+        key = kwdict[self._cache_key] = self.keygen(kwdict)
+        self.cursor.execute(self._stmt_select, (key,))
+        return self.cursor.fetchone()
+
+    def finalize(self):
+        pass
+
+
+class DownloadArchiveMemory(DownloadArchive):
+
+    def __init__(self, path, keygen, table=None, pragma=None, cache_key=None,
+                 reuse=False):
+        DownloadArchive.__init__(
+            self, path, keygen, table, pragma, cache_key, reuse)
+        self.keys = set()
+
+    def add(self, kwdict):
+        self.keys.add(
+            kwdict.get(self._cache_key) or
+            self.keygen(kwdict))
+
+    def check(self, kwdict):
+        key = kwdict[self._cache_key] = self.keygen(kwdict)
+        if key in self.keys:
+            return True
+        self.cursor.execute(self._stmt_select, (key,))
+        return self.cursor.fetchone()
+
+    def finalize(self):
+        if not self.keys:
+            return
+
+        cursor = self.cursor
+        with self.connection:
+            try:
+                cursor.execute("BEGIN")
+            except self._sqlite3.OperationalError:
+                pass
+
+            stmt = self._stmt_insert
+            if len(self.keys) < 100:
+                for key in self.keys:
+                    cursor.execute(stmt, (key,))
+            else:
+                cursor.executemany(stmt, ((key,) for key in self.keys))
+
+
+class DownloadArchivePostgresql():
+    _psycopg = None
+
+    def __init__(self, uri, keygen, table=None, pragma=None, cache_key=None,
+                 reuse=False):
+        self.connection = con = self.connect(uri, reuse)
+        self.cursor = cursor = con.cursor()
+        self.close = util.noop if reuse else con.close
+        self.keygen = keygen
+        self._cache_key = cache_key or "_archive_key"
+
+        table = "archive" if table is None else sanitize(table)
+        self._stmt_select = (
+            f"SELECT true "
+            f"FROM {table} "
+            f"WHERE entry=%s "
+            f"LIMIT 1")
+        self._stmt_insert = (
+            f"INSERT INTO {table} (entry) "
+            f"VALUES (%s) "
+            f"ON CONFLICT DO NOTHING")
+
+        try:
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS {table} "
+                           f"(entry TEXT PRIMARY KEY)")
+            con.commit()
+        except Exception as exc:
+            log.error("%s: %s when creating '%s' table: %s",
+                      con, exc.__class__.__name__, table, exc)
+            con.rollback()
+            raise
+
+    def connect(self, path, reuse=False):
+        if reuse and (con := CACHE_CONNECTIONS.get(path)):
+            return con
+
+        if self._psycopg is None:
+            DownloadArchivePostgresql._psycopg = __import__("psycopg")
+
+        con = self._psycopg.connect(path)
+        if reuse:
+            if not CACHE_CONNECTIONS:
+                import atexit
+                atexit.register(close_cached)
+            CACHE_CONNECTIONS[path] = con
+
+        return con
+
+    def add(self, kwdict):
+        key = kwdict.get(self._cache_key) or self.keygen(kwdict)
+        try:
+            self.cursor.execute(self._stmt_insert, (key,))
+            self.connection.commit()
+        except Exception as exc:
+            log.error("%s: %s when writing entry: %s",
+                      self.connection, exc.__class__.__name__, exc)
+            self.connection.rollback()
+
+    def check(self, kwdict):
+        key = kwdict[self._cache_key] = self.keygen(kwdict)
+        try:
+            self.cursor.execute(self._stmt_select, (key,))
+            return self.cursor.fetchone()
+        except Exception as exc:
+            log.error("%s: %s when checking entry: %s",
+                      self.connection, exc.__class__.__name__, exc)
+            self.connection.rollback()
+            return False
+
+    def finalize(self):
+        pass
+
+
+class DownloadArchivePostgresqlMemory(DownloadArchivePostgresql):
+
+    def __init__(self, path, keygen, table=None, pragma=None, cache_key=None,
+                 reuse=False):
+        DownloadArchivePostgresql.__init__(
+            self, path, keygen, table, pragma, cache_key, reuse)
+        self.keys = set()
+
+    def add(self, kwdict):
+        self.keys.add(
+            kwdict.get(self._cache_key) or
+            self.keygen(kwdict))
+
+    def check(self, kwdict):
+        key = kwdict[self._cache_key] = self.keygen(kwdict)
+        if key in self.keys:
+            return True
+        try:
+            self.cursor.execute(self._stmt_select, (key,))
+            return self.cursor.fetchone()
+        except Exception as exc:
+            log.error("%s: %s when checking entry: %s",
+                      self.connection, exc.__class__.__name__, exc)
+            self.connection.rollback()
+            return False
+
+    def finalize(self):
+        if not self.keys:
+            return
+        try:
+            self.cursor.executemany(
+                self._stmt_insert,
+                ((key,) for key in self.keys))
+            self.connection.commit()
+        except Exception as exc:
+            log.error("%s: %s when writing entries: %s",
+                      self.connection, exc.__class__.__name__, exc)
+            self.connection.rollback()
