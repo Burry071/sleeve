@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
 
         context = this.baseContext
+        handleIntent(intent)
         setContent {
             KoinContext {
                 val windowSizeClass = calculateWindowSizeClass(this)
@@ -53,6 +54,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    // Single-instance launch mode delivers a cold-start share intent to
+    // onCreate, so both entry points must route through the same handler.
+    private fun handleIntent(intent: Intent) {
         val url = intent.getSharedURL()
         if (url != null) {
             dialogViewModel.postAction(DownloadDialogViewModel.Action.ShowSheet(listOf(url)))
