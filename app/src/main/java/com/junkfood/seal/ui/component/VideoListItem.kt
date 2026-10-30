@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -116,7 +119,23 @@ fun MediaListItem(
                     onCheckedChange = null,
                 )
             }
-            MediaImage(modifier = Modifier, imageModel = thumbnailUrl, isAudio = isAudio)
+            Box {
+                MediaImage(modifier = Modifier, imageModel = thumbnailUrl, isAudio = isAudio)
+                if (isAudio) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                        color = Color.Black.copy(alpha = 0.62f),
+                        shape = CircleShape,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.GraphicEq,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.padding(4.dp).size(12.dp),
+                        )
+                    }
+                }
+            }
             Column(
                 modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth(),
                 verticalArrangement = Arrangement.Top,
@@ -124,6 +143,7 @@ fun MediaListItem(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -180,7 +200,7 @@ fun MediaImage(
             modifier
                 .height(90.dp)
                 .aspectRatio(if (!isAudio) 16f / 9f else 1f, matchHeightConstraintsFirst = true)
-                .clip(MaterialTheme.shapes.extraSmall),
+                .clip(MaterialTheme.shapes.medium),
         model = imageModel,
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,

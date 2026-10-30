@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+
 package com.junkfood.seal.ui.page.downloadv2
 
 import android.content.res.Configuration
@@ -34,10 +36,13 @@ import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Surface
@@ -52,9 +57,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -86,7 +93,14 @@ private val ActionButtonContainerColor: Color
     @Composable get() = LocalFixedColorRoles.current.onSecondaryFixed.copy(alpha = 0.68f)
 private val ActionButtonContentColor: Color
     @Composable get() = LocalFixedColorRoles.current.secondaryFixed
-private val LabelContainerColor: Color = Color.Black.copy(alpha = 0.68f)
+
+/** Thumbnail scrim keeps badge text legible over bright artwork. */
+private val ThumbnailScrim: Brush =
+    Brush.verticalGradient(
+        0f to Color.Transparent,
+        0.72f to Color.Black.copy(alpha = 0.08f),
+        1f to Color.Black.copy(alpha = 0.42f),
+    )
 
 @Composable
 fun VideoCardV2(
@@ -94,6 +108,7 @@ fun VideoCardV2(
     viewState: Task.ViewState,
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
+    progress: Float? = null,
     onButtonClick: () -> Unit,
 ) {
     with(viewState) {
@@ -106,6 +121,7 @@ fun VideoCardV2(
             fileSizeApprox = fileSizeApprox,
             stateIndicator = stateIndicator,
             actionButton = actionButton,
+            progress = progress,
             onButtonClick = onButtonClick,
         )
     }
@@ -146,6 +162,16 @@ fun VideoListItem(
     Row(modifier = modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.Top) {
         Box(modifier = Modifier) {
             ListItemImage(modifier = Modifier, thumbnailModel = thumbnailModel)
+            Box(
+                modifier =
+                    Modifier.matchParentSize().background(
+                        brush =
+                            Brush.verticalGradient(
+                                0.55f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.36f),
+                            )
+                    )
+            )
             VideoInfoLabel(
                 modifier = Modifier.align(Alignment.BottomEnd),
                 duration = duration,
@@ -229,6 +255,7 @@ fun VideoCardV2(
     fileSizeApprox: Double = .0,
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
+    progress: Float? = null,
     onButtonClick: () -> Unit,
 ) {
     val containerColor =
@@ -238,11 +265,13 @@ fun VideoCardV2(
 
     Card(
         modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = containerColor),
     ) {
         Column {
             Box(Modifier.fillMaxWidth()) {
                 CardImage(modifier = Modifier, thumbnailModel = thumbnailModel)
+                Box(Modifier.matchParentSize().background(brush = ThumbnailScrim))
                 Box(Modifier.align(Alignment.TopStart)) { stateIndicator?.invoke(this) }
                 Box(Modifier.align(Alignment.Center)) { actionButton?.invoke(this) }
                 VideoInfoLabel(
@@ -252,12 +281,50 @@ fun VideoCardV2(
                 )
             }
             Row(modifier = Modifier.fillMaxWidth()) {
-                TitleText(modifier = Modifier.weight(1f), title = title, uploader = uploader)
-                IconButton(onButtonClick, modifier = Modifier.align(Alignment.CenterVertically)) {
+                TitleText(
+                    modifier = Modifier.weight(1f),
+                    title = title,
+                    uploader = uploader,
+                    contentPadding =
+                        if (progress != null && progress >= 0f)
+                            PaddingValues(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 8.dp)
+                        else PaddingValues(16.dp),
+                )
+                IconButton(
+                    onButtonClick,
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                ) {
                     Icon(
                         imageVector = Icons.Outlined.MoreVert,
                         contentDescription = stringResource(R.string.show_more_actions),
                         modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            if (progress != null && progress >= 0f) {
+                val animatedProgress by
+                    animateFloatAsState(
+                        targetValue = progress,
+                        animationSpec = ProgressIndicatorDefaults.ProgressAnimationSpec,
+                        label = "cardProgress",
+                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LinearWavyProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "%.1f%%".format(progress * 100f),
+                        style =
+                            MaterialTheme.typography.labelLarge.copy(
+                                fontFeatureSettings = "tnum",
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
@@ -316,7 +383,7 @@ private fun ListItemImage(modifier: Modifier = Modifier, thumbnailModel: Any? = 
             modifier =
                 Modifier.width(160.dp)
                     .aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
-                    .clip(MaterialTheme.shapes.extraSmall),
+                    .clip(MaterialTheme.shapes.medium),
             contentScale = ContentScale.Crop,
             contentDescription = null,
         )
@@ -326,7 +393,7 @@ private fun ListItemImage(modifier: Modifier = Modifier, thumbnailModel: Any? = 
                 modifier
                     .width(160.dp)
                     .aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
-                    .clip(MaterialTheme.shapes.extraSmall)
+                    .clip(MaterialTheme.shapes.medium)
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest)
         ) {}
     }
@@ -337,7 +404,7 @@ private fun TitleText(
     modifier: Modifier = Modifier,
     title: String,
     uploader: String,
-    contentPadding: PaddingValues = PaddingValues(12.dp),
+    contentPadding: PaddingValues = PaddingValues(16.dp),
 ) {
     Column(
         modifier = modifier.padding(contentPadding),
@@ -347,6 +414,7 @@ private fun TitleText(
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -364,34 +432,111 @@ private fun TitleText(
 @Composable
 private fun VideoInfoLabel(modifier: Modifier = Modifier, duration: Int, fileSizeApprox: Double) {
     Surface(
-        modifier = modifier.padding(4.dp),
-        color = LabelContainerColor,
-        shape = MaterialTheme.shapes.extraSmall,
+        modifier = modifier.padding(10.dp),
+        color = Color.Black.copy(alpha = 0.62f),
+        shape = CircleShape,
     ) {
         val fileSizeText = fileSizeApprox.toFileSizeText()
         val durationText = duration.toDurationText()
         Text(
-            modifier = Modifier.padding(horizontal = 4.dp),
-            text = "$fileSizeText  $durationText",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            text = "$fileSizeText · $durationText",
             style = MaterialTheme.typography.labelSmall,
             color = Color.White,
         )
     }
 }
 
+/** Tonal pair for a state pill: [container, content]. */
 @Composable
-fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.DownloadState) {
-    Surface(
-        modifier = modifier.padding(vertical = 12.dp, horizontal = 8.dp),
-        color = LabelContainerColor,
-        shape = MaterialTheme.shapes.extraSmall,
-    ) {
-        CardItemStateText(
-            modifier = Modifier.padding(horizontal = 4.dp),
-            downloadState = downloadState,
-        )
+private fun statePillColors(downloadState: Task.DownloadState): Pair<Color, Color> {
+    val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
+    return when (downloadState) {
+        is Error ->
+            MaterialTheme.colorScheme.run { errorContainer to onErrorContainer }
+        is Completed -> {
+            val container = GreenTonalPalettes.accent1(if (isDarkTheme) 30.0 else 90.0)
+            val content = GreenTonalPalettes.accent1(if (isDarkTheme) 90.0 else 30.0)
+            container to content
+        }
+        is Running, is FetchingInfo ->
+            MaterialTheme.colorScheme.run { primaryContainer to onPrimaryContainer }
+        else ->
+            MaterialTheme.colorScheme.run { surfaceContainerHighest to onSurfaceVariant }
     }
 }
+
+@Composable
+fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.DownloadState) {
+    AnimatedContent(
+        targetState = downloadState,
+        transitionSpec = {
+            materialSharedAxisY(initialOffsetY = { it / 4 }, targetOffsetY = { -it / 4 })
+        },
+        contentKey = { it::class.simpleName },
+        label = "cardStatePill",
+        modifier = modifier,
+    ) { state ->
+        val (container, content) = statePillColors(state)
+        Surface(
+            modifier = Modifier.padding(vertical = 12.dp, horizontal = 10.dp),
+            color = container,
+            shape = CircleShape,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when (state) {
+                    is Error -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Error,
+                            contentDescription = null,
+                            tint = content,
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    is Completed -> {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = content,
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    else -> Unit
+                }
+                Text(
+                    text = statePillText(state),
+                    style =
+                        MaterialTheme.typography.labelSmall.copy(
+                            fontFeatureSettings = "tnum",
+                            letterSpacing = 0.2.sp,
+                        ),
+                    color = content,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun statePillText(downloadState: Task.DownloadState): String =
+    when (downloadState) {
+        is Canceled -> stringResource(R.string.status_canceled)
+        is Completed -> stringResource(R.string.status_downloaded)
+        is Error -> stringResource(R.string.status_error)
+        is FetchingInfo -> stringResource(R.string.status_fetching_video_info)
+        Idle, ReadyWithInfo -> stringResource(R.string.status_enqueued)
+        is Running -> {
+            val progress = downloadState.progress
+            if (progress >= 0) "%.1f%%".format(progress * 100f)
+            else stringResource(R.string.status_downloading)
+        }
+    }
 
 @Composable
 fun ListItemStateText(
@@ -472,48 +617,13 @@ fun ListItemStateText(
             Text(
                 text = text,
                 modifier = Modifier,
-                style = MaterialTheme.typography.labelMedium.merge(letterSpacing = 0.sp),
+                style =
+                    MaterialTheme.typography.labelMedium.merge(letterSpacing = 0.sp).let {
+                        it.copy(fontFeatureSettings = "tnum")
+                    },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-}
-
-@Composable
-private fun CardItemStateText(modifier: Modifier = Modifier, downloadState: Task.DownloadState) {
-    val errorColor =
-        MaterialTheme.colorScheme.run {
-            if (LocalDarkTheme.current.isDarkTheme()) error else errorContainer
-        }
-    val textStyle = MaterialTheme.typography.labelSmall
-    val contentColor = Color.White
-
-    val text =
-        when (downloadState) {
-            is Canceled -> R.string.status_canceled
-            is Completed -> R.string.status_downloaded
-            is Error -> R.string.status_error
-            is FetchingInfo -> R.string.status_fetching_video_info
-            Idle -> R.string.status_enqueued
-            ReadyWithInfo -> R.string.status_enqueued
-            is Running -> R.string.status_downloading
-        }
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        if (downloadState is Error) {
-            Icon(
-                imageVector = Icons.Rounded.Error,
-                contentDescription = null,
-                tint = errorColor,
-                modifier = Modifier.size(12.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-        }
-        Text(
-            text = stringResource(id = text),
-            modifier = Modifier,
-            style = textStyle,
-            color = contentColor,
-        )
     }
 }
 
@@ -566,12 +676,11 @@ private fun ResumeButton(
                 .clickable(onClickLabel = stringResource(R.string.cancel), onClick = onClick)
     ) {
         if (progress != null) {
-            CircularProgressIndicator(
+            CircularWavyProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.size(IconButtonSize).align(Alignment.Center),
                 color = ActionButtonContentColor,
                 trackColor = Color.Transparent,
-                gapSize = 0.dp,
             )
         }
         Icon(
@@ -642,17 +751,16 @@ private fun ProgressButton(modifier: Modifier = Modifier, progress: Float, onCli
                 .clickable(onClickLabel = stringResource(R.string.cancel), onClick = onClick)
     ) {
         if (progress < 0) {
-            CircularProgressIndicator(
+            CircularWavyProgressIndicator(
                 modifier = Modifier.size(IconButtonSize).align(Alignment.Center),
                 color = ActionButtonContentColor,
                 trackColor = Color.Transparent,
             )
         } else {
-            CircularProgressIndicator(
+            CircularWavyProgressIndicator(
                 { animatedProgress },
                 modifier = Modifier.size(IconButtonSize).align(Alignment.Center),
                 color = ActionButtonContentColor,
-                gapSize = 0.dp,
                 trackColor = Color.Transparent,
             )
         }

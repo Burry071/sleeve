@@ -2,9 +2,18 @@ package com.junkfood.seal.ui.page.downloadv2
 
 import android.content.Intent
 import android.content.res.Configuration
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateTo
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
 import androidx.compose.animation.rememberSplineBasedDecay
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.horizontalScroll
@@ -68,6 +77,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -467,8 +477,12 @@ fun DownloadPageImplV2(
                         ) { (task, state) ->
                             with(state.viewState) {
                                 VideoCardV2(
-                                    modifier = Modifier.padding(bottom = 20.dp).padding(),
+                                    modifier = Modifier.animateItem().padding(bottom = 20.dp).padding(),
                                     viewState = this,
+                                    progress =
+                                        (state.downloadState as? Running)
+                                            ?.progress
+                                            ?.takeIf { it >= 0f },
                                     actionButton = {
                                         ActionButton(
                                             modifier = Modifier,
@@ -495,7 +509,7 @@ fun DownloadPageImplV2(
                             span = { GridItemSpan(maxLineSpan) },
                         ) { (task, state) ->
                             VideoListItem(
-                                modifier = Modifier.padding(bottom = 16.dp),
+                                modifier = Modifier.animateItem().padding(bottom = 16.dp),
                                 viewState = state.viewState,
                                 stateIndicator = {
                                     ListItemStateText(
@@ -622,6 +636,23 @@ fun FABs(modifier: Modifier = Modifier, downloadCallback: () -> Unit = {}) {
 @Preview
 private fun DownloadQueuePlaceholder(modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier = modifier) {
+        val floatTransition = rememberInfiniteTransition(label = "waveFloat")
+        val floatY by
+            floatTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = -6f,
+                animationSpec =
+                    infiniteRepeatable(
+                        animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                label = "waveFloatY",
+            )
+        var revealed by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            delay(180)
+            revealed = true
+        }
         ConstraintLayout {
             val (image, text) = createRefs()
             val showImage =
@@ -636,33 +667,45 @@ private fun DownloadQueuePlaceholder(modifier: Modifier = Modifier) {
                         ),
                     contentDescription = null,
                     modifier =
-                        Modifier.fillMaxHeight(0.5f).widthIn(max = 240.dp).constrainAs(image) {
-                            top.linkTo(parent.top)
-                            bottom.linkTo(parent.bottom)
-                            start.linkTo(parent.start)
-                            end.linkTo(parent.end)
-                        },
+                        Modifier.fillMaxHeight(0.5f)
+                            .widthIn(max = 240.dp)
+                            .graphicsLayer { translationY = floatY.dp.toPx() }
+                            .constrainAs(image) {
+                                top.linkTo(parent.top)
+                                bottom.linkTo(parent.bottom)
+                                start.linkTo(parent.start)
+                                end.linkTo(parent.end)
+                            },
                 )
             } else {
                 Spacer(Modifier.height(72.dp).constrainAs(image) { top.linkTo(parent.top) })
             }
-            Column(
-                modifier = Modifier.constrainAs(text) { top.linkTo(image.bottom, margin = 36.dp) },
-                horizontalAlignment = Alignment.CenterHorizontally,
+            AnimatedVisibility(
+                visible = revealed,
+                enter =
+                    fadeIn(tween(durationMillis = 520)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 3 },
+                            animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
+                        ),
+                modifier =
+                    Modifier.constrainAs(text) { top.linkTo(image.bottom, margin = 36.dp) },
             ) {
-                Text(
-                    text = stringResource(R.string.you_ll_find_your_downloads_here),
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.download_hint),
-                    modifier = Modifier.padding(top = 4.dp).padding(horizontal = 24.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = stringResource(R.string.you_ll_find_your_downloads_here),
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = stringResource(R.string.download_hint),
+                        modifier = Modifier.padding(top = 4.dp).padding(horizontal = 24.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
     }
