@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.FileDownload
@@ -76,9 +77,9 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -87,6 +88,8 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.AnnotatedString
@@ -124,7 +127,6 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
-import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
@@ -669,15 +671,13 @@ private fun DownloadQueuePlaceholder(modifier: Modifier = Modifier) {
                 }
             if (showImage) {
                 Image(
-                    painter =
-                        rememberVectorPainter(
-                            image = sleeveWaveMark(MaterialTheme.colorScheme.primary),
-                        ),
+                    painter = painterResource(R.drawable.seal_mascot),
                     contentDescription = null,
+                    contentScale = ContentScale.Crop,
                     modifier =
-                        Modifier.fillMaxHeight(0.5f)
-                            .widthIn(max = 240.dp)
+                        Modifier.size(180.dp)
                             .graphicsLayer { translationY = floatY.dp.toPx() }
+                            .clip(CircleShape)
                             .constrainAs(image) {
                                 top.linkTo(parent.top)
                                 bottom.linkTo(parent.bottom)

@@ -60,6 +60,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -67,10 +69,8 @@ import androidx.compose.ui.zIndex
 import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.LocalWindowWidthState
 import com.junkfood.seal.ui.common.Route
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.toShape
-import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.theme.SleeveFontFamily
 import com.junkfood.seal.ui.page.downloadv2.DownloadPageImplV2
 import kotlinx.coroutines.launch
@@ -189,16 +189,14 @@ fun NavigationDrawerSheetContent(
                 modifier =
                     Modifier.size(46.dp)
                         .clip(MaterialShapes.Cookie9Sided.toShape())
-                        .background(MaterialTheme.colorScheme.primary),
+                        .background(Color(0xFFFEFED5)),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
-                    painter =
-                        rememberVectorPainter(
-                            image = sleeveWaveMark(Color.White),
-                        ),
+                    painter = painterResource(R.drawable.seal_mascot),
                     contentDescription = null,
-                    modifier = Modifier.size(36.dp),
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(46.dp),
                 )
             }
             Column(modifier = Modifier.padding(start = 12.dp)) {
