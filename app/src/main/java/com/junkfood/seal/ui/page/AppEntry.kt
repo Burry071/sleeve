@@ -84,8 +84,6 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
     val cookiesViewModel: CookiesViewModel = koinViewModel()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val versionReport = App.packageInfo.versionName.toString()
-    val appName = stringResource(R.string.app_name)
     val scope = rememberCoroutineScope()
 
     val onNavigateBack: () -> Unit = {
@@ -127,14 +125,6 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
                         popUpTo(route = Route.HOME)
                     }
                 }
-            },
-            footer = {
-                Text(
-                    appName + "\n" + versionReport + "\n" + currentRoute,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 12.dp),
-                )
             },
         ) {
             NavHost(

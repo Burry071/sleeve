@@ -207,11 +207,6 @@ fun NavigationDrawerSheetContent(
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                Text(
-                    text = stringResource(R.string.engine_design),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
         Spacer(Modifier.height(20.dp))
