@@ -10,6 +10,8 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.RANKING_STRICTNESS
@@ -305,7 +307,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
 private val VIDEO_FIRST_HOSTS: Regex =
-    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|instagram\\.com|reddit\\.com|redd\\.it")
+    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it")
 
     /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
     private fun isVideoFirstHost(url: String) =
@@ -316,8 +318,20 @@ private val VIDEO_FIRST_HOSTS: Regex =
         if (resolveThrottled("gallery")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
+                // Refresh the netscape cookies.txt from captured WebView logins
+                // so auth-walled sites (Instagram, Reddit, ...) see the session.
+                val cookiesFile =
+                    runCatching {
+                        DownloadUtil.getCookiesContentFromDatabase().mapCatching { content ->
+                            FileUtil.writeContentToFile(
+                                content,
+                                App.context.getCookiesFile(),
+                            )
+                            App.context.getCookiesFile().absolutePath
+                        }.getOrDefault("")
+                    }.getOrDefault("")
                 val resolved =
-                    GhostEngine.galleryResolve(action.url).mapCatching { (site, items) ->
+                    GhostEngine.galleryResolve(action.url, cookiesFile).mapCatching { (site, items) ->
                         if (items.isNotEmpty()) {
                             "gallery:$site" to items
                         } else {
@@ -370,8 +384,21 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         Log.e(TAG, "gallery resolve failed: ${th.message}")
+                        val message = th.message ?: ""
+                        val friendly =
+                            if (
+                                Regex(
+                                    "401|403|429|login required|login page|redirect to login|rate.?limit",
+                                    RegexOption.IGNORE_CASE,
+                                )
+                                    .containsMatchIn(message)
+                            ) {
+                                App.context.getString(R.string.gallery_auth_required)
+                            } else {
+                                message
+                            }
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
                         }
                     }
             }

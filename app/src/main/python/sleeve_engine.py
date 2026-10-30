@@ -411,13 +411,21 @@ def _gallery_scan(ext, out, pages, depth):
             return
 
 
-def gallery_resolve(url, max_items=None):
+def gallery_resolve(url, cookies_file=None, max_items=None):
     limit = max_items or _GALLERY_MAX_ITEMS
     try:
         from gallery_dl import extractor
     except Exception as e:
         return json.dumps({"ok": False, "error": "gallery-dl import failed: %s" % e})
     try:
+        if cookies_file:
+            # The app exports captured WebView logins as a Netscape cookies.txt;
+            # hand the same file to gallery-dl (auth-walled sites like Instagram
+            # need it). Cookies are domain-scoped inside the jar, so a global
+            # assignment is safe.
+            from gallery_dl import config as _gdl_config
+
+            _gdl_config.set(("extractor",), "cookies", cookies_file)
         ext = extractor.find(url)
         if ext is None:
             return json.dumps({"ok": False, "error": "no site module matched"})

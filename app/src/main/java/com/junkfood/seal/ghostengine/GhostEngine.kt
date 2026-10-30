@@ -237,10 +237,13 @@ object GhostEngine {
     }
 
     /** Resolve a page into direct media items (image sites, albums, sniffed pages). */
-    fun galleryResolve(url: String): Result<Pair<String, List<GalleryItem>>> =
+    fun galleryResolve(url: String, cookiesFile: String = ""): Result<Pair<String, List<GalleryItem>>> =
         runCatching {
             ensureStarted()
-            val reply = module().callAttr("gallery_resolve", url).toString()
+            val reply =
+                module()
+                    .callAttr("gallery_resolve", url, cookiesFile)
+                    .toString()
             val obj = json.parseToJsonElement(reply).jsonObject
             if (obj["ok"]?.jsonPrimitive?.content != "true") {
                 error(obj["error"]?.jsonPrimitive?.content ?: "gallery resolve failed")
