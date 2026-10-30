@@ -178,6 +178,13 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
+                                // No JS runtime exists on Android, so YouTube web
+                                // clients degrade (nsig throttling, missing formats).
+                                // Native clients need no JavaScript.
+                                addOption(
+                                    "--extractor-args",
+                                    "youtube:player_client=android_vr,android,ios",
+                                )
                         }
                     }
                     if (playlistIndex != null) {
@@ -461,6 +468,13 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
+                                // No JS runtime exists on Android, so YouTube web
+                                // clients degrade (nsig throttling, missing formats).
+                                // Native clients need no JavaScript.
+                                addOption(
+                                    "--extractor-args",
+                                    "youtube:player_client=android_vr,android,ios",
+                                )
                         }
                     }
                     subtitleLanguage
@@ -579,6 +593,13 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
+                                // No JS runtime exists on Android, so YouTube web
+                                // clients degrade (nsig throttling, missing formats).
+                                // Native clients need no JavaScript.
+                                addOption(
+                                    "--extractor-args",
+                                    "youtube:player_client=android_vr,android,ios",
+                                )
                         }
                     }
                     subtitleLanguage
