@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main, ghost-engine]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
