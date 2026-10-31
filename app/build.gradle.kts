@@ -43,7 +43,7 @@ android {
             create("githubPublish") {
                 keyAlias = keystoreProperties["keyAlias"].toString()
                 keyPassword = keystoreProperties["keyPassword"].toString()
-                storeFile = file(keystoreProperties["storeFile"]!!)
+                storeFile = rootProject.file(keystoreProperties["storeFile"]!!)
                 storePassword = keystoreProperties["storePassword"].toString()
             }
         }
