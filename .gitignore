@@ -16,4 +16,8 @@
 .cxx
 local.properties
 /keystore.properties
+/keystore.jks
 .kotlin
+/.agents/
+/.claude/
+/agent/
