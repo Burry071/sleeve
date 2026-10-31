@@ -7,9 +7,7 @@ package com.junkfood.seal
  * every push automatically.
  */
 object SleeveRepo {
-    // TODO(set-me): point at the public Sleeve fork, e.g.
-    // "https://github.com/<your-org>/Sleeve"
-    const val REPO_URL: String = "https://github.com/JunkFood02/Seal"
+    const val REPO_URL: String = "https://github.com/Burry071/sleeve"
     const val RELEASES_URL: String = "$REPO_URL/releases"
     const val ISSUES_URL: String = "$REPO_URL/issues"
 }
