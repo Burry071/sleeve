@@ -18,9 +18,6 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Accept SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
@@ -74,9 +71,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Accept SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
