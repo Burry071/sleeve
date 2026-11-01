@@ -42,8 +42,9 @@ import com.junkfood.seal.ui.component.PreferenceInfo
 import com.junkfood.seal.ui.component.PreferenceSingleChoiceItem
 import com.junkfood.seal.ui.component.PreferenceSubtitle
 import com.junkfood.seal.ui.component.PreferenceSwitchWithContainer
-import com.junkfood.seal.ui.page.UpdateDialog
+import com.junkfood.seal.ui.component.UpdateBanner
 import com.junkfood.seal.util.AUTO_UPDATE
+import com.junkfood.seal.util.AppUpdateManager
 import com.junkfood.seal.util.PRE_RELEASE
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
@@ -51,10 +52,7 @@ import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.STABLE
 import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.UPDATE_CHANNEL
-import com.junkfood.seal.util.UpdateUtil
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,8 +67,6 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var release by remember { mutableStateOf(UpdateUtil.Release()) }
-    var showUpdateDialog by remember { mutableStateOf(false) }
     var showUnavailableDialog by remember { mutableStateOf(App.isFDroidBuild()) }
 
     Scaffold(
@@ -86,6 +82,11 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
         },
         content = { paddings ->
             LazyColumn(modifier = Modifier.padding(paddings)) {
+                item {
+                    UpdateBanner(
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                    )
+                }
                 item {
                     PreferenceSwitchWithContainer(
                         title = stringResource(id = R.string.enable_auto_update),
@@ -140,26 +141,27 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
                         ) {
                             if (!isLoading)
                                 scope.launch {
-                                    runCatching {
-                                            isLoading = true
-                                            withContext(Dispatchers.IO) {
-                                                UpdateUtil.checkForUpdate()?.let {
-                                                    release = it
-                                                    showUpdateDialog = true
-                                                }
-                                                    ?: ToastUtil.makeToastSuspend(
-                                                        context.getString(R.string.app_up_to_date)
-                                                    )
-                                            }
-                                            isLoading = false
-                                        }
-                                        .onFailure {
-                                            it.printStackTrace()
+                                    isLoading = true
+                                    AppUpdateManager.check(context)
+                                    isLoading = false
+                                    when (val state = AppUpdateManager.state.value) {
+                                        is AppUpdateManager.State.Available ->
+                                            ToastUtil.makeToastSuspend(
+                                                context.getString(
+                                                    R.string.app_update_available,
+                                                    state.version,
+                                                )
+                                            )
+                                        AppUpdateManager.State.UpToDate ->
+                                            ToastUtil.makeToastSuspend(
+                                                context.getString(R.string.app_up_to_date)
+                                            )
+                                        is AppUpdateManager.State.Failed ->
                                             ToastUtil.makeToastSuspend(
                                                 context.getString(R.string.app_update_failed)
                                             )
-                                            isLoading = false
-                                        }
+                                        else -> {}
+                                    }
                                 }
                         }
                     }
@@ -174,9 +176,6 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
             }
         },
     )
-    if (showUpdateDialog)
-        UpdateDialog(onDismissRequest = { showUpdateDialog = false }, release = release)
-
     if (showUnavailableDialog) {
         AutoUpdateUnavailableDialog {
             showUnavailableDialog = false

@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name" translatable="false">Sleeve</string>
     <string name="tracks_queued" translatable="false">Queued %d tracks from your list</string>
+    <string name="tracks_queued_partial" translatable="false">Queued %1$d tracks, skipped %2$d (%3$s)</string>
     <string name="match_quality" translatable="false">Match quality</string>
     <string name="match_quality_desc" translatable="false">How strictly YouTube results are matched to metadata</string>
     <string name="ranking_loose" translatable="false">Loose — more results, may pick covers</string>
@@ -194,7 +195,10 @@
     <string name="check_for_updates">Check for updates</string>
     <string name="check_for_updates_desc">Automatically check for the latest version on GitHub</string>
     <string name="app_up_to_date">The current version is up to date</string>
+    <string name="app_update_available">Sleeve %1$s is available</string>
     <string name="app_update_failed">Failed to update to the latest version</string>
+    <string name="app_update_banner_title">New update available</string>
+    <string name="app_update_banner_subtitle">Sleeve %1$s · Download and install right in the app</string>
     <string name="update">Update</string>
     <string name="aria2" translatable="false">Aria2</string>
     <string name="aria2_desc">Use aria2c as the external downloader</string>

@@ -218,7 +218,7 @@ private val StringPreferenceDefaults =
 
 private val BooleanPreferenceDefaults =
     mapOf(
-        FORMAT_SELECTION to true,
+        FORMAT_SELECTION to false,
         CONFIGURE to true,
         CELLULAR_DOWNLOAD to false,
         YT_DLP_AUTO_UPDATE to true,

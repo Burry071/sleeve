@@ -1006,11 +1006,36 @@ object DownloadUtil {
             else
                 if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
 
+        // Gallery/embed items carry a per-item Referer upstream, but the Task
+        // plumbing drops it before this handoff. Reconstruct it from what is
+        // available here: the extraction page (yt-dlp formats), falling back
+        // to the canonical instagram referer for instagram CDN hosts, which
+        // reject signed media without it. Direct items keep the media url as
+        // their page, which is not a referer — skip those.
+        val mediaUrl = eligibleFormat.url!!
+        val pageReferer =
+            listOfNotNull(videoInfo.webpageUrl, videoInfo.originalUrl)
+                .firstOrNull { it.isNotBlank() && it != mediaUrl }
+        val referer =
+            if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
+                "https://www.instagram.com/"
+            } else {
+                pageReferer
+            }
+        val engineHeaders =
+            if (referer.isNullOrBlank()) {
+                mapOf("User-Agent" to preferences.userAgentString)
+            } else {
+                mapOf(
+                    "User-Agent" to preferences.userAgentString,
+                    "Referer" to referer,
+                )
+            }
         val enqueued =
             runBlocking {
                 GhostEngine.download(
-                    url = eligibleFormat.url!!,
-                    headers = mapOf("User-Agent" to preferences.userAgentString),
+                    url = mediaUrl,
+                    headers = engineHeaders,
                     outputDir = downloadDir,
                     fileName = fileName,
                 )

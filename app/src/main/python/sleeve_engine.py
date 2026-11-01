@@ -540,11 +540,17 @@ def gallery_warmup():
 
 
 def instagram_embed(url):
-    """Anonymous Instagram fallback: public posts and reels expose their media
-    on the embed page, no session needed. Tried after gallery-dl fails so
+    """Anonymous Instagram resilience ladder, tried after gallery-dl fails so
     private posts still end in the cookies guidance instead of a dead end.
+    Lanes, first hit wins:
+      1. embed pages (captioned reel/p/tv + plain embed) — video_url/og:video,
+         then deeper video_versions / playable_url gql markers
+      2. anonymous graphql shortcode query (3 doc_id variants)
+      3. anonymous /api/v1/media/<pk>/info/ (www + i.instagram.com)
     """
     import re
+    import random
+    import string
     import urllib.request
 
     m = re.search(
@@ -554,62 +560,253 @@ def instagram_embed(url):
         return json.dumps({"ok": False, "error": "not an instagram post url"})
     code = m.group(1)
 
-    for path in (
-        "https://www.instagram.com/reel/%s/embed/captioned/" % code,
-        "https://www.instagram.com/p/%s/embed/captioned/" % code,
-    ):
-        try:
-            req = urllib.request.Request(
-                path,
-                headers={
-                    "User-Agent": _GALLERY_UA,
-                    "Accept": "text/html,application/xhtml+xml",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                body = resp.read(1 << 20).decode("utf-8", "ignore")
-        except Exception:
-            continue
+    # Round-robin between a mobile and a desktop Chrome fingerprint: embed and
+    # graphql endpoints login-wall some datacenter IPs per-UA.
+    ua_rotation = (
+        _GALLERY_UA,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like"
+        " Gecko) Chrome/131.0.0.0 Safari/537.36",
+    )
 
+    def _fetch(path, headers, data=None, user_agent=None):
+        # 2 attempts per url; 400-800ms sleep after the first failure; 1 MiB
+        # cap + 20s timeout per attempt, same as the old one-shot fetch.
+        for attempt in range(2):
+            ua = user_agent or ua_rotation[attempt % len(ua_rotation)]
+            try:
+                req = urllib.request.Request(
+                    path, data=data, headers=dict(headers, **{"User-Agent": ua})
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    return resp.read(1 << 20).decode("utf-8", "ignore")
+            except Exception:
+                if attempt == 0:
+                    time.sleep(random.uniform(0.4, 0.8))
+        return None
+
+    def _unescape(raw):
+        try:
+            return json.loads('"%s"' % raw)
+        except Exception:
+            return raw.replace("\\u0026", "&").replace("\\/", "/")
+
+    def _emit(target, is_video, referer):
+        ext = "mp4" if is_video else "jpg"
+        return json.dumps(
+            {
+                "ok": True,
+                "category": "instagram-embed",
+                "items": [
+                    {
+                        "url": target,
+                        "filename": "instagram_%s.%s" % (code, ext),
+                        "referer": referer,
+                    }
+                ],
+            }
+        )
+
+    # -- lane 1: embed pages ---------------------------------------------------
+    # Order matters: video_url/og:video first (same markers as the parse test),
+    # then the progressive gql blobs, then the poster-image fallback for image
+    # posts.
+    def _scan_embed(body):
         target = None
         is_video = False
 
-        video_json = re.search(r'"video_url":"((?:[^"\]|\.)*)"', body)
-        og_video = re.search(r'property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)', body)
-        raw_video = video_json.group(1) if video_json else og_video.group(1) if og_video else None
+        video_json = re.search(r'"video_url":"((?:[^"\\]|\\.)*)"', body)
+        og_video = re.search(
+            r'property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)',
+            body,
+        )
+        raw_video = (
+            video_json.group(1) if video_json else (og_video.group(1) if og_video else None)
+        )
         if raw_video:
-            try:
-                target = json.loads('"%s"' % raw_video)
-            except Exception:
-                target = raw_video.replace("\u0026", "&").replace("\\/", "/")
-            is_video = True
+            cand = _unescape(raw_video)
+            if isinstance(cand, str) and cand.startswith("http"):
+                target, is_video = cand, True
 
         if not target:
-            img = re.search(r'class="EmbeddedMediaImage"[^>]*src="([^"]+)"', body)
-            og_img = re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)', body)
-            raw_img = img.group(1) if img else og_img.group(1) if og_img else None
-            if raw_img:
-                target = raw_img.replace("\u0026", "&").replace("\\/", "/")
+            # gql_data ships progressive mp4s (higher quality than the 640px
+            # video_url): first "url" inside ~600 chars after each marker.
+            for vm in re.finditer(r'"video_versions":\[', body):
+                um = re.search(
+                    r'"url":"((?:[^"\\]|\\.)*)"', body[vm.end() : vm.end() + 600]
+                )
+                if um:
+                    cand = _unescape(um.group(1))
+                    if isinstance(cand, str) and cand.startswith("http"):
+                        target, is_video = cand, True
+                        break
 
-        if target and target.startswith("http"):
-            ext = "mp4" if is_video else "jpg"
-            return json.dumps(
-                {
-                    "ok": True,
-                    "category": "instagram-embed",
-                    "items": [
-                        {
-                            "url": target,
-                            "filename": "instagram_%s.%s" % (code, ext),
-                            "referer": path,
-                        }
-                    ],
-                }
+        if not target:
+            pu = re.search(r'"playable_url":"((?:[^"\\]|\\.)*)"', body)
+            if pu:
+                cand = _unescape(pu.group(1))
+                if isinstance(cand, str) and cand.startswith("http"):
+                    target, is_video = cand, True
+
+        if not target:
+            # A gql payload (shortcode_media / gql_data) marks a video post
+            # even when the stream regexes missed its url — do not serve the
+            # poster frame as the media; fall through to the deeper lanes.
+            if re.search(r'"(?:shortcode_media|gql_data)"', body) and (
+                '"is_video":true' in body
+                or '"video_duration"' in body
+                or '"product_type":"clips"' in body
+            ):
+                return None, False
+            # Image posts (and video poster fallback, unchanged order).
+            img = re.search(r'class="EmbeddedMediaImage"[^>]*src="([^"]+)"', body)
+            og_img = re.search(
+                r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)', body
             )
+            raw_img = img.group(1) if img else (og_img.group(1) if og_img else None)
+            if raw_img:
+                cand = _unescape(raw_img)
+                if isinstance(cand, str) and cand.startswith("http"):
+                    target = cand
+
+        return target, is_video
+
+    embed_headers = {
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+        "Sec-Fetch-Dest": "iframe",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site",
+    }
+    for path in (
+        "https://www.instagram.com/reel/%s/embed/captioned/" % code,
+        "https://www.instagram.com/p/%s/embed/captioned/" % code,
+        "https://www.instagram.com/tv/%s/embed/captioned/" % code,
+        "https://www.instagram.com/p/%s/embed/" % code,
+    ):
+        body = _fetch(path, embed_headers)
+        if not body:
+            continue
+        target, is_video = _scan_embed(body)
+        if isinstance(target, str) and target.startswith("http"):
+            return _emit(target, is_video, path)
+
+    # -- lane 2: anonymous graphql shortcode query ------------------------------
+    lsd = "".join(random.choices(string.ascii_letters + string.digits, k=20))
+    csrf = uuid.uuid4().hex  # 32 hex chars
+
+    def _media_from_node(node):
+        """video_versions (node + item) → playable_url → display_url/image."""
+        if not isinstance(node, dict):
+            return None, False
+        item = node.get("item") if isinstance(node.get("item"), dict) else {}
+        for vv in (node.get("video_versions"), item.get("video_versions")):
+            if isinstance(vv, list) and vv:
+                u = vv[0].get("url") if isinstance(vv[0], dict) else None
+                if isinstance(u, str) and u:
+                    return u, True
+        u = node.get("playable_url") or item.get("playable_url")
+        if isinstance(u, str) and u:
+            return u, True
+        for source in (node, item):
+            u = source.get("display_url")
+            if isinstance(u, str) and u:
+                return u, False
+            iv2 = source.get("image_versions2")
+            candidates = iv2.get("candidates") if isinstance(iv2, dict) else None
+            if isinstance(candidates, list) and candidates:
+                u = candidates[0].get("url") if isinstance(candidates[0], dict) else None
+                if isinstance(u, str) and u:
+                    return u, False
+        return None, False
+
+    def _gql_nodes(payload):
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return []
+        nodes = []
+        detail = data.get("xdt_api__v1__media__detail")
+        if isinstance(detail, list):
+            for nd in detail:
+                if isinstance(nd, dict):
+                    nodes.append(
+                        nd["media"] if isinstance(nd.get("media"), dict) else nd
+                    )
+        elif isinstance(detail, dict):
+            nodes.append(detail["media"] if isinstance(detail.get("media"), dict) else detail)
+        shortcode_media = data.get("shortcode_media")
+        if isinstance(shortcode_media, dict):
+            nodes.append(shortcode_media)
+        return nodes
+
+    gql_headers = {
+        "x-ig-app-id": "936619743392459",
+        "x-fb-lsd": lsd,
+        "x-asbd-id": "129477",
+        "x-csrftoken": csrf,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://www.instagram.com/p/%s/" % code,
+    }
+    for doc_id in (24368985919464652, 8845758582119845, 9510064595728286):
+        data = urllib.parse.urlencode(
+            {"variables": json.dumps({"shortcode": code}), "doc_id": doc_id}
+        ).encode("utf-8")
+        body = _fetch("https://www.instagram.com/graphql/query", gql_headers, data)
+        if not body:
+            continue
+        try:
+            payload = json.loads(body)
+        except Exception:
+            continue
+        for node in _gql_nodes(payload):
+            target, is_video = _media_from_node(node)
+            if isinstance(target, str) and target.startswith("http"):
+                return _emit(target, is_video, "https://www.instagram.com/")
+
+    # -- lane 3: anonymous /api/v1/media info ------------------------------------
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+    pk = 0
+    decodable = True
+    for ch in code:
+        idx = alphabet.find(ch)
+        if idx < 0:
+            decodable = False
+            break
+        pk = pk * 64 + idx
+    if decodable:
+        app_headers = {
+            "x-ig-app-id": "936619743392459",
+            "x-asbd-id": "359341",
+            "x-requested-with": "XMLHttpRequest",
+        }
+        app_ua = (
+            "Instagram 275.0.0.27.301 Android (33/13; 420dpi; 1080x2400; samsung;"
+            " SM-S911B; e1q; samsung; en_US; 345634560)"
+        )
+        for pattern in (
+            "https://www.instagram.com/api/v1/media/%s/info/",
+            "https://i.instagram.com/api/v1/media/%s/info/",
+        ):
+            body = _fetch(pattern % pk, app_headers, user_agent=app_ua)
+            if not body:
+                continue
+            try:
+                payload = json.loads(body)
+            except Exception:
+                continue
+            media_items = payload.get("items") if isinstance(payload, dict) else None
+            if not isinstance(media_items, list) or not media_items:
+                continue
+            target, is_video = _media_from_node(
+                media_items[0] if isinstance(media_items[0], dict) else {}
+            )
+            if isinstance(target, str) and target.startswith("http"):
+                return _emit(target, is_video, "https://www.instagram.com/")
 
     return json.dumps(
         {
             "ok": False,
-            "error": "no public media on the embed page (private post, deleted, or login required)",
+            "error": "instagram: all public access lanes failed (embed, graphql, api) —"
+            " the post is private, deleted, or this network requires login",
         }
     )

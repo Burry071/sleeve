@@ -26,16 +26,39 @@ import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import android.util.Log
 
 private const val TAG = "DownloadDialogViewModel"
+
+/** RankedCandidate.score is 0–100; below this the fallback search runs. */
+private const val SPOTIFY_MATCH_THRESHOLD = 55.0
+private const val SPOTIFY_RESOLVE_CONCURRENCY = 3
+
+private val trackBracketRegex = Regex("""\([^)]*\)|\[[^]]*]""")
+private val trackDecorationRegex =
+    Regex(
+        """\s+-\s+(?:remaster(?:ed)?(?:\s+\d{4})?|live|single version|radio edit|deluxe(?: edition)?|bonus track)\s*$""",
+        RegexOption.IGNORE_CASE,
+    )
+private val whitespaceRegex = Regex("""\s+""")
+
+private fun String.toSearchQueryPart(): String =
+    trackBracketRegex.replace(this, " ")
+        .replace(trackDecorationRegex, " ")
+        .replace(whitespaceRegex, " ")
+        .trim()
 
 class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel() {
 
@@ -393,69 +416,97 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
+    private suspend fun resolveSpotifyTrack(
+        track: SpotifyTrack,
+        preferences: DownloadUtil.DownloadPreferences,
+    ) {
+        fun fetch(pool: String, query: String): List<PlaylistEntry> =
+            DownloadUtil.getPlaylistOrVideoInfo(
+                    playlistURL = "$pool:$query",
+                    downloadPreferences = preferences,
+                )
+                .map { it as? PlaylistResult }
+                .getOrElse { null }
+                ?.entries
+                .orEmpty()
+
+        fun rank(candidates: List<PlaylistEntry>) =
+            GhostEngine.rankCandidates(
+                    track = track,
+                    candidatesJson = json.encodeToString(candidates),
+                    strictness = RANKING_STRICTNESS.getInt(),
+                )
+                .getOrThrow()
+
+        // A floor miss ("no candidate passed") is a normal rejection, not a
+        // fatal error: it must widen the pool instead of dropping the track.
+        fun rankOrNull(candidates: List<PlaylistEntry>) =
+            candidates.takeIf { it.isNotEmpty() }?.let { runCatching { rank(it) }.getOrNull() }
+
+        val fullQuery =
+            listOf(track.artist, track.title)
+                .map { it.toSearchQueryPart() }
+                .filter { it.isNotBlank() }
+                .joinToString(separator = " ")
+        val titleQuery = track.title.toSearchQueryPart()
+
+        var best = rankOrNull(fetch("ytmsearch10", fullQuery))
+        if (best == null || best.score < SPOTIFY_MATCH_THRESHOLD) {
+            val wideBest = rankOrNull(fetch("ytsearch10", fullQuery))
+            best = listOfNotNull(best, wideBest).maxByOrNull { it.score }
+        }
+        if ((best == null || best.score < SPOTIFY_MATCH_THRESHOLD) && titleQuery.isNotBlank()) {
+            val titleBest = rankOrNull(fetch("ytsearch5", titleQuery))
+            best = listOfNotNull(best, titleBest).maxByOrNull { it.score } ?: best
+        }
+
+        val match = best ?: error("no candidate matched")
+        val url = match.url.ifBlank { "https://www.youtube.com/watch?v=" + match.id }
+        downloader.enqueue(Task(url = url, preferences = preferences))
+    }
+
     private fun downloadMetadataTracks(action: Action.DownloadMetadataTracks) {
         // spotDL pattern with quality-ranked matching: for each metadata track,
         // pull the top YouTube candidates (flat search), let the engine score
         // them (name/artist/duration/forbidden-keywords), and enqueue the best
-        // through the normal pipeline, audio-only. One prep lane at a time —
-        // the downloads themselves go through the pipeline's 3-slot scheduler.
+        // through the normal pipeline, audio-only. Resolution runs with bounded
+        // concurrency; the downloads themselves go through the pipeline's
+        // 3-slot scheduler.
         val preferences =
             DownloadUtil.DownloadPreferences.createFromPreferences().copy(extractAudio = true)
         viewModelScope.launch(Dispatchers.IO) {
-            var queued = 0
-            for (track in action.tracks) {
-                runCatching {
-                    val query =
-                        listOf(track.artist, track.title, "audio")
-                            .filter { it.isNotBlank() }
-                            .joinToString(separator = " ")
-                            .let { Regex("\\s+").replace(it, " ").trim() }
-                    // YouTube Music pool first (real artist uploads, better
-                    // audio). When the best match scores low, widen to a plain
-                    // YouTube search and rank both pools together before giving up.
-                    fun fetch(pool: String): List<PlaylistEntry> =
-                        DownloadUtil.getPlaylistOrVideoInfo(
-                                playlistURL = "$pool:$query",
-                                downloadPreferences = preferences,
-                            )
-                            .map { it as? PlaylistResult }
-                            .getOrElse { null }
-                            ?.entries
-                            .orEmpty()
-
-                    fun rank(candidates: List<PlaylistEntry>) =
-                        GhostEngine.rankCandidates(
-                                track = track,
-                                candidatesJson = json.encodeToString(candidates),
-                                strictness = RANKING_STRICTNESS.getInt(),
-                            )
-                            .getOrThrow()
-
-                    val musicPool = fetch("ytmsearch5")
-                    val musicBest = if (musicPool.isNotEmpty()) rank(musicPool) else null
-
-                    val best =
-                        if (musicBest == null || musicBest.score < 0.5) {
-                            val widePool = fetch("ytsearch10")
-                            val wideBest = if (widePool.isNotEmpty()) rank(widePool) else null
-                            listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
-                                ?: throw IllegalStateException("no candidates")
-                        } else {
-                            musicBest
+            val semaphore = Semaphore(SPOTIFY_RESOLVE_CONCURRENCY)
+            val results =
+                coroutineScope {
+                    action.tracks
+                        .map { track ->
+                            async {
+                                track to
+                                    semaphore.withPermit {
+                                        runCatching { resolveSpotifyTrack(track, preferences) }
+                                    }
+                            }
                         }
-                    val url =
-                        best.url.ifBlank {
-                            "https://www.youtube.com/watch?v=" + best.id
-                        }
-                    downloader.enqueue(Task(url = url, preferences = preferences))
-                    queued++
-                }.onFailure { Log.w(TAG, "track skipped: ${track.title}: ${it.message}") }
-            }
+                        .awaitAll()
+                }
+            val queued = results.count { it.second.isSuccess }
+            val skippedTitles = results.filter { it.second.isFailure }.map { it.first.title }
             withContext(Dispatchers.Main) {
                 resetSelectionState()
-                ToastUtil.makeToast(
-                    App.context.getString(R.string.tracks_queued, queued),
-                )
+                if (skippedTitles.isEmpty()) {
+                    ToastUtil.makeToast(App.context.getString(R.string.tracks_queued, queued))
+                } else {
+                    val preview = skippedTitles.take(3).joinToString(", ")
+                    val suffix = if (skippedTitles.size > 3) "…" else ""
+                    ToastUtil.makeToast(
+                        App.context.getString(
+                            R.string.tracks_queued_partial,
+                            queued,
+                            skippedTitles.size,
+                            preview + suffix,
+                        )
+                    )
+                }
             }
         }
         hideDialog()

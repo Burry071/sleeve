@@ -30,9 +30,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.junkfood.seal.R
 import com.junkfood.seal.util.AppUpdateManager
 import com.junkfood.seal.util.AppUpdateManager.State
 
@@ -80,12 +82,12 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Sleeve ${s.version} available",
+                                text = stringResource(R.string.app_update_banner_title),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                text = "Download and install from GitHub Releases",
+                                text = stringResource(R.string.app_update_banner_subtitle, s.version),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }

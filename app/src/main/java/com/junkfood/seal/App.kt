@@ -168,8 +168,9 @@ class App : Application() {
                             .putExtra(EXTRA_QUICK_DOWNLOAD, true),
                     )
                     .setCategories(setOf("com.sleeve.app.category.QUICK_DOWNLOAD"))
+                    .setLongLived(true)
                     .build()
-            ShortcutManagerCompat.addDynamicShortcuts(context, listOf(shortcut))
+            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
         }
 
         fun stopService() {
