@@ -22,3 +22,4 @@ local.properties
 /.claude/
 /agent/
 /design/mascot/candidates/
+/skills-lock.json
