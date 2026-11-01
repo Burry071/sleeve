@@ -145,8 +145,8 @@ Sleeve is GPL-3.0, as are Seal and Ghost Downloader. N_m3u8DL-RE is MIT.
 See [THIRD_PARTY.md](THIRD_PARTY.md) for the complete list of bundled
 components and licenses. Sleeve is an independent project and is not endorsed
 by Seal, Ghost Downloader, yt-dlp, or gallery-dl.
-<img width="1080" height="2152" alt="72198" src="https://github.com/user-attachments/assets/52bc49b3-ec03-43a4-a347-486b1b9e41ae" />
+<img width="1080" height="2152" alt="72198" src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" />
 <div align="center">
-<img width="1080" height="1891" alt="72199" src="https://github.com/user-attachments/assets/b2f14cd5-8c5a-42ec-9162-62e005ab70ba" />
-<img width="1080" height="2174" alt="72200" src="https://github.com/user-attachments/assets/cc8c1112-891d-4cf9-aa86-d47f6beb882a" />
+<img width="1080" height="1891" alt="72199" src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" />
+<img width="1080" height="2174" alt="72200" src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" />
 
