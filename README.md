@@ -26,19 +26,19 @@ Sleeve is a community fork of [Seal](https://github.com/JunkFood02/Seal)
 
 ## Features
 
-- **1,800+ sites** — YouTube, Vimeo, Reddit, Twitter/X, TikTok, and everything
+- **1,800+ sites.** YouTube, Vimeo, Reddit, Twitter/X, TikTok, and everything
   else yt-dlp supports
-- **500+ image and media sites** — Instagram, Reddit galleries, Pixiv, Imgur,
+- **500+ image and media sites.** Instagram, Reddit galleries, Pixiv, Imgur,
   and more via embedded gallery-dl
-- **Multi-connection engine** — 8 parallel connections per file with resume
+- **Multi-connection engine.** 8 parallel connections per file with resume
   support, based on the Ghost Downloader architecture
-- **HLS and DASH streams** — m3u8/mpd handled by the bundled N_m3u8DL-RE
-- **Spotify playlists** — resolves public playlist metadata and downloads the
+- **HLS and DASH streams.** m3u8/mpd handled by the bundled N_m3u8DL-RE
+- **Spotify playlists.** Resolves public playlist metadata and downloads the
   best-matching audio from YouTube (spotDL method)
-- **Audible audiobooks** — public catalog lookup via the Libation method
-- **Format control** — resolution, audio-only, subtitles, SponsorBlock,
+- **Audible audiobooks.** Public catalog lookup via the Libation method
+- **Format control.** Resolution, audio-only, subtitles, SponsorBlock,
   metadata embedding, filename templates
-- **Material 3 Expressive UI** — dynamic color, light and dark themes,
+- **Material 3 Expressive UI.** Dynamic color, light and dark themes,
   portrait and landscape
 
 ## Supported sources
@@ -46,7 +46,7 @@ Sleeve is a community fork of [Seal](https://github.com/JunkFood02/Seal)
 | Content | Method |
 | --- | --- |
 | Video and audio sites (YouTube, Vimeo, TikTok, …) | yt-dlp extraction, native Android clients |
-| Direct file links (CDN, mp4, mp3, zip, …) | Ghost engine — segmented HTTP, resume |
+| Direct file links (CDN, mp4, mp3, zip, …) | Ghost engine (segmented HTTP, resume) |
 | Live and on-demand HLS/DASH (m3u8, mpd) | N_m3u8DL-RE, multi-threaded segments, AES-128 |
 | Image hosts and galleries (Instagram, Reddit, Pixiv, Imgur, …) | gallery-dl |
 | Pages without a dedicated extractor | generic media sniffing (og:video, stream URLs) |
@@ -71,7 +71,7 @@ yt-dlp path takes over.
 
 ## Download
 
-**[Latest release](https://github.com/Burry071/sleeve/releases/latest)** —
+**[Latest release](https://github.com/Burry071/sleeve/releases/latest)**:
 signed APK, requires Android 7.0 or newer (arm64-v8a or x86_64).
 
 Also available on the
@@ -130,15 +130,15 @@ step.
 ./gradlew :app:assembleGenericDebug -PnoSplits -PABI_FILTERS="arm64-v8a;x86_64"
 ```
 
-Release builds are signed when `keystore.properties` exists at the repo root —
-see [SIGNING.md](SIGNING.md). CI builds every push and publishes signed APKs
+Release builds are signed when `keystore.properties` exists at the repo root.
+See [SIGNING.md](SIGNING.md). CI builds every push and publishes signed APKs
 for tagged releases.
 
 ## Contributing
 
 Bug reports and feature requests go to the
 [issue tracker](https://github.com/Burry071/sleeve/issues). Pull requests are
-welcome — engine work follows the notes in
+welcome. Engine work should follow the notes in
 [engine-ghost](engine-ghost).
 
 ## License and attribution

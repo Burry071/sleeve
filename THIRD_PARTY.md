@@ -1,19 +1,24 @@
-# Third-party components — Sleeve
+# Third-party components
 
-Sleeve is a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0) with an
-embedded download engine built from the architecture of
-[Ghost Downloader](https://github.com/XiaoYouChR/Ghost-Downloader-3) (GPL-3.0).
+Sleeve is a fork of Seal (GPL-3.0) and includes code derived from the projects
+below. The combined work is distributed under GPL-3.0 (see LICENSE). This fork
+is published as "Sleeve" and is not endorsed by any upstream project.
 
-| Component | Upstream | License | Used for |
+| Component | Source | License | Used for |
 |---|---|---|---|
-| Seal | JunkFood02/Seal @ v1.13.1 | GPL-3.0 | App shell: UI, extraction flow, database |
-| Ghost Downloader engine design | XiaoYouChR/Ghost-Downloader-3 | GPL-3.0 | Task/step engine model, segmented download approach (ADR-0007) |
-| selkie_engine.py | written for this fork, modelled on Ghost's HttpTaskStep | GPL-3.0 (this repo) | Embedded engine core |
-| Chaquopy | chaquo/chaquopy | MIT | Python 3.13 runtime embedded in the app |
-| youtubedl-android | JunkFood02/youtubedl-android | Apache-2.0 / LGPL-2.1 (components) | yt-dlp extraction runtime |
-| yt-dlp | yt-dlp/yt-dlp | Unlicense | Site extraction |
-| N_m3u8DL-RE (planned, Stage B v1) | nilaoda/N_m3u8DL-RE | MIT | Native HLS/DASH engine |
-
-The combined work is licensed GPL-3.0 (see LICENSE). "Ghost Downloader" and
-"Seal" are upstream project names; this fork is distributed as "Sleeve" and is
-not endorsed by either upstream project.
+| Seal | github.com/JunkFood02/Seal | GPL-3.0 | App shell: UI, download flow, database |
+| Ghost Downloader | github.com/XiaoYouChR/Ghost-Downloader-3 | GPL-3.0 | Segmented download engine design |
+| yt-dlp | github.com/yt-dlp/yt-dlp | Unlicense | Site extraction |
+| youtubedl-android | github.com/JunkFood02/youtubedl-android | Apache-2.0 / LGPL-2.1 | yt-dlp runtime on Android |
+| gallery-dl | github.com/mikf/gallery-dl | GPL-2.0 | Image/media site extraction |
+| N_m3u8DL-RE | github.com/nilaoda/N_m3u8DL-RE | MIT | HLS/DASH engine (`libnm3u8dlre.so`) |
+| FFmpeg | ffmpeg.org | LGPL-2.1+ | Merge and metadata (`libffmpeg.so`) |
+| Chaquopy | github.com/chaquo/chaquopy | MIT | Embedded Python 3.13 runtime |
+| requests | github.com/psf/requests | Apache-2.0 | HTTP for gallery-dl (vendored) |
+| urllib3 | github.com/urllib3/urllib3 | MIT | vendored |
+| certifi | github.com/certifi/python-certifi | MPL-2.0 | vendored CA bundle |
+| idna | github.com/jd/idna | BSD-3-Clause | vendored |
+| charset_normalizer | github.com/Ousret/charset_normalizer | MIT | vendored |
+| Jetpack Compose / Kotlin | androidx, jetbrains | Apache-2.0 | Android app stack |
+| monet | github.com/Kyant0/monet | Apache-2.0 | Dynamic color |
+| Space Grotesk | Florian Karsten | SIL OFL 1.1 | Typography |
