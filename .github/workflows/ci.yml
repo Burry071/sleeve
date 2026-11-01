@@ -98,4 +98,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           apk=$(ls app/build/outputs/apk/generic/release/*.apk | head -1)
-          gh release create "$GITHUB_REF_NAME" "$apk#Sleeve-$GITHUB_REF_NAME.apk"             --title "Sleeve $GITHUB_REF_NAME"             --generate-notes
+          cp "$apk" Sleeve-generic-release.apk
+          gh release create "$GITHUB_REF_NAME" "Sleeve-generic-release.apk"             --title "Sleeve $GITHUB_REF_NAME"             --generate-notes

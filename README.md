@@ -69,8 +69,9 @@ yt-dlp path takes over.
 
 ## Download
 
-**[Latest release](https://github.com/Burry071/sleeve/releases/latest)**:
-signed APK, requires Android 7.0 or newer (arm64-v8a or x86_64).
+**[Download Sleeve APK](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk)** (direct,
+signed, arm64-v8a + x86_64, Android 7.0+). Release notes live on the
+[releases page](https://github.com/Burry071/sleeve/releases).
 
 Also available on the
 [Orion Store](https://rookieenough.github.io/Orion-Data/app/?id=sleeve).
