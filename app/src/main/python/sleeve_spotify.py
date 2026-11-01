@@ -23,6 +23,7 @@ urllib only, so it runs on Chaquopy as-is.
 import json
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -315,10 +316,34 @@ _FORBIDDEN_WORDS = [
     "1hour", "fullalbum", "reaction",
 ]
 
+# Channels that host re-uploads rather than the artist's own audio.
+_JUNK_CHANNEL_WORDS = (
+    "lyrics", "lyric", "mix", "mixes", "bootleg", "slowed", "nightcore",
+    "cover", "karaoke",
+)
+_ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|\band\b|\bx\b|\bft\b|\bfeat\b)\s*")
+_BRACKET_RE = re.compile(r"\([^)]*\)|\[[^]]*]")
+
+
+def _strip_marks(text):
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _base_slug(text):
+    text = _strip_marks((text or "").lower()).replace("&", " and ")
+    text = re.sub(r"[^\w\s]", "", text)
+    return " ".join(text.split())
+
 
 def _slug(text):
-    text = re.sub(r"[^\w\s]", "", (text or "").lower())
-    return " ".join(text.split())
+    """Match form: bracketed decoration ("(feat. X)", "[Live]") removed."""
+    return _base_slug(_BRACKET_RE.sub(" ", text or ""))
+
+
+def _raw_slug(text):
+    """Penalty form: keeps bracketed words so a "[Live]" upload still counts."""
+    return _base_slug(text)
 
 
 def _ratio(a, b):
@@ -332,45 +357,81 @@ def _name_score(track_title, track_artist, cand_title):
     c = _slug(cand_title)
     score = _ratio(" ".join(sorted(t.split())), " ".join(sorted(c.split())))
     if score <= 75.0:
-        full = _slug((track_artist + " " + track_title))
+        full = _slug(track_artist + " " + track_title)
         score = max(score, _ratio(" ".join(sorted(full.split())), " ".join(sorted(c.split()))))
+    cand_raw = _raw_slug(cand_title)
+    track_raw = _raw_slug(track_artist + " " + track_title)
     for word in _FORBIDDEN_WORDS:
-        if word in c.replace(" ", "") and word not in (t + track_artist.lower()).replace(" ", ""):
+        if word in cand_raw.replace(" ", "") and word not in track_raw.replace(" ", ""):
             score -= 15.0
     return score
 
 
-def _artist_score(track_artist, cand_uploader, cand_title):
-    artist = _slug(track_artist).split(" ft ")[0].split(" feat ")[0].strip()
-    main = artist.split(",")[0].strip()
-    uploader = _slug(cand_uploader)
-    if not main or not uploader:
+def _artist_names(track_artist):
+    raw = _slug(track_artist)
+    parts = [p.strip() for p in _ARTIST_SPLIT_RE.split(raw) if p.strip()]
+    return parts or ([raw] if raw else [])
+
+
+def _artist_score(track_artist, cand_uploader, cand_channel, cand_title):
+    names = _artist_names(track_artist)
+    if not names:
         return 40.0
-    score = _ratio(main, uploader)
-    if score >= 85.0:
-        pass  # spelling tolerance already covered
-    elif main in uploader or uploader in main:
-        score = max(score, 90.0)
-    # Official artist topic channels ("Artist - Topic") are the auto-generated
-    # home of the real audio on YouTube.
-    if uploader.endswith("topic") and _ratio(main, uploader[:-5].strip()) >= 60.0:
-        score = min(100.0, score + 10.0)
-    if score < 50.0 and main and main.split()[0] in c_slug(_slug(cand_title)):
-        score = max(score, 55.0)
-    return score
+    main = names[0]
+    title_slug = _slug(cand_title)
+    scores = []
+    # The flat search exposes both the uploader and the channel; the official
+    # channel is often the better signal (e.g. VEVO vs a personal uploader).
+    for channel_name in (cand_uploader, cand_channel):
+        uploader = _slug(channel_name)
+        if not uploader:
+            continue
+        score = max(_ratio(name, uploader) for name in names)
+        if main == uploader or score >= 99.0:
+            score = 100.0
+        elif main in uploader or uploader in main:
+            score = max(score, 90.0)
+        # Official artist topic channels ("Artist - Topic") are the
+        # auto-generated home of the real audio on YouTube.
+        if uploader.endswith("topic") and _ratio(main, uploader[:-5].strip()) >= 60.0:
+            score = min(100.0, score + 10.0)
+        if "vevo" in uploader:
+            score = min(100.0, score + 10.0)
+        if score < 50.0 and main.split()[0] in title_slug:
+            score = max(score, 55.0)
+        # Applied after the rescue: otherwise a junk channel whose name shares
+        # one word with the artist gets lifted back to 55 and the penalty is
+        # lost.
+        if any(word in uploader for word in _JUNK_CHANNEL_WORDS):
+            score -= 20.0
+        scores.append(max(0.0, min(100.0, score)))
+    return max(scores) if scores else 40.0
 
 
-def c_slug(text):
-    return _slug(text)
+def _duration_delta(track_ms, cand_s):
+    track_s = (track_ms or 0) / 1000.0
+    if not track_s or cand_s is None or float(cand_s) <= 0:
+        return None, None
+    delta = abs(track_s - float(cand_s))
+    return delta, delta / track_s * 100.0
 
 
 def _duration_score(track_ms, cand_s):
     track_s = (track_ms or 0) / 1000.0
-    if not track_s or cand_s is None or cand_s <= 0:
+    delta, pct = _duration_delta(track_ms, cand_s)
+    if delta is None:
         return 55.0
-    delta = abs(track_s - float(cand_s))
-    k = 0.1 if track_s < 1800.0 else 0.02
-    return min(100.0, 2.718281828 ** (-k * delta) * 100.0)
+    # Banded tolerance instead of an exponential: a 25-second-overshoot
+    # "live version" must not survive next to an exact studio copy.
+    if delta <= max(3.0, track_s * 0.01):
+        return 100.0
+    if pct <= 3.0:
+        return 90.0
+    if pct <= 5.0:
+        return 75.0
+    if pct <= 10.0:
+        return 50.0
+    return 25.0
 
 
 def rank_candidates(track_json, candidates_json, strictness=1):
@@ -396,11 +457,19 @@ def rank_candidates(track_json, candidates_json, strictness=1):
             name_floor = {0: 50.0, 1: 60.0, 2: 75.0}.get(strictness, 60.0)
             if name < name_floor:
                 continue
-            artist_s = _artist_score(artist, cand.get("uploader") or cand.get("channel") or "", cand_title)
+            artist_s = _artist_score(
+                artist,
+                cand.get("uploader") or "",
+                cand.get("channel") or "",
+                cand_title,
+            )
             # Long-form uploads (audiobooks) live on channels that are not the
             # author — the artist signal is weak there; the title carries it.
             artist_floor = {0: 0.0, 1: 40.0, 2: 60.0}.get(strictness, 40.0)
             if artist_s < artist_floor and not (long_form and strictness < 2):
+                continue
+            _, dur_pct = _duration_delta(duration_ms, cand.get("duration"))
+            if strictness == 2 and dur_pct is not None and dur_pct > 10.0:
                 continue
             dur = _duration_score(duration_ms, cand.get("duration"))
             if long_form:
