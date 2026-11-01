@@ -1,4 +1,3 @@
-<div align="center">
 
 <img src="app/src/main/res/drawable-nodpi/seal_mascot.png" width="96" alt="Sleeve app icon">
 
@@ -147,3 +146,6 @@ Sleeve is GPL-3.0, as are Seal and Ghost Downloader. N_m3u8DL-RE is MIT.
 See [THIRD_PARTY.md](THIRD_PARTY.md) for the complete list of bundled
 components and licenses. Sleeve is an independent project and is not endorsed
 by Seal, Ghost Downloader, yt-dlp, or gallery-dl.
+<img width="1080" height="2152" alt="72198" src="https://github.com/user-attachments/assets/52bc49b3-ec03-43a4-a347-486b1b9e41ae" />
+<div align="center">
+
