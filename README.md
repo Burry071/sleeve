@@ -138,8 +138,8 @@ for tagged releases.
 
 Bug reports and feature requests go to the
 [issue tracker](https://github.com/Burry071/sleeve/issues). Pull requests are
-welcome — engine work follows the architecture notes in
-[BLUEPRINT.md](BLUEPRINT.md) and [engine-ghost](engine-ghost).
+welcome — engine work follows the notes in
+[engine-ghost](engine-ghost).
 
 ## License and attribution
 
