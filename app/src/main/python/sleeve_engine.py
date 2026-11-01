@@ -574,7 +574,7 @@ def instagram_embed(url):
         target = None
         is_video = False
 
-        video_json = re.search(r'"video_url":"((?:[^"\]|\.)*)"', body)
+        video_json = re.search(r'"video_url":"((?:[^"\\]|\\.)*)"', body)
         og_video = re.search(r'property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)', body)
         raw_video = video_json.group(1) if video_json else og_video.group(1) if og_video else None
         if raw_video:
