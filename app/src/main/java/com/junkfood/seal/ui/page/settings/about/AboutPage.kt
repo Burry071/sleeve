@@ -9,6 +9,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material.icons.outlined.UpdateDisabled
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,6 +57,7 @@ private const val TAG = "AboutPage"
 fun AboutPage(
     onNavigateBack: () -> Unit,
     onNavigateToCreditsPage: () -> Unit,
+    onNavigateToUpdatePage: () -> Unit,
 ) {
     val scrollBehavior =
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
@@ -125,6 +127,13 @@ fun AboutPage(
                             ToastUtil.makeToast(R.string.info_copied)
                         }
                         PreferenceItem(
+                            title = stringResource(R.string.auto_update),
+                            description = stringResource(R.string.check_for_updates_desc),
+                            icon = Icons.Outlined.Update,
+                        ) {
+                            onNavigateToUpdatePage()
+                        }
+                        PreferenceItem(
                             title = "Package name",
                             description = context.packageName
                         ) {
@@ -152,7 +161,7 @@ fun AutoUpdateUnavailableDialog(onDismissRequest: () -> Unit = {}) {
         val startIndex = text.indexOf(hyperLinkText)
         val endIndex = startIndex + hyperLinkText.length
         addUrlAnnotation(
-            UrlAnnotation("https://github.com/JunkFood02/Seal/releases/latest"),
+            UrlAnnotation("https://github.com/Burry071/sleeve/releases/latest"),
             start = startIndex,
             end = endIndex,
         )

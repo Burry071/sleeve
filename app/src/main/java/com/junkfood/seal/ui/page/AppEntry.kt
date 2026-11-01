@@ -23,7 +23,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -65,6 +67,7 @@ import com.junkfood.seal.ui.page.settings.network.NetworkPreferences
 import com.junkfood.seal.ui.page.settings.network.WebViewPage
 import com.junkfood.seal.ui.page.settings.troubleshooting.TroubleShootingPage
 import com.junkfood.seal.ui.page.videolist.VideoListPage
+import com.junkfood.seal.util.AppUpdateManager
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -79,6 +82,7 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val view = LocalView.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val windowWidth = LocalWindowWidthState.current
     val sheetState by dialogViewModel.sheetStateFlow.collectAsStateWithLifecycle()
     val cookiesViewModel: CookiesViewModel = koinViewModel()
@@ -167,17 +171,15 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
                 )
             }
 
-            AppUpdater()
             YtdlpUpdater()
 
-    // In-app update check against GitHub Releases; the banner on the home
-    // screen handles download and install from here.
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(6_000)
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            com.junkfood.seal.util.AppUpdateManager.check(context)
-        }
-    }
+            // Re-checks whenever the app comes back to the foreground, so a
+            // release published while it was open still raises the banner.
+            LaunchedEffect(lifecycleOwner) {
+                lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    AppUpdateManager.checkIfStale(context)
+                }
+            }
         }
     }
 }
@@ -209,6 +211,7 @@ fun NavGraphBuilder.settingsGraph(
             AboutPage(
                 onNavigateBack = onNavigateBack,
                 onNavigateToCreditsPage = { onNavigateTo(Route.CREDITS) },
+                onNavigateToUpdatePage = { onNavigateTo(Route.AUTO_UPDATE) },
             )
         }
         animatedComposable(Route.CREDITS) { CreditsPage(onNavigateBack) }

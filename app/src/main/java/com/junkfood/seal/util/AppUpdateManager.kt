@@ -27,7 +27,13 @@ object AppUpdateManager {
     private const val TAG = "AppUpdateManager"
     private const val REPO = "Burry071/sleeve"
     private const val APK_ASSET = "Sleeve-generic-release.apk"
-    private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
+    private const val API_URL = "https://api.github.com/repos/$REPO/releases?per_page=30"
+
+    // Anchored at the start but not the end: debug builds append "-debug"
+    // (and F-Droid builds "-(F-Droid)"), which must still compare as beta.N
+    // instead of falling back to 0.0.0 and flagging the same release as new.
+    private val VERSION_RE =
+        Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)\.?(\d+))?""")
 
     sealed interface State {
         data object Idle : State
@@ -42,6 +48,9 @@ object AppUpdateManager {
     private val mutableState = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = mutableState.asStateFlow()
 
+    private const val CHECK_INTERVAL_MS = 30 * 60 * 1000L
+    @Volatile private var lastCheckAt = 0L
+
     private data class VersionTuple(
         val major: Long,
         val minor: Long,
@@ -51,34 +60,46 @@ object AppUpdateManager {
     )
 
     /** Compares "2.0.0-beta.1"-style versions: numbers first, then channel rank. */
-    fun isNewer(candidate: String, current: String): Boolean =
-        compare(parseVersion(candidate), parseVersion(current)) > 0
+    fun isNewer(candidate: String, current: String): Boolean {
+        val candidateTuple = parseVersionOrNull(candidate) ?: return false
+        val currentTuple = parseVersionOrNull(current) ?: return false
+        return compare(candidateTuple, currentTuple) > 0
+    }
 
-    private fun parseVersion(v: String): VersionTuple {
-        val (base, pre) = v.split('-', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
-        val nums = base.split('.').map { it.filter { c -> c.isDigit() }.toLongOrNull() ?: 0L }
+    private fun parseVersionOrNull(v: String): VersionTuple? {
+        val match = VERSION_RE.find(v.trim()) ?: return null
+        val (major, minor, patch, pre, build) = match.destructured
         val channelRank =
             when {
                 pre.isEmpty() -> 4L
-                pre.startsWith("rc") -> 3L
-                pre.startsWith("beta") -> 2L
+                pre.startsWith("rc", ignoreCase = true) -> 3L
+                pre.startsWith("beta", ignoreCase = true) -> 2L
                 else -> 1L
             }
-        val build = pre.substringAfter('.').filter { c -> c.isDigit() }.toLongOrNull() ?: 0L
         return VersionTuple(
-            nums.getOrElse(0) { 0L },
-            nums.getOrElse(1) { 0L },
-            nums.getOrElse(2) { 0L },
+            major.toLongOrNull() ?: return null,
+            minor.toLongOrNull() ?: return null,
+            patch.toLongOrNull() ?: 0L,
             channelRank,
-            build,
+            build.filter { it.isDigit() }.toLongOrNull() ?: 0L,
         )
     }
 
     private fun compare(a: VersionTuple, b: VersionTuple): Int =
         compareValuesBy(a, b, { it.major }, { it.minor }, { it.patch }, { it.channelRank }, { it.build })
 
+    /**
+     * Foreground check, throttled so returning to the app picks up a release
+     * published while it was open without polling GitHub on every resume.
+     */
+    suspend fun checkIfStale(context: Context) {
+        if (System.currentTimeMillis() - lastCheckAt < CHECK_INTERVAL_MS) return
+        check(context)
+    }
+
     suspend fun check(context: Context) {
         if (mutableState.value is State.Downloading || mutableState.value is State.Ready) return
+        lastCheckAt = System.currentTimeMillis()
         mutableState.value = State.Checking
         withContext(Dispatchers.IO) {
             runCatching {
@@ -91,21 +112,45 @@ object AppUpdateManager {
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 15_000
                 conn.setRequestProperty("Accept", "application/vnd.github+json")
+                val code = conn.responseCode
+                if (code !in 200..299) error("GitHub API returned $code")
                 val body = conn.inputStream.use { it.readBytes().decodeToString() }
-                val release = Json.parseToJsonElement(body).jsonObject
-                val tag = release["tag_name"]!!.jsonPrimitive.content.removePrefix("v")
-                val apkUrl =
-                    release["assets"]!!.jsonArray
-                        .map { it.jsonObject }
-                        .firstOrNull { it["name"]!!.jsonPrimitive.content == APK_ASSET }
-                        ?.get("browser_download_url")
-                        ?.jsonPrimitive
-                        ?.content
+                val releases = Json.parseToJsonElement(body).jsonArray.map { it.jsonObject }
 
-                if (!isNewer(tag, current)) {
-                    State.UpToDate
-                } else if (apkUrl != null) {
-                    State.Available(tag, apkUrl)
+                // /releases/latest is a single pointer: a tag that is not a
+                // version (or a release without the APK) silently hides newer
+                // builds. Scan the list and keep the newest real release APK.
+                val currentVersion =
+                    parseVersionOrNull(current) ?: VersionTuple(0, 0, 0, 4, 0)
+                val best =
+                    releases
+                        .asSequence()
+                        .filter { it["draft"]?.jsonPrimitive?.content != "true" }
+                        .mapNotNull { release ->
+                            val tag =
+                                release["tag_name"]
+                                    ?.jsonPrimitive
+                                    ?.content
+                                    ?.removePrefix("v")
+                                    ?: return@mapNotNull null
+                            val version = parseVersionOrNull(tag) ?: return@mapNotNull null
+                            val apkUrl =
+                                release["assets"]
+                                    ?.jsonArray
+                                    ?.map { it.jsonObject }
+                                    ?.firstOrNull {
+                                        it["name"]?.jsonPrimitive?.content == APK_ASSET
+                                    }
+                                    ?.get("browser_download_url")
+                                    ?.jsonPrimitive
+                                    ?.content
+                                    ?: return@mapNotNull null
+                            Triple(tag, version, apkUrl)
+                        }
+                        .maxWithOrNull { a, b -> compare(a.second, b.second) }
+
+                if (best != null && compare(best.second, currentVersion) > 0) {
+                    State.Available(best.first, best.third)
                 } else {
                     State.UpToDate
                 }
