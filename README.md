@@ -3,6 +3,7 @@
 # Sleeve
 
 ### A Seal that shed its skin — a downloader for (almost) everything, with a multi-connection engine inside
+[![Get it on Orion Store](https://raw.githubusercontent.com/RookieEnough/Orion-Store/refs/heads/main/assets/orion-badge.png)](https://rookieenough.github.io/Orion-Data/app/?id=sleeve)
 
 Sleeve started as a fork of [Seal](https://github.com/JunkFood02/Seal) (GPL-3.0),
 a Material You yt-dlp frontend. It now carries an embedded download engine built
