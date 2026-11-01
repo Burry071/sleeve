@@ -8,16 +8,19 @@ import com.junkfood.seal.download.Task
 import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
+import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
+import com.junkfood.seal.util.PlaylistEntry
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
 import com.junkfood.seal.util.PreferenceUtil.getString
+import com.junkfood.seal.util.SleeveQuickDownload
 import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
@@ -318,68 +321,14 @@ private val VIDEO_FIRST_HOSTS: Regex =
         if (resolveThrottled("gallery")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
-                // Refresh the netscape cookies.txt from captured WebView logins
-                // so auth-walled sites (Instagram, Reddit, ...) see the session.
-                val cookiesFile =
-                    runCatching {
-                        DownloadUtil.getCookiesContentFromDatabase().mapCatching { content ->
-                            FileUtil.writeContentToFile(
-                                content,
-                                App.context.getCookiesFile(),
-                            )
-                            App.context.getCookiesFile().absolutePath
-                        }.getOrDefault("")
-                    }.getOrDefault("")
-                val resolved =
-                    GhostEngine.galleryResolve(action.url, cookiesFile).mapCatching { (site, items) ->
-                        if (items.isNotEmpty()) {
-                            "gallery:$site" to items
-                        } else {
-                            // No site module claimed a match, or it yielded nothing:
-                            // sniff the page itself for direct media candidates.
-                            "sniff" to GhostEngine.sniffMedia(action.url).getOrDefault(emptyList())
-                        }
-                    }
-                resolved
-                    .onSuccess { (source, items) ->
-                        Log.i(TAG, "gallery resolved source=$source items=${items.size}")
+                SleeveQuickDownload.enqueue(App.context, action.url, downloader)
+                    .onSuccess { (source, queued) ->
                         withContext(Dispatchers.Main) {
-                            if (items.isEmpty()) {
-                                mSheetStateFlow.update {
-                                    SheetState.Error(
-                                        action,
-                                        IllegalStateException("no media found on this page"),
-                                    )
-                                }
-                            } else {
-                                items.forEach { item ->
-                                    // Direct lane: name the file and mark the task
-                                    // so a failed extraction feeds the engine handoff.
-                                    val baseName =
-                                        item.filename
-                                            .ifBlank {
-                                                item.url.substringBefore('?')
-                                                    .substringAfterLast('/')
-                                                    .substringBeforeLast('.')
-                                            }
-                                            .substringBeforeLast('.')
-                                    val preferences =
-                                        DownloadUtil.DownloadPreferences.createFromPreferences()
-                                            .copy(
-                                                galleryDirect = true,
-                                                newTitle = baseName,
-                                                formatIdString = "direct",
-                                            )
-                                    downloader.enqueue(
-                                        Task(url = item.url, preferences = preferences)
-                                    )
-                                }
-                                resetSelectionState()
-                                ToastUtil.makeToast(
-                                    App.context.getString(R.string.gallery_items_queued, items.size, source),
-                                )
-                                hideDialog()
-                            }
+                            resetSelectionState()
+                            ToastUtil.makeToast(
+                                App.context.getString(R.string.gallery_items_queued, queued, source),
+                            )
+                            hideDialog()
                         }
                     }
                     .onFailure { th ->
@@ -462,32 +411,38 @@ private val VIDEO_FIRST_HOSTS: Regex =
                             .joinToString(separator = " ")
                             .let { Regex("\\s+").replace(it, " ").trim() }
                     // YouTube Music pool first (real artist uploads, better
-                    // audio); plain YouTube search is the fallback.
-                    val candidates =
+                    // audio). When the best match scores low, widen to a plain
+                    // YouTube search and rank both pools together before giving up.
+                    fun fetch(pool: String): List<PlaylistEntry> =
                         DownloadUtil.getPlaylistOrVideoInfo(
-                                playlistURL = "ytmsearch5:$query",
+                                playlistURL = "$pool:$query",
                                 downloadPreferences = preferences,
                             )
                             .map { it as? PlaylistResult }
                             .getOrElse { null }
                             ?.entries
-                            ?.takeIf { it.isNotEmpty() }
-                            ?: DownloadUtil.getPlaylistOrVideoInfo(
-                                    playlistURL = "ytsearch5:$query",
-                                    downloadPreferences = preferences,
-                                )
-                                .getOrThrow()
-                                .run {
-                                    (this as? PlaylistResult)?.entries
-                                        ?: throw IllegalStateException("no candidates")
-                                }
-                    val best =
+                            .orEmpty()
+
+                    fun rank(candidates: List<PlaylistEntry>) =
                         GhostEngine.rankCandidates(
                                 track = track,
                                 candidatesJson = json.encodeToString(candidates),
                                 strictness = RANKING_STRICTNESS.getInt(),
                             )
                             .getOrThrow()
+
+                    val musicPool = fetch("ytmsearch5")
+                    val musicBest = if (musicPool.isNotEmpty()) rank(musicPool) else null
+
+                    val best =
+                        if (musicBest == null || musicBest.score < 0.5) {
+                            val widePool = fetch("ytsearch10")
+                            val wideBest = if (widePool.isNotEmpty()) rank(widePool) else null
+                            listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
+                                ?: throw IllegalStateException("no candidates")
+                        } else {
+                            musicBest
+                        }
                     val url =
                         best.url.ifBlank {
                             "https://www.youtube.com/watch?v=" + best.id

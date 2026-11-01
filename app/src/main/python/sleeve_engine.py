@@ -537,3 +537,79 @@ def gallery_warmup():
     except Exception as e:
         print("gallery warmup find failed: %r" % (e,), file=_sys.stderr)
         return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
+
+
+def instagram_embed(url):
+    """Anonymous Instagram fallback: public posts and reels expose their media
+    on the embed page, no session needed. Tried after gallery-dl fails so
+    private posts still end in the cookies guidance instead of a dead end.
+    """
+    import re
+    import urllib.request
+
+    m = re.search(
+        r"instagram\.com/(?:[A-Za-z0-9_.]+/)?(?:p|reels?|tv)/([A-Za-z0-9_-]+)", url
+    )
+    if not m:
+        return json.dumps({"ok": False, "error": "not an instagram post url"})
+    code = m.group(1)
+
+    for path in (
+        "https://www.instagram.com/reel/%s/embed/captioned/" % code,
+        "https://www.instagram.com/p/%s/embed/captioned/" % code,
+    ):
+        try:
+            req = urllib.request.Request(
+                path,
+                headers={
+                    "User-Agent": _GALLERY_UA,
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                body = resp.read(1 << 20).decode("utf-8", "ignore")
+        except Exception:
+            continue
+
+        target = None
+        is_video = False
+
+        video_json = re.search(r'"video_url":"((?:[^"\]|\.)*)"', body)
+        og_video = re.search(r'property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)', body)
+        raw_video = video_json.group(1) if video_json else og_video.group(1) if og_video else None
+        if raw_video:
+            try:
+                target = json.loads('"%s"' % raw_video)
+            except Exception:
+                target = raw_video.replace("\u0026", "&").replace("\\/", "/")
+            is_video = True
+
+        if not target:
+            img = re.search(r'class="EmbeddedMediaImage"[^>]*src="([^"]+)"', body)
+            og_img = re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)', body)
+            raw_img = img.group(1) if img else og_img.group(1) if og_img else None
+            if raw_img:
+                target = raw_img.replace("\u0026", "&").replace("\\/", "/")
+
+        if target and target.startswith("http"):
+            ext = "mp4" if is_video else "jpg"
+            return json.dumps(
+                {
+                    "ok": True,
+                    "category": "instagram-embed",
+                    "items": [
+                        {
+                            "url": target,
+                            "filename": "instagram_%s.%s" % (code, ext),
+                            "referer": path,
+                        }
+                    ],
+                }
+            )
+
+    return json.dumps(
+        {
+            "ok": False,
+            "error": "no public media on the embed page (private post, deleted, or login required)",
+        }
+    )

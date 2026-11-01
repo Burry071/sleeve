@@ -171,6 +171,8 @@
     <string name="restart">Restart</string>
     <string name="retry">Retry</string>
     <string name="gallery_items_queued">%1$d items queued (%2$s)</string>
+    <string name="quick_download_label">Quick download</string>
+    <string name="quick_download_pushed">Quick download enabled in share sheets</string>
     <string name="gallery_auth_required">This content needs a login. Import cookies in Settings → Cookies &amp; profiles, then retry.</string>
     <string name="status_error">Error</string>
     <string name="copy_link">Copy link</string>

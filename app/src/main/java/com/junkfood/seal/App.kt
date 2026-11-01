@@ -1,11 +1,15 @@
 package com.junkfood.seal
 
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import com.junkfood.seal.QuickDownloadActivity
+import android.content.Intent
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -85,6 +89,8 @@ class App : Application() {
         clipboard = getSystemService()!!
         connectivityManager = getSystemService()!!
 
+        publishQuickDownloadShortcut(this@App)
+
         applicationScope.launch((Dispatchers.IO)) {
             try {
                 YoutubeDL.init(this@App)
@@ -147,6 +153,23 @@ class App : Application() {
             Intent(context.applicationContext, DownloadService::class.java).also { intent ->
                 context.applicationContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
             }
+        }
+
+        private fun publishQuickDownloadShortcut(context: Context) {
+            val shortcut =
+                ShortcutInfoCompat.Builder(context, "quick-download")
+                    .setShortLabel(context.getString(R.string.quick_download_label))
+                    .setLongLabel(context.getString(R.string.quick_download_label))
+                    .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+                    .setIntent(
+                        Intent(Intent.ACTION_SEND)
+                            .setClass(context, QuickDownloadActivity::class.java)
+                            .setType("text/plain")
+                            .putExtra(EXTRA_QUICK_DOWNLOAD, true),
+                    )
+                    .setCategories(setOf("com.sleeve.app.category.QUICK_DOWNLOAD"))
+                    .build()
+            ShortcutManagerCompat.addDynamicShortcuts(context, listOf(shortcut))
         }
 
         fun stopService() {

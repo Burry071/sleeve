@@ -263,6 +263,28 @@ object GhostEngine {
             obj["category"]?.jsonPrimitive?.content.orEmpty() to items
         }
 
+    /** Anonymous Instagram fallback: public post/reel embed page. */
+    fun instagramEmbed(url: String): Result<List<GalleryItem>> =
+        runCatching {
+            ensureStarted()
+            val reply = module().callAttr("instagram_embed", url).toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.content ?: "instagram embed failed")
+            }
+            obj["items"]!!.jsonArray.mapNotNull { el ->
+                runCatching {
+                    val t = el.jsonObject
+                    GalleryItem(
+                        url = t["url"]!!.jsonPrimitive.content,
+                        filename = t["filename"]?.jsonPrimitive?.content ?: "",
+                        referer = t["referer"]?.jsonPrimitive?.content ?: "",
+                        category = "instagram-embed",
+                    )
+                }.getOrNull()
+            }
+        }
+
     /** Last-resort HTML pass: og:video / twitter:player:stream / video src / m3u8+mpd. */
     fun sniffMedia(url: String): Result<List<GalleryItem>> =
         runCatching {

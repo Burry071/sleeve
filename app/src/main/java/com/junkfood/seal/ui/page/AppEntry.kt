@@ -169,6 +169,15 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
 
             AppUpdater()
             YtdlpUpdater()
+
+    // In-app update check against GitHub Releases; the banner on the home
+    // screen handles download and install from here.
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(6_000)
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.junkfood.seal.util.AppUpdateManager.check(context)
+        }
+    }
         }
     }
 }

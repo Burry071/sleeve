@@ -48,9 +48,12 @@
             android:name=".QuickDownloadActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:label="@string/title_activity_share"
+            android:label="@string/quick_download_label"
             android:launchMode="singleInstance"
             android:theme="@style/Theme.Seal.Dialog">
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts_share_target" />
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
 

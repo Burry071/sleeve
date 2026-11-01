@@ -35,9 +35,15 @@ import com.junkfood.seal.util.matchUrlFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import androidx.lifecycle.lifecycleScope
+import com.junkfood.seal.download.DownloaderV2
+import com.junkfood.seal.util.SleeveQuickDownload
+import com.junkfood.seal.util.ToastUtil
+import org.koin.android.ext.android.get
 import org.koin.androidx.viewmodel.ext.android.getViewModel
 
 private const val TAG = "QuickDownloadActivity"
+const val EXTRA_QUICK_DOWNLOAD = "quick"
 
 class QuickDownloadActivity : ComponentActivity() {
     private var sharedUrlCached: String = ""
@@ -70,6 +76,28 @@ class QuickDownloadActivity : ComponentActivity() {
 
         if (sharedUrlCached.isEmpty()) {
             finish()
+            return
+        }
+
+        if (intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)) {
+            // Share-sheet "Quick download": straight to the queue with the
+            // default pipeline, no configure dialog. The gallery route inside
+            // handles Instagram and other image sites anonymously first.
+            App.startService()
+            val url = sharedUrlCached
+            lifecycleScope.launch {
+                SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
+                    .onSuccess { (queued, source) ->
+                        ToastUtil.makeToast(
+                            getString(R.string.gallery_items_queued, queued, source),
+                        )
+                    }
+                    .onFailure {
+                        ToastUtil.makeToast(it.message ?: getString(R.string.download_error_msg))
+                    }
+                finish()
+            }
+            return
         }
 
         App.startService()
