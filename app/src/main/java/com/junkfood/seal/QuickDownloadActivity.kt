@@ -56,11 +56,13 @@ class QuickDownloadActivity : ComponentActivity() {
                 intent.dataString
             }
 
-            Intent.ACTION_SEND -> {
-                intent.getStringExtra(Intent.EXTRA_TEXT)?.let { sharedContent ->
-                    intent.removeExtra(Intent.EXTRA_TEXT)
-                    matchUrlFromSharedText(sharedContent)
-                }
+            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
+                // ACTION_SEND_MULTIPLE senders may put a list under EXTRA_TEXT,
+                // so read it as Any and only accept a String.
+                val sharedContent =
+                    (intent.extras?.get(Intent.EXTRA_TEXT) as? String)
+                        ?: (intent.extras?.get(Intent.EXTRA_HTML_TEXT) as? String)
+                sharedContent?.let { matchUrlFromSharedText(it) }
             }
 
             else -> {
@@ -75,11 +77,21 @@ class QuickDownloadActivity : ComponentActivity() {
         intent.getSharedURL()?.let { sharedUrlCached = it }
 
         if (sharedUrlCached.isEmpty()) {
+            ToastUtil.makeToast(R.string.share_fail_msg)
             finish()
             return
         }
 
-        if (intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)) {
+        // The share sheet launches this activity with a plain ACTION_SEND that
+        // carries neither the shortcut extra nor the shortcut ID, so the share
+        // action itself is the quick signal. ACTION_VIEW (open link) keeps the
+        // configure sheet.
+        if (
+            intent.action == Intent.ACTION_SEND ||
+                intent.action == Intent.ACTION_SEND_MULTIPLE ||
+                intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
+                intent.getStringExtra("android.intent.extra.shortcut.ID") == "quick-download"
+        ) {
             // Share-sheet "Quick download": straight to the queue with the
             // default pipeline, no configure dialog. The gallery route inside
             // handles Instagram and other image sites anonymously first.
