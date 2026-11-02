@@ -126,6 +126,7 @@ import com.junkfood.seal.util.DownloadType.Command
 import com.junkfood.seal.util.DownloadType.Playlist
 import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadType.entries
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.PreferenceStrings
@@ -192,6 +193,7 @@ fun DownloadDialog(
     preferences: DownloadUtil.DownloadPreferences,
     onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     state: DownloadDialogViewModel.SheetState = InputUrl,
+    onNavigateToCookies: (() -> Unit)? = null,
     onActionPost: (Action) -> Unit = {},
 ) {
     var showVideoPresetDialog by remember { mutableStateOf(false) }
@@ -217,6 +219,7 @@ fun DownloadDialog(
                     else -> {}
                 }
             },
+            onNavigateToCookies = onNavigateToCookies,
             onActionPost = onActionPost,
         )
     }
@@ -275,7 +278,12 @@ fun DownloadDialog(
 }
 
 @Composable
-private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost: (Action) -> Unit) {
+private fun ErrorPage(
+    modifier: Modifier = Modifier,
+    state: Error,
+    onActionPost: (Action) -> Unit,
+    onNavigateToCookies: (() -> Unit)? = null,
+) {
     val view = LocalView.current
     val clipboardManager = LocalClipboardManager.current
     val url =
@@ -290,6 +298,7 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
                 }
             }
         }
+    val loginWalled = state.throwable is DownloadErrorMessages.LoginRequiredError
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(
             imageVector = Icons.Outlined.ErrorOutline,
@@ -314,6 +323,18 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
         )
 
         Row(modifier = Modifier) {
+            if (loginWalled && onNavigateToCookies != null) {
+                // YTDLnis's most-praised pattern: the fix is one tap away,
+                // not a settings hunt. Closing the sheet first puts the
+                // cookie page on top of clean state.
+                Button(onClick = {
+                    onActionPost(Action.HideSheet)
+                    onNavigateToCookies()
+                }) {
+                    Text(stringResource(R.string.add_cookies))
+                }
+                Spacer(Modifier.width(8.dp))
+            }
             FilledTonalButton(onClick = { onActionPost(state.action) }) { Text("Retry") }
             Spacer(Modifier.width(8.dp))
             Button(
@@ -341,6 +362,7 @@ private fun DownloadDialogContent(
     preferences: DownloadUtil.DownloadPreferences,
     onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit,
+    onNavigateToCookies: (() -> Unit)? = null,
     onActionPost: (Action) -> Unit,
 ) {
     AnimatedContent(
@@ -401,7 +423,11 @@ private fun DownloadDialogContent(
             }
 
             is Error -> {
-                ErrorPage(state = state, onActionPost = onActionPost)
+                ErrorPage(
+                    state = state,
+                    onActionPost = onActionPost,
+                    onNavigateToCookies = onNavigateToCookies,
+                )
             }
 
             is Loading -> {

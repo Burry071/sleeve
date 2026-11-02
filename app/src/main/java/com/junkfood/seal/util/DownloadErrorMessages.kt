@@ -12,6 +12,15 @@ import com.junkfood.seal.R
  */
 object DownloadErrorMessages {
 
+    /**
+     * Typed marker for login-walled extractions: error surfaces offer a
+     * one-tap "Add cookies" deep link when they catch this type. The message
+     * is the localized [R.string.site_login_required] guidance; the cause
+     * keeps the raw extractor output for reports.
+     */
+    class LoginRequiredError(message: String, cause: Throwable) :
+        IllegalStateException(message, cause)
+
     private val loginRequired =
         Regex(
             "account authentication is required|use --cookies|--cookies-from-browser" +
@@ -43,7 +52,11 @@ object DownloadErrorMessages {
     /** Same throwable when nothing maps; otherwise a rethrow with a user-facing message. */
     fun asFriendly(throwable: Throwable): Throwable {
         val message = friendly(throwable)
-        return if (message == throwable.message) throwable
-        else IllegalStateException(message, throwable)
+        return when {
+            message == throwable.message -> throwable
+            loginRequired.containsMatchIn(throwable.message ?: "") ->
+                LoginRequiredError(message, throwable)
+            else -> IllegalStateException(message, throwable)
+        }
     }
 }
