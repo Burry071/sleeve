@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.Cookie
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Pause
@@ -640,25 +641,49 @@ fun ListItemStateText(
     }
 }
 
-/** Inline retry action rendered on failed task cards. */
+/** Inline actions rendered on failed task cards: retry, plus the one-tap
+ * cookie fix when the failure is a login wall. */
 @Composable
-fun ErrorFooter(modifier: Modifier = Modifier, onRetry: () -> Unit) {
-    FilledTonalButton(
-        onClick = onRetry,
-        modifier = modifier,
-        colors =
-            ButtonDefaults.filledTonalButtonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.RestartAlt,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(text = stringResource(R.string.retry))
+fun ErrorFooter(
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit,
+    onAddCookies: (() -> Unit)? = null,
+) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalButton(
+            onClick = onRetry,
+            colors =
+                ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.RestartAlt,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(text = stringResource(R.string.retry))
+        }
+        if (onAddCookies != null) {
+            FilledTonalButton(
+                onClick = onAddCookies,
+                colors =
+                    ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Cookie,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(text = stringResource(R.string.add_cookies))
+            }
+        }
     }
 }
 

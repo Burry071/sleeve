@@ -2,6 +2,8 @@ package com.junkfood.seal.ui.page.downloadv2.configure
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +20,7 @@ import androidx.compose.material.ModalBottomSheetValue
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -25,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,6 +75,8 @@ import com.junkfood.seal.util.AUDIO_QUALITY
 import com.junkfood.seal.util.DownloadType.Audio
 import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.NOT_SPECIFIED
+import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
@@ -114,10 +120,18 @@ fun PlaylistSelectionPage(
     val configureSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     SealModalBottomSheetM2Variant(sheetState = sheetState, sheetGesturesEnabled = false) {
-        PlaylistSelectionPageImpl(result = state.result, onDismissRequest = onBack) {
-            taskList = it
-            showConfigurationSheet = true
-        }
+        PlaylistSelectionPageImpl(
+            result = state.result,
+            onDismissRequest = onBack,
+            onConfirmSelection = {
+                taskList = it
+                showConfigurationSheet = true
+            },
+            onQuickDownloadAll = { tasks, _ ->
+                tasks.forEach(downloader::enqueue)
+                onBack()
+            },
+        )
     }
 
     val onDismissConfigurationSheet: () -> Unit = {
@@ -219,6 +233,8 @@ fun PlaylistSelectionPageImpl(
     result: PlaylistResult,
     onDismissRequest: () -> Unit = {},
     onConfirmSelection: (List<TaskFactory.TaskWithState>) -> Unit,
+    onQuickDownloadAll: (List<TaskFactory.TaskWithState>, DownloadUtil.DownloadPreferences) -> Unit =
+        { _, _ -> },
 ) {
     val view = LocalView.current
 
@@ -241,6 +257,27 @@ fun PlaylistSelectionPageImpl(
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     var showDialog by remember { mutableStateOf(false) }
     val playlistCount = result.entries?.size ?: 0
+
+    // One-tap batch quality: chip row under the selection list. Best is the
+    // default; the Audio chip takes the whole batch to extraction-only.
+    var quickResolution by remember { mutableStateOf(NOT_SPECIFIED) }
+    var quickAudioOnly by remember { mutableStateOf(false) }
+    val qualityChips = listOf(NOT_SPECIFIED, 1, 3, 4, 5)
+    val quickDownload: () -> Unit = {
+        val base = DownloadUtil.DownloadPreferences.createFromPreferences()
+        val prefs =
+            if (quickAudioOnly) base.copy(extractAudio = true)
+            else base.copy(videoResolution = quickResolution)
+        onQuickDownloadAll(
+            TaskFactory.createWithPlaylistResult(
+                playlistUrl = result.originalUrl ?: result.webpageUrl.toString(),
+                indexList = selectedItems,
+                playlistResult = result,
+                preferences = prefs,
+            ),
+            prefs,
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -291,6 +328,48 @@ fun PlaylistSelectionPageImpl(
                 verticalArrangement = Arrangement.Center,
             ) {
                 HorizontalDivider(modifier = Modifier.fillMaxWidth())
+                Row(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    qualityChips.forEach { res ->
+                        FilterChip(
+                            selected = !quickAudioOnly && quickResolution == res,
+                            onClick = {
+                                view.slightHapticFeedback()
+                                quickAudioOnly = false
+                                quickResolution = res
+                            },
+                            label = {
+                                Text(PreferenceStrings.getVideoResolutionDesc(res))
+                            },
+                        )
+                    }
+                    FilterChip(
+                        selected = quickAudioOnly,
+                        onClick = {
+                            view.slightHapticFeedback()
+                            quickAudioOnly = true
+                        },
+                        label = { Text(stringResource(R.string.extract_audio)) },
+                    )
+                }
+                Button(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                    enabled = selectedItems.isNotEmpty(),
+                    onClick = {
+                        view.slightHapticFeedback()
+                        quickDownload()
+                    },
+                ) {
+                    Text(stringResource(R.string.download_all_count).format(selectedItems.size))
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Row(
                         modifier =

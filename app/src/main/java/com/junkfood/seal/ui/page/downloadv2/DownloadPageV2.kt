@@ -112,6 +112,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.junkfood.seal.util.findURLsFromString
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.R
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
@@ -222,6 +223,7 @@ sealed interface UiAction {
 fun DownloadPageV2(
     modifier: Modifier = Modifier,
     onMenuOpen: (() -> Unit) = {},
+    onNavigateToCookies: (() -> Unit) = {},
     dialogViewModel: DownloadDialogViewModel,
     downloader: DownloaderV2 = koinInject(),
 ) {
@@ -262,6 +264,7 @@ fun DownloadPageV2(
             dialogViewModel.postAction(Action.ShowSheet())
         },
         onMenuOpen = onMenuOpen,
+        onNavigateToCookies = onNavigateToCookies,
         clipboardOffer = clipboardOffer,
         onClipboardDownload = { url ->
             lastClipboardOffer = url
@@ -335,6 +338,7 @@ fun DownloadPageV2(
             config = Config(),
             preferences = preferences,
             onPreferencesUpdate = { preferences = it },
+            onNavigateToCookies = onNavigateToCookies,
             onActionPost = { dialogViewModel.postAction(it) },
         )
     }
@@ -384,6 +388,7 @@ fun DownloadPageImplV2(
     taskDownloadStateMap: SnapshotStateMap<Task, Task.State>,
     downloadCallback: () -> Unit = {},
     onMenuOpen: (() -> Unit) = {},
+    onNavigateToCookies: (() -> Unit) = {},
     clipboardOffer: String? = null,
     onClipboardDownload: (String) -> Unit = {},
     onClipboardDismiss: () -> Unit = {},
@@ -580,8 +585,18 @@ fun DownloadPageImplV2(
                                     footerContent =
                                         if (state.downloadState is Error) {
                                             {
+                                                val errState =
+                                                    state.downloadState as Error
                                                 ErrorFooter(
-                                                    onRetry = { onActionPost(task, UiAction.Resume) }
+                                                    onRetry = { onActionPost(task, UiAction.Resume) },
+                                                    onAddCookies =
+                                                        if (
+                                                            errState.throwable is
+                                                                DownloadErrorMessages
+                                                                    .LoginRequiredError
+                                                        )
+                                                            onNavigateToCookies
+                                                        else null,
                                                 )
                                             }
                                         } else null,

@@ -160,54 +160,89 @@ object DownloadUtil {
         preferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
     ): Result<VideoInfo> {
         with(preferences) {
-            val request =
-                YoutubeDLRequest(url)
-                    .maybeRedditUserAgent(url)
-                    .apply {
-                        addOption("-o", BASENAME)
-                        // No JS runtime exists on Android, so YouTube web
-                        // clients degrade (nsig throttling, missing formats).
-                        // Native clients need no JavaScript.
-                        addOption(
-                            "--extractor-args",
-                            "youtube:player_client=android_vr,android,ios",
+            // Extraction clients rotate on failure: YouTube's bot checks and
+            // rate limits are client-specific, so a request the native clients
+            // refuse often succeeds on the TV client or yt-dlp's own default.
+            // Cancellation always stops the ladder.
+            val clientLadder =
+                when {
+                    url.contains("youtube.com", true) || url.contains("youtu.be", true) ->
+                        listOf(
+                            "android_vr,android,ios", // native clients, no JS needed
+                            "tv", // yt-dlp TV client, different challenge path
+                            null, // yt-dlp's own client selection
                         )
-                        if (restrictFilenames) {
-                            addOption("--restrict-filenames")
-                        }
-                    if (extractAudio) {
-                        addOption("-x")
-                    }
-                    applyFormatSorter(this@with, toFormatSorter())
-                    if (cookies) {
-                        enableCookies(userAgentString)
-                    }
-                    if (proxy) {
-                        enableProxy(proxyUrl)
-                    }
-                    if (forceIpv4) {
-                        addOption("-4")
-                    }
-                    /*            if (debug) {
-                        addOption("-v")
-                    }*/
-                    if (autoSubtitle) {
-                        addOption("--write-auto-subs")
-                        if (!autoTranslatedSubtitles) {
-                            addOption("--extractor-args", "youtube:skip=translated_subs")
-                        }
-                    }
-                    if (playlistIndex != null) {
-                        addOption("--playlist-items", playlistIndex)
-                        addOption("--dump-json")
-                    } else {
-                        addOption("--dump-single-json")
-                    }
-                    addOption("-R", "1")
-                    addOption("--no-playlist")
-                    addOption("--socket-timeout", "5")
+
+                    else -> listOf<String?>(null)
                 }
-            return getVideoInfo(request, taskKey)
+
+            var lastFailure: Throwable? = null
+            clientLadder.forEach { clients ->
+                // The download stage re-extracts with the same clients that
+                // won here; a mismatch could fail a task that just worked.
+                if (taskKey != null && clients != null) {
+                    successfulExtractionClients[taskKey] = clients
+                }
+                val request =
+                    YoutubeDLRequest(url)
+                        .maybeRedditUserAgent(url)
+                        .apply {
+                            addOption("-o", BASENAME)
+                            if (clients != null) {
+                                // No JS runtime exists on Android, so YouTube web
+                                // clients degrade (nsig throttling, missing formats).
+                                // Native clients need no JavaScript.
+                                addOption(
+                                    "--extractor-args",
+                                    "youtube:player_client=$clients",
+                                )
+                            }
+                            if (restrictFilenames) {
+                                addOption("--restrict-filenames")
+                            }
+                            if (extractAudio) {
+                                addOption("-x")
+                            }
+                            applyFormatSorter(this@with, toFormatSorter())
+                            if (cookies) {
+                                enableCookies(userAgentString)
+                            }
+                            if (proxy) {
+                                enableProxy(proxyUrl)
+                            }
+                            if (forceIpv4) {
+                                addOption("-4")
+                            }
+                            /*            if (debug) {
+                                addOption("-v")
+                            }*/
+                            if (autoSubtitle) {
+                                addOption("--write-auto-subs")
+                                if (!autoTranslatedSubtitles) {
+                                    addOption("--extractor-args", "youtube:skip=translated_subs")
+                                }
+                            }
+                            if (playlistIndex != null) {
+                                addOption("--playlist-items", playlistIndex)
+                                addOption("--dump-json")
+                            } else {
+                                addOption("--dump-single-json")
+                            }
+                            addOption("-R", "1")
+                            addOption("--no-playlist")
+                            addOption("--socket-timeout", "5")
+                        }
+                val result = getVideoInfo(request, taskKey)
+                if (result.isSuccess) return result
+                lastFailure = result.exceptionOrNull()
+                if (lastFailure is YoutubeDL.CanceledException) return Result.failure(lastFailure!!)
+                Log.w(
+                    TAG,
+                    "extraction failed${clients?.let { " (client $it)" } ?: ""}, " +
+                        "ladder continues: ${lastFailure?.message?.take(160)}",
+                )
+            }
+            return Result.failure(lastFailure ?: IllegalStateException("extraction failed"))
         }
     }
 
@@ -710,6 +745,9 @@ object DownloadUtil {
     /** @return true when an engine task was registered for this id and cancelled. */
     fun cancelGhostTask(taskId: String): Boolean =
         ghostTasks.remove(taskId)?.also { GhostEngine.cancel(it) } != null
+
+    /** Client set that last won extraction, per task key (YouTube ladder). */
+    private val successfulExtractionClients = ConcurrentHashMap<String, String>()
 
     /** Live N_m3u8DL-RE processes by task id, so cancel can kill them. */
     private val nreProcesses = ConcurrentHashMap<String, Process>()
@@ -1256,11 +1294,14 @@ object DownloadUtil {
             )?.let { return it }
 
             val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
-            // Native YouTube clients: no JS runtime on Android, and the
-            // download request must re-extract with the same clients.
+            // The download request re-extracts, so it must use the client set
+            // that won during info fetch; native clients are the default (no
+            // JS runtime on Android makes web clients degrade).
+            val clients =
+                successfulExtractionClients[taskId] ?: "android_vr,android,ios"
             request.addOption(
                 "--extractor-args",
-                "youtube:player_client=android_vr,android,ios",
+                "youtube:player_client=$clients",
             )
             val pathBuilder = StringBuilder()
             val outputBuilder = StringBuilder()
