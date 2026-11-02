@@ -8,9 +8,10 @@ import com.junkfood.seal.download.Task
 import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
-import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.PlaylistEntry
@@ -92,7 +93,16 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     sealed interface SheetState {
         data object InputUrl : SheetState
 
-        data class Configure(val urlList: List<String>) : SheetState
+        /**
+         * Seal's DownloadSettingDialog equivalent: type chips + toggles + Download.
+         * [gallery] is set when the URL resolved through the gallery/embed path —
+         * the download then runs through the ghost-aware enqueue with the
+         * resolved direct items instead of yt-dlp extraction.
+         */
+        data class Configure(
+            val urlList: List<String>,
+            val gallery: SleeveQuickDownload.Resolved? = null,
+        ) : SheetState
 
         data class Loading(val taskKey: String, val job: Job) : SheetState
 
@@ -162,6 +172,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         get() = sheetStateFlow.value
 
     fun postAction(action: Action) {
+        // An explicit Retry from the error page must not be swallowed by the
+        // 3s resolve throttle (fast failures would otherwise make Retry a
+        // silent no-op).
+        if ((sheetState as? SheetState.Error)?.action == action) {
+            lastResolveAt.clear()
+        }
         with(action) {
             when (this) {
                 is Action.ProceedWithURLs -> proceedWithUrls(this)
@@ -182,15 +198,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun proceedWithUrls(action: Action.ProceedWithURLs) {
-        action.urlList.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
-            fetchSpotify(Action.FetchSpotify(spotifyUrl))
-            return
-        }
-        action.urlList.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
-            fetchAudible(Action.FetchAudible(audibleUrl))
-            return
-        }
-        mSheetStateFlow.update { SheetState.Configure(action.urlList) }
+        routeUrls(action.urlList)
     }
 
     private fun fetchPlaylist(action: Action.FetchPlaylist) {
@@ -221,7 +229,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         }
                     }
                     .onFailure { th ->
-                        mSheetStateFlow.update { SheetState.Error(action = action, throwable = th) }
+                        mSheetStateFlow.update {
+                            SheetState.Error(action = action, throwable = DownloadErrorMessages.asFriendly(th))
+                        }
                     }
             }
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchPlaylist_$url", job = job) }
@@ -247,7 +257,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, throwable = th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, throwable = DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -255,10 +267,78 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchFormat_$url", job = job) }
     }
 
+    private var pendingGallery: SleeveQuickDownload.Resolved? = null
+
     private fun downloadWithPreset(
         urlList: List<String>,
         preferences: DownloadUtil.DownloadPreferences,
     ) {
+        val gallery = pendingGallery
+        if (gallery != null && urlList.firstOrNull() == gallery.url) {
+            pendingGallery = null
+            viewModelScope.launch(Dispatchers.IO) {
+                SleeveQuickDownload.enqueueResolved(
+                        downloader,
+                        gallery,
+                        extractAudio = preferences.extractAudio,
+                    )
+                    .onSuccess { (queued, source) ->
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(
+                                    R.string.gallery_items_queued,
+                                    queued,
+                                    source,
+                                ),
+                            )
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th -> galleryError(Action.FetchGallery(gallery.url), th) }
+            }
+            return
+        }
+        // Instagram without cookies fails on yt-dlp's login wall, but the
+        // anonymous embed ladder in SleeveQuickDownload.resolve serves most
+        // reels/posts — route through it when no cookie session exists, and
+        // fall back to plain yt-dlp if it comes up empty.
+        val instagramUrl =
+            urlList.firstOrNull {
+                it.contains("instagram.com", true) || it.contains("instagr.am", true)
+            }
+        if (instagramUrl != null && !preferences.cookies) {
+            viewModelScope.launch(Dispatchers.IO) {
+                SleeveQuickDownload.resolve(App.context, instagramUrl)
+                    .mapCatching { resolved ->
+                        SleeveQuickDownload.enqueueResolved(
+                                downloader,
+                                resolved,
+                                extractAudio = preferences.extractAudio,
+                            )
+                            .getOrThrow()
+                    }
+                    .onSuccess { (queued, source) ->
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(
+                                    R.string.gallery_items_queued,
+                                    queued,
+                                    source,
+                                ),
+                            )
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th ->
+                        Log.e(TAG, "instagram resolve failed, falling back to yt-dlp: ${th.message}")
+                        urlList.forEach {
+                            downloader.enqueue(Task(url = it, preferences = preferences))
+                        }
+                        withContext(Dispatchers.Main) { hideDialog() }
+                    }
+            }
+            return
+        }
         urlList.forEach { downloader.enqueue(Task(url = it, preferences = preferences)) }
         hideDialog()
     }
@@ -279,6 +359,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun hideDialog() {
         mSheetValueFlow.update { SheetValue.Hidden }
+        // A dismissed sheet must not leave a resolved gallery behind: a later
+        // DownloadWithPreset whose first URL matches would otherwise take the
+        // direct lane with stale items.
+        pendingGallery = null
         when (sheetState) {
             is SheetState.Loading -> {
                 cancel()
@@ -290,92 +374,175 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun showDialog(action: Action.ShowSheet) {
         val urlList = action.urlList
-        urlList?.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
-            mSheetValueFlow.update { SheetValue.Expanded }
-            fetchSpotify(Action.FetchSpotify(spotifyUrl))
-            return
-        }
-        urlList?.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
-            mSheetValueFlow.update { SheetValue.Expanded }
-            fetchAudible(Action.FetchAudible(audibleUrl))
-            return
-        }
-        urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
-            // gallery-dl check runs on IO (first call loads ~300 site modules);
-            // a hit routes to the gallery flow, a miss falls through to Configure.
-            mSheetValueFlow.update { SheetValue.Expanded }
-            val job =
-                viewModelScope.launch(Dispatchers.IO) {
-                    val matched =
-                        runCatching { GhostEngine.galleryMatches(candidate) }
-                            .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
-                            .getOrDefault(false)
-                    Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
-                    withContext(Dispatchers.Main) {
-                        if (matched) {
-                            fetchGallery(Action.FetchGallery(candidate))
-                        } else {
-                            mSheetStateFlow.update { SheetState.Configure(urlList) }
-                        }
-                    }
-                }
-            mSheetStateFlow.update {
-                SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
-            }
-            return
-        }
-        if (!urlList.isNullOrEmpty()) {
-            mSheetStateFlow.update { SheetState.Configure(urlList) }
-        } else {
+        if (urlList.isNullOrEmpty()) {
             mSheetStateFlow.update { SheetState.InputUrl }
+            mSheetValueFlow.update { SheetValue.Expanded }
+            return
         }
         mSheetValueFlow.update { SheetValue.Expanded }
+        routeUrls(urlList)
+    }
+
+    /**
+     * The one routing decision for every entry, share target and in-app paste
+     * alike. Metadata lanes claim exclusive metadata lists. Resolve lanes
+     * (reddit, gallery-dl) only claim a lone URL: a multi-URL share keeps
+     * every link in one configure sheet instead of silently dropping
+     * siblings, and the yt-dlp lane handles each link as its own task.
+     */
+    private fun routeUrls(urlList: List<String>) {
+        if (urlList.all { isSpotifyUrl(it) }) {
+            fetchSpotify(Action.FetchSpotify(urlList.first()))
+            return
+        }
+        if (urlList.all { isAudibleUrl(it) }) {
+            fetchAudible(Action.FetchAudible(urlList.first()))
+            return
+        }
+        if (urlList.size == 1) {
+            val url = urlList.first()
+            if (redditPreRoute(urlList)) return
+            if (!isVideoFirstHost(url)) {
+                galleryPreRoute(url)
+                return
+            }
+        }
+        mSheetStateFlow.update { SheetState.Configure(urlList) }
+    }
+
+    /** gallery-dl claim check on IO; a hit goes to the gallery lane, a miss
+     * (or an unloaded module registry) falls through to the configure sheet. */
+    private fun galleryPreRoute(url: String) {
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                val matched =
+                    runCatching { GhostEngine.galleryMatches(url) }
+                        .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
+                        .getOrDefault(false)
+                Log.i(TAG, "gallery pre-route: candidate=$url matched=$matched")
+                withContext(Dispatchers.Main) {
+                    if (matched) {
+                        fetchGallery(Action.FetchGallery(url))
+                    } else {
+                        mSheetStateFlow.update { SheetState.Configure(listOf(url)) }
+                    }
+                }
+            }
+        mSheetStateFlow.update { SheetState.Loading(taskKey = "Gallery_$url", job = job) }
     }
 
 private val VIDEO_FIRST_HOSTS: Regex =
-    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it")
+    Regex(
+        "youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com" +
+            "|reddit\\.com|redd\\.it|instagram\\.com|instagr\\.am",
+    )
 
-    /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
+    /** Hosts whose video flows yt-dlp (with the ghost fallback) serves well
+     * skip the gallery-dl pre-route entirely — instagram above all: the
+     * share dialog stays configure-with-options and the download runs the
+     * same pipeline an in-app paste would.  */
     private fun isVideoFirstHost(url: String) =
         VIDEO_FIRST_HOSTS
             .containsMatchIn(url)
 
-    private fun fetchGallery(action: Action.FetchGallery) {
-        if (resolveThrottled("gallery")) return
+    /**
+     * Reddit pre-route: the anonymous JSON resolver fetches the post's media
+     * (video manifest, images, galleries) without any login. Success lands in
+     * the configure sheet on the direct lane — the same pipeline as gallery
+     * items; any failure quietly falls through to the plain yt-dlp configure
+     * sheet, never a dead end.
+     *
+     * @return true when a reddit URL was claimed and resolution is running.
+     */
+    private fun redditPreRoute(urlList: List<String>): Boolean {
+        val candidate = urlList.firstOrNull { RedditResolver.isPostUrl(it) } ?: return false
+        if (resolveThrottled("reddit")) {
+            // Claimed but throttled: still land the user in the configure
+            // sheet instead of silently doing nothing.
+            mSheetStateFlow.update { SheetState.Configure(urlList) }
+            return true
+        }
+        mSheetValueFlow.update { SheetValue.Expanded }
         val job =
             viewModelScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.enqueue(App.context, action.url, downloader)
-                    .onSuccess { (source, queued) ->
+                RedditResolver.resolve(candidate)
+                    .onSuccess { items ->
+                        val resolved =
+                            SleeveQuickDownload.Resolved(candidate, items, "reddit")
                         withContext(Dispatchers.Main) {
-                            resetSelectionState()
-                            ToastUtil.makeToast(
-                                App.context.getString(R.string.gallery_items_queued, queued, source),
-                            )
-                            hideDialog()
+                            pendingGallery = resolved
+                            mSheetStateFlow.update {
+                                SheetState.Configure(listOf(candidate), gallery = resolved)
+                            }
                         }
                     }
                     .onFailure { th ->
-                        Log.e(TAG, "gallery resolve failed: ${th.message}")
-                        val message = th.message ?: ""
-                        val friendly =
-                            if (
-                                Regex(
-                                    "401|403|429|login required|login page|redirect to login|rate.?limit",
-                                    RegexOption.IGNORE_CASE,
-                                )
-                                    .containsMatchIn(message)
-                            ) {
-                                App.context.getString(R.string.gallery_auth_required)
-                            } else {
-                                message
-                            }
+                        Log.e(TAG, "reddit resolve failed, degrading: ${th.message}")
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
+                            mSheetStateFlow.update { SheetState.Configure(urlList) }
+                        }
+                    }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "Reddit_$candidate", job = job)
+        }
+        return true
+    }
+
+    private fun fetchGallery(action: Action.FetchGallery) {
+        if (resolveThrottled("gallery")) {
+            // The pre-route already showed Loading for this URL: degrading to
+            // the configure sheet beats a spinner that nothing will ever
+            // replace.
+            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
+            return
+        }
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                SleeveQuickDownload.resolve(App.context, action.url)
+                    .onSuccess { resolved ->
+                        withContext(Dispatchers.Main) {
+                            pendingGallery = resolved
+                            mSheetStateFlow.update {
+                                SheetState.Configure(listOf(resolved.url), gallery = resolved)
+                            }
+                        }
+                    }
+                    .onFailure { th ->
+                        // Not a dead end: degrade to the plain configure
+                        // sheet so the download runs the same pipeline an
+                        // in-app paste would (yt-dlp + ghost/ladder).
+                        Log.e(TAG, "gallery resolve failed, degrading: ${th.message}")
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(R.string.gallery_resolve_fallback),
+                            )
+                            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
                         }
                     }
             }
         mSheetStateFlow.update {
             SheetState.Loading(taskKey = "Gallery_${action.url}", job = job)
+        }
+    }
+
+    private suspend fun galleryError(action: Action.FetchGallery, th: Throwable) {
+        Log.e(TAG, "gallery resolve failed: ${th.message}")
+        val message = th.message ?: ""
+        val friendly =
+            if (
+                Regex(
+                        "401|403|429|login required|login page|redirect to login|rate.?limit",
+                        RegexOption.IGNORE_CASE,
+                    )
+                    .containsMatchIn(message)
+            ) {
+                App.context.getString(R.string.gallery_auth_required)
+            } else {
+                message
+            }
+        withContext(Dispatchers.Main) {
+            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
         }
     }
 
@@ -407,7 +574,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -531,7 +700,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -540,9 +711,24 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
+    /** taskKeys of lanes that are plain coroutines, not yt-dlp processes. */
+    private fun isResolveTaskKey(taskKey: String) =
+        taskKey.startsWith("Reddit_") ||
+            taskKey.startsWith("Gallery_") ||
+            taskKey.startsWith("FetchSpotify_") ||
+            taskKey.startsWith("FetchAudible_")
+
     private fun cancel(): Boolean {
         return when (val state = sheetState) {
             is SheetState.Loading -> {
+                if (isResolveTaskKey(state.taskKey)) {
+                    // No yt-dlp process exists under these keys. Cancelling the
+                    // job stops the follow-up state write; blocking HTTP reads
+                    // finish within their timeouts and then die at the next
+                    // suspension point.
+                    state.job.cancel()
+                    return true
+                }
                 val res = YoutubeDL.destroyProcessById(id = state.taskKey)
                 if (res) {
                     state.job.cancel()

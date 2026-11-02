@@ -19,6 +19,7 @@ import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.download.Task.RestartableAction.Download
 import com.junkfood.seal.download.Task.RestartableAction.FetchInfo
 import com.junkfood.seal.download.Task.TypeInfo
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.NotificationUtil
@@ -29,6 +30,7 @@ import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
@@ -101,7 +103,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     init {
         scope.launch(Dispatchers.Default) {
             snapshotFlow
-                .onEach { doYourWork() }
+                .onEach { state ->
+                    // The scheduler must survive any single bad task: a cancel
+                    // racing the pick or a removed task mid-callback must cost
+                    // one tick, not the whole download pipeline.
+                    runCatching { doYourWork() }
+                        .onFailure { Log.e(TAG, "scheduler tick failed", it) }
+                }
                 .map { it.countRunning() }
                 .distinctUntilChanged()
                 .collect { if (it > 0) App.startService() else App.stopService() }
@@ -185,31 +193,41 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         task.restartImpl()
     }
 
+    // All state accessors tolerate removal: a cancel/remove racing a running
+    // task used to throw (taskStateMap[this]!!) and could crash the scheduler
+    // collector. Reads fall back to a fresh Idle state without writing; writes
+    // to a removed task are dropped instead of resurrecting it in the map.
     private var Task.state: Task.State
-        get() = taskStateMap[this]!!
+        get() = taskStateMap[this] ?: Task.State(Idle, null, Task.ViewState(url = url, title = url))
         set(value) {
-            taskStateMap[this] = value
+            if (taskStateMap.containsKey(this)) taskStateMap[this] = value
         }
 
     private var Task.downloadState: DownloadState
         get() = state.downloadState
         set(value) {
-            val prevState = state
-            taskStateMap[this] = prevState.copy(downloadState = value)
+            if (taskStateMap.containsKey(this)) {
+                val prevState = state
+                taskStateMap[this] = prevState.copy(downloadState = value)
+            }
         }
 
     private var Task.info: VideoInfo?
         get() = state.videoInfo
         set(value) {
-            val prevState = state
-            taskStateMap[this] = prevState.copy(videoInfo = value)
+            if (taskStateMap.containsKey(this)) {
+                val prevState = state
+                taskStateMap[this] = prevState.copy(videoInfo = value)
+            }
         }
 
     private var Task.viewState: Task.ViewState
         get() = state.viewState
         set(value) {
-            val prevState = state
-            taskStateMap[this] = prevState.copy(viewState = value)
+            if (taskStateMap.containsKey(this)) {
+                val prevState = state
+                taskStateMap[this] = prevState.copy(viewState = value)
+            }
         }
 
     private val Task.notificationId: Int
@@ -225,27 +243,50 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 state.downloadState == ReadyWithInfo || state.downloadState == Idle
             }
             ?.let { (task, state) ->
+                // The picked state may already be stale (cancel/remove raced
+                // the pick); prepare/download re-check and no-op in that case.
                 when (state.downloadState) {
                     Idle -> task.prepare()
                     ReadyWithInfo -> task.download()
-                    else -> {
-                        throw IllegalStateException()
-                    }
+                    else -> {}
                 }
             }
     }
 
     private fun Task.prepare() {
-        check(downloadState == Idle)
+        // A cancel/remove can race the scheduler pick; a stale pick no-ops.
+        if (downloadState != Idle) return
         if (type is TypeInfo.CustomCommand) {
             execute()
-        } else {
-            fetchInfo()
+            return
         }
+        if (preferences.galleryDirect) {
+            // The URL is already the media file (gallery/embed/sniff item);
+            // running yt-dlp's generic extractor on it only adds a failing
+            // round-trip before the same fallback below.
+            val synth =
+                DownloadUtil.buildDirectVideoInfo(
+                    url = url,
+                    title = preferences.newTitle.ifBlank { viewState.title },
+                )
+            if (synth != null) {
+                val job =
+                    scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                        info = synth
+                        viewState = Task.ViewState.fromVideoInfo(synth)
+                        downloadState = ReadyWithInfo
+                        download()
+                    }
+                downloadState = FetchingInfo(job = job, taskId = id)
+                job.start()
+                return
+            }
+        }
+        fetchInfo()
     }
 
     private fun Task.fetchInfo() {
-        check(downloadState == Idle)
+        if (downloadState != Idle) return
         val task = this
         val taskInfo = task.type
         val playlistIndex = if (taskInfo is TypeInfo.Playlist) taskInfo.index else null
@@ -282,10 +323,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 return@onFailure
                             }
                         }
-                        task.downloadState = Error(throwable = throwable, action = FetchInfo)
+                        task.downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = FetchInfo,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.download_error_msg,
+                            textId = R.string.fetch_info_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )
@@ -295,13 +340,17 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     }
 
     private fun Task.download() {
-        check(downloadState == ReadyWithInfo && info != null)
+        if (downloadState != ReadyWithInfo || info == null) return
         if (type is TypeInfo.CustomCommand) {
             execute()
             return
         }
+        // LAZY + state-before-start: with eager launch the download body can
+        // begin (and its first progress write can trigger a snapshot emission)
+        // while this task still reads as ReadyWithInfo, and doYourWork then
+        // launches a second downloadVideo for the same task.
         scope
-            .launch(Dispatchers.Default) {
+            .launch(Dispatchers.Default, CoroutineStart.LAZY) {
                 DownloadUtil.downloadVideo(
                         videoInfo = info,
                         taskId = id,
@@ -353,30 +402,46 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
-                        downloadState = Error(throwable = throwable, action = Download)
+                        downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = Download,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.fetch_info_error_msg,
+                            textId = R.string.download_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )
                     }
             }
-            .also { job -> downloadState = Running(job = job, taskId = id) }
+            .also { job ->
+                downloadState = Running(job = job, taskId = id)
+                job.start()
+            }
     }
 
     private fun Task.cancelImpl(): Boolean {
         when (val preState = downloadState) {
             is DownloadState.Cancelable -> {
-                val res = YoutubeDL.destroyProcessById(preState.taskId)
-                if (res) {
-                    preState.job.cancel()
+                // Any of the three workers may own this task: a yt-dlp
+                // process, a Ghost engine transfer, or an N_m3u8DL-RE run.
+                // Missing ones just report false; none may block the cancel.
+                val killed =
+                    YoutubeDL.destroyProcessById(preState.taskId) ||
+                        DownloadUtil.cancelGhostTask(preState.taskId) ||
+                        DownloadUtil.cancelNm3u8DlRe(preState.taskId)
+                preState.job.cancel()
+                NotificationUtil.cancelNotification(notificationId)
+                // If the worker finished between the snapshot above and now,
+                // keep its terminal state instead of overwriting it with
+                // Canceled.
+                if (killed || downloadState == preState) {
                     val progress = if (preState is Running) preState.progress else null
-                    NotificationUtil.cancelNotification(notificationId)
                     downloadState =
                         DownloadState.Canceled(action = preState.action, progress = progress)
                 }
-                return res
+                return true
             }
             Idle -> {
                 downloadState = DownloadState.Canceled(action = FetchInfo)
@@ -401,9 +466,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         FetchInfo -> Idle
                     }
             }
-            else -> {
-                throw IllegalStateException()
-            }
+            // A double-tap on restart can race the first state change; a
+            // stale second tap is a no-op, not a crash on the UI thread.
+            else -> {}
         }
     }
 
@@ -413,7 +478,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      * @see Task.TypeInfo.CustomCommand
      */
     private fun Task.execute() {
-        check(downloadState == Idle)
+        if (downloadState != Idle) return
         check(type is TypeInfo.CustomCommand)
         val template = type.template
         scope
@@ -443,10 +508,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
-                        downloadState = Error(throwable = throwable, action = Download)
+                        downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = Download,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.fetch_info_error_msg,
+                            textId = R.string.download_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )

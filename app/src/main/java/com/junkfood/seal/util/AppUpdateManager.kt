@@ -50,6 +50,8 @@ object AppUpdateManager {
 
     private const val CHECK_INTERVAL_MS = 30 * 60 * 1000L
     @Volatile private var lastCheckAt = 0L
+    @Volatile private var lastNotifiedVersion: String? = null
+    @Volatile private var downloadCancelled = false
 
     private data class VersionTuple(
         val major: Long,
@@ -91,10 +93,33 @@ object AppUpdateManager {
     /**
      * Foreground check, throttled so returning to the app picks up a release
      * published while it was open without polling GitHub on every resume.
+     * First re-arms a finished download that survived process death.
      */
     suspend fun checkIfStale(context: Context) {
+        restoreReadyDownload(context)
         if (System.currentTimeMillis() - lastCheckAt < CHECK_INTERVAL_MS) return
         check(context)
+    }
+
+    /** A finished APK on disk outlives the process; offer it again instead of
+     * silently discarding a completed ~100MB download. */
+    private suspend fun restoreReadyDownload(context: Context) {
+        val current = mutableState.value
+        if (current is State.Ready || current is State.Downloading) return
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(context.getExternalFilesDir(null), "updates")
+                val apk =
+                    dir.listFiles { f ->
+                        f.isFile && f.name.startsWith("Sleeve-") && f.name.endsWith("-release.apk")
+                    }?.maxByOrNull { it.lastModified() } ?: return@withContext
+                val version =
+                    apk.name
+                        .removePrefix("Sleeve-")
+                        .removeSuffix("-release.apk")
+                mutableState.value = State.Ready(version, apk)
+            }
+        }
     }
 
     suspend fun check(context: Context) {
@@ -150,6 +175,11 @@ object AppUpdateManager {
                         .maxWithOrNull { a, b -> compare(a.second, b.second) }
 
                 if (best != null && compare(best.second, currentVersion) > 0) {
+                    // One notification per version, even across repeated checks.
+                    if (lastNotifiedVersion != best.first) {
+                        lastNotifiedVersion = best.first
+                        NotificationUtil.notifyUpdateAvailable(best.first)
+                    }
                     State.Available(best.first, best.third)
                 } else {
                     State.UpToDate
@@ -160,21 +190,27 @@ object AppUpdateManager {
     }
 
     suspend fun download(context: Context, version: String, apkUrl: String) {
+        downloadCancelled = false
         mutableState.value = State.Downloading(version, 0)
         withContext(Dispatchers.IO) {
+            // Download to a temp name: a failure or cancel must never leave a
+            // truncated file where a finished installable APK lives, and the
+            // finished file is version-named so Ready survives restarts.
+            val dir = File(context.getExternalFilesDir(null), "updates").apply { mkdirs() }
+            val target = File(dir, "Sleeve-$version-release.apk")
+            val part = File(dir, target.name + ".part")
             runCatching {
-                val dir = File(context.getExternalFilesDir(null), "updates").apply { mkdirs() }
-                val target = File(dir, APK_ASSET)
                 val conn = URL(apkUrl).openConnection() as HttpURLConnection
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 30_000
                 conn.instanceFollowRedirects = true
                 val total = conn.contentLengthLong
                 conn.inputStream.use { input ->
-                    target.outputStream().use { output ->
+                    part.outputStream().use { output ->
                         val buf = ByteArray(64 * 1024)
                         var read = 0L
                         while (true) {
+                            if (downloadCancelled) error("update download cancelled")
                             val n = input.read(buf)
                             if (n == -1) break
                             output.write(buf, 0, n)
@@ -187,11 +223,28 @@ object AppUpdateManager {
                         }
                     }
                 }
+                part.renameTo(target)
+                // Older finished APKs are superseded once a new one is complete.
+                dir.listFiles { f -> f.name.startsWith("Sleeve-") && f.name.endsWith("-release.apk") }
+                    ?.filter { it != target }
+                    ?.forEach { it.delete() }
                 mutableState.value = State.Ready(version, target)
+                // The download can finish while the app is backgrounded;
+                // surface the install step outside the banner too.
+                NotificationUtil.notifyUpdateReady(version)
             }.onFailure {
-                mutableState.value = State.Failed(it.message ?: "download failed")
+                part.delete()
+                mutableState.value =
+                    if (downloadCancelled) State.Idle
+                    else State.Failed(it.message ?: "download failed")
             }
         }
+    }
+
+    /** Stops the running download at the next chunk boundary; keeps any
+     * previously finished APK untouched. */
+    fun cancelDownload() {
+        downloadCancelled = true
     }
 
     fun install(context: Context, file: File) {

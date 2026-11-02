@@ -29,9 +29,10 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PreferenceUtil
-import com.junkfood.seal.util.matchUrlFromSharedText
+import com.junkfood.seal.util.matchAllUrlsFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -42,7 +43,6 @@ import com.junkfood.seal.util.ToastUtil
 import org.koin.android.ext.android.get
 import org.koin.androidx.viewmodel.ext.android.getViewModel
 
-private const val TAG = "QuickDownloadActivity"
 const val EXTRA_QUICK_DOWNLOAD = "quick"
 
 class QuickDownloadActivity : ComponentActivity() {
@@ -57,12 +57,15 @@ class QuickDownloadActivity : ComponentActivity() {
             }
 
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
-                // ACTION_SEND_MULTIPLE senders may put a list under EXTRA_TEXT,
-                // so read it as Any and only accept a String.
+                // ACTION_SEND_MULTIPLE senders may put one string, an
+                // ArrayList<String>, or HTML under EXTRA_TEXT.
                 val sharedContent =
                     (intent.extras?.get(Intent.EXTRA_TEXT) as? String)
+                        ?: (intent.extras?.get(Intent.EXTRA_TEXT) as? ArrayList<*>)
+                            ?.filterIsInstance<String>()
+                            ?.joinToString("\n")
                         ?: (intent.extras?.get(Intent.EXTRA_HTML_TEXT) as? String)
-                sharedContent?.let { matchUrlFromSharedText(it) }
+                sharedContent?.let { matchAllUrlsFromSharedText(it) }
             }
 
             else -> {
@@ -82,31 +85,38 @@ class QuickDownloadActivity : ComponentActivity() {
             return
         }
 
-        // The share sheet launches this activity with a plain ACTION_SEND that
-        // carries neither the shortcut extra nor the shortcut ID, so the share
-        // action itself is the quick signal. ACTION_VIEW (open link) keeps the
-        // configure sheet.
+        // Sharing a link from another app (ACTION_SEND) opens the configure
+        // sheet, like the stock Seal share target — the user picks format,
+        // preset and destination before anything is queued. Only the
+        // dedicated quick-download shortcut (app shortcut / tile with the
+        // quick extra) skips the dialog and downloads immediately.
         if (
-            intent.action == Intent.ACTION_SEND ||
-                intent.action == Intent.ACTION_SEND_MULTIPLE ||
-                intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
+            intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
                 intent.getStringExtra("android.intent.extra.shortcut.ID") == "quick-download"
         ) {
             // Share-sheet "Quick download": straight to the queue with the
             // default pipeline, no configure dialog. The gallery route inside
             // handles Instagram and other image sites anonymously first.
             App.startService()
-            val url = sharedUrlCached
+            val urls =
+                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() }
             lifecycleScope.launch {
-                SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
-                    .onSuccess { (queued, source) ->
-                        ToastUtil.makeToast(
-                            getString(R.string.gallery_items_queued, queued, source),
-                        )
-                    }
-                    .onFailure {
-                        ToastUtil.makeToast(it.message ?: getString(R.string.download_error_msg))
-                    }
+                var queued = 0
+                urls.forEach { url ->
+                    SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
+                        .onSuccess { (count, _) -> queued += count }
+                        .onFailure {
+                            ToastUtil.makeToast(
+                                DownloadErrorMessages.friendly(it)
+                                    .ifEmpty { getString(R.string.download_error_msg) },
+                            )
+                        }
+                }
+                if (queued > 0) {
+                    ToastUtil.makeToast(
+                        getString(R.string.gallery_items_queued, queued, "quick"),
+                    )
+                }
                 finish()
             }
             return
@@ -134,7 +144,11 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         val viewModel: DownloadDialogViewModel = getViewModel()
-        viewModel.postAction(Action.ShowSheet(listOf(sharedUrlCached)))
+        viewModel.postAction(
+            Action.ShowSheet(
+                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() },
+            ),
+        )
 
         setContent {
             SettingsProvider(calculateWindowSizeClass(this).widthSizeClass) {
@@ -156,11 +170,18 @@ class QuickDownloadActivity : ComponentActivity() {
                         viewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
                     var showDialog by remember { mutableStateOf(false) }
+                    // The flows start at Hidden/Idle, so only auto-close after
+                    // the sheet actually expanded once — otherwise the first
+                    // composition finishes the activity before ShowSheet lands.
+                    var wasExpanded by remember { mutableStateOf(false) }
 
                     LaunchedEffect(sheetValue, selectionState) {
                         if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
+                            wasExpanded = true
                             showDialog = true
-                        } else if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) {
+                        } else if (
+                            sheetValue == DownloadDialogViewModel.SheetValue.Hidden && wasExpanded
+                        ) {
                             launch { sheetState.hide() }
                                 .invokeOnCompletion {
                                     showDialog = false

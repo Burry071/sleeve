@@ -172,6 +172,10 @@
     <string name="restart">Restart</string>
     <string name="retry">Retry</string>
     <string name="gallery_items_queued">%1$d items queued (%2$s)</string>
+    <string name="gallery_resolve_fallback">Media preview failed — configuring the download manually</string>
+    <string name="site_login_required">This site requires a logged-in account. Sign in to it in Settings → Cookies &amp; profiles, then enable Cookies for the download and retry.</string>
+    <string name="format_unavailable_hint">The selected format is not available for this media. Use the default preset (Format preference) and retry.</string>
+    <string name="site_rate_limited">The site is rate-limiting requests. Wait a moment, then retry.</string>
     <string name="quick_download_label">Quick download</string>
     <string name="quick_download_pushed">Quick download enabled in share sheets</string>
     <string name="gallery_auth_required">This content needs a login. Import cookies in Settings → Cookies &amp; profiles, then retry.</string>
@@ -199,6 +203,18 @@
     <string name="app_update_failed">Failed to update to the latest version</string>
     <string name="app_update_banner_title">New update available</string>
     <string name="app_update_banner_subtitle">Sleeve %1$s · Download and install right in the app</string>
+    <string name="app_update_banner_downloaded">Sleeve %1$s downloaded</string>
+    <string name="app_update_banner_tap_install">Tap install to finish the update</string>
+    <string name="app_update_banner_failed">Update failed: %1$s</string>
+    <string name="app_update_banner_retry">Retry check</string>
+    <string name="install">Install</string>
+    <string name="channel_app_update">App updates</string>
+    <string name="channel_app_update_desc">Notifies when a new Sleeve release is available or an update finished downloading</string>
+    <string name="app_update_notif_available_title">Sleeve update available</string>
+    <string name="app_update_notif_available_text">Sleeve %1$s is out. Tap to update in the app.</string>
+    <string name="app_update_notif_ready_title">Sleeve %1$s downloaded</string>
+    <string name="app_update_notif_ready_text">Tap to install the update.</string>
+    <string name="clipboard_link_detected">Link detected in clipboard</string>
     <string name="update">Update</string>
     <string name="aria2" translatable="false">Aria2</string>
     <string name="aria2_desc">Use aria2c as the external downloader</string>

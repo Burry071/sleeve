@@ -71,6 +71,9 @@ object DownloadUtil {
 
     const val EXTENSION = ".%(ext)s"
 
+    /** Direct-lane format marker: never a real yt-dlp format id. */
+    const val DIRECT_FORMAT_ID = "direct"
+
     private const val ID = "[%(id)s]"
 
     private const val CLIP_TIMESTAMP = "%(section_start)d-%(section_end)d"
@@ -98,8 +101,13 @@ object DownloadUtil {
     ): Result<YoutubeDLInfo> =
         YoutubeDL.runCatching {
             ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
-            val request = YoutubeDLRequest(playlistURL)
+            val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
             with(request) {
+                // Native YouTube clients: no JS runtime on Android.
+                addOption(
+                    "--extractor-args",
+                    "youtube:player_client=android_vr,android,ios",
+                )
                 //            addOption("--compat-options", "no-youtube-unavailable-videos")
                 addOption("--flat-playlist")
                 addOption("--dump-single-json")
@@ -153,11 +161,20 @@ object DownloadUtil {
     ): Result<VideoInfo> {
         with(preferences) {
             val request =
-                YoutubeDLRequest(url).apply {
-                    addOption("-o", BASENAME)
-                    if (restrictFilenames) {
-                        addOption("--restrict-filenames")
-                    }
+                YoutubeDLRequest(url)
+                    .maybeRedditUserAgent(url)
+                    .apply {
+                        addOption("-o", BASENAME)
+                        // No JS runtime exists on Android, so YouTube web
+                        // clients degrade (nsig throttling, missing formats).
+                        // Native clients need no JavaScript.
+                        addOption(
+                            "--extractor-args",
+                            "youtube:player_client=android_vr,android,ios",
+                        )
+                        if (restrictFilenames) {
+                            addOption("--restrict-filenames")
+                        }
                     if (extractAudio) {
                         addOption("-x")
                     }
@@ -178,13 +195,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     if (playlistIndex != null) {
@@ -255,6 +265,10 @@ object DownloadUtil {
         val mergeAudioStream: Boolean,
         val mergeToMkv: Boolean,
         val galleryDirect: Boolean = false,
+        // Page the direct media URL was resolved from (gallery-dl/embed/sniff
+        // items). Instagram CDN hosts 403 without it. Default keeps backups
+        // written before this field decodable.
+        val referer: String = "",
     ) {
         companion object {
             val EMPTY =
@@ -383,6 +397,18 @@ object DownloadUtil {
             }
         }
 
+    /**
+     * Reddit hard-blocks non-browser user agents before the extractor can
+     * even reach the JSON API, so requests for reddit hosts present as the
+     * browser this device runs. Skipped when the user set a custom UA.
+     */
+    private fun YoutubeDLRequest.maybeRedditUserAgent(url: String): YoutubeDLRequest =
+        apply {
+            if (RedditResolver.isRedditHost(url) && !USER_AGENT.getBoolean()) {
+                addOption("--user-agent", RedditResolver.BROWSER_UA)
+            }
+        }
+
     private fun YoutubeDLRequest.enableProxy(proxyUrl: String): YoutubeDLRequest =
         this.addOption("--proxy", proxyUrl)
 
@@ -458,7 +484,11 @@ object DownloadUtil {
             downloadPreferences.run {
                 addOption("--add-metadata")
                 addOption("--no-embed-info-json")
-                if (formatIdString.isNotEmpty()) {
+                // "direct" is the direct-lane marker, not a yt-dlp format id.
+                // When such a task falls back to yt-dlp (e.g. a manifest URL
+                // with the Ghost engine off), the format sorter must pick the
+                // format — `-f direct` always fails format selection.
+                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
                     addOption("-f", formatIdString)
                     if (mergeAudioStream) {
                         addOption("--audio-multistreams")
@@ -471,13 +501,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     subtitleLanguage
@@ -596,13 +619,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     subtitleLanguage
@@ -616,7 +632,7 @@ object DownloadUtil {
                         else -> {}
                     }
                 }
-                if (formatIdString.isNotEmpty()) {
+                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
                     addOption("-f", formatIdString)
                     if (mergeAudioStream) {
                         addOption("--audio-multistreams")
@@ -691,10 +707,21 @@ object DownloadUtil {
     /** processId -> embedded-engine task id, for cancellation routing. */
     private val ghostTasks = ConcurrentHashMap<String, String>()
 
-    fun cancelGhostTask(taskId: String) {
-        ghostTasks.remove(taskId)?.let { GhostEngine.cancel(it) }
-    }
+    /** @return true when an engine task was registered for this id and cancelled. */
+    fun cancelGhostTask(taskId: String): Boolean =
+        ghostTasks.remove(taskId)?.also { GhostEngine.cancel(it) } != null
 
+    /** Live N_m3u8DL-RE processes by task id, so cancel can kill them. */
+    private val nreProcesses = ConcurrentHashMap<String, Process>()
+
+    /** @return true when a running N_m3u8DL-RE process was terminated. */
+    fun cancelNm3u8DlRe(taskId: String): Boolean =
+        (nreProcesses.remove(taskId)?.also { it.destroy() }) != null
+
+
+    /** Extensions that mark a direct file as audio for directory routing. */
+    private val DIRECT_AUDIO_EXTS =
+        setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma")
 
     /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
     private val PRIVATE_HOST_RE =
@@ -704,7 +731,8 @@ object DownloadUtil {
             RegexOption.IGNORE_CASE,
         )
 
-    private fun isSafeRemoteUrl(url: String): Boolean {
+    /** Shared with the direct-lane resolvers: page content decides what gets fetched. */
+    internal fun isSafeRemoteUrl(url: String): Boolean {
         if (!url.startsWith("http://") && !url.startsWith("https://")) return false
         val rest = url.substringAfter("://")
         // Bracketed IPv6 hosts must not be split on ':' (would leave "[" and
@@ -858,6 +886,9 @@ object DownloadUtil {
                 workDir.deleteRecursively()
                 return null
             }
+        // Registered so a task cancel can terminate the process; waitFor
+        // below would otherwise block until the transfer finishes.
+        nreProcesses[taskId] = process
 
         // Stream-copy done; the produced file is the largest under workDir.
         val produced =
@@ -878,6 +909,7 @@ object DownloadUtil {
                     .maxByOrNull { it.length() }
             }
         val code = runCatching { process.waitFor() }.getOrDefault(-1)
+        nreProcesses.remove(taskId)
         if (code != 0 || produced == null || produced.length() == 0L) {
             Log.w(TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
             workDir.deleteRecursively()
@@ -1006,21 +1038,23 @@ object DownloadUtil {
             else
                 if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
 
-        // Gallery/embed items carry a per-item Referer upstream, but the Task
-        // plumbing drops it before this handoff. Reconstruct it from what is
-        // available here: the extraction page (yt-dlp formats), falling back
-        // to the canonical instagram referer for instagram CDN hosts, which
-        // reject signed media without it. Direct items keep the media url as
-        // their page, which is not a referer — skip those.
+        // Gallery/embed items carry a per-item Referer from the resolver;
+        // prefer it, and reconstruct from what is available here otherwise:
+        // the extraction page (yt-dlp formats), falling back to the canonical
+        // instagram referer for instagram CDN hosts, which reject signed
+        // media without it. Direct items keep the media url as their page,
+        // which is not a referer — skip those.
         val mediaUrl = eligibleFormat.url!!
         val pageReferer =
             listOfNotNull(videoInfo.webpageUrl, videoInfo.originalUrl)
                 .firstOrNull { it.isNotBlank() && it != mediaUrl }
         val referer =
-            if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
-                "https://www.instagram.com/"
-            } else {
-                pageReferer
+            preferences.referer.ifBlank {
+                if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
+                    "https://www.instagram.com/"
+                } else {
+                    pageReferer
+                }
             }
         val engineHeaders =
             if (referer.isNullOrBlank()) {
@@ -1221,7 +1255,13 @@ object DownloadUtil {
                 progressCallback = progressCallback,
             )?.let { return it }
 
-            val request = YoutubeDLRequest(url)
+            val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
+            // Native YouTube clients: no JS runtime on Android, and the
+            // download request must re-extract with the same clients.
+            request.addOption(
+                "--extractor-args",
+                "youtube:player_client=android_vr,android,ios",
+            )
             val pathBuilder = StringBuilder()
             val outputBuilder = StringBuilder()
 
@@ -1231,6 +1271,24 @@ object DownloadUtil {
                     //                addOption("-v")
                     if (cookies) {
                         enableCookies(userAgentString)
+                    }
+                    if (galleryDirect) {
+                        // Engine declined this direct item and we fell back to
+                        // yt-dlp: without the page referer the generic
+                        // extractor gets 403 from instagram CDN hosts.
+                        val directReferer =
+                            referer.ifBlank {
+                                if (
+                                    url.contains("cdninstagram") || url.contains("fbcdn")
+                                ) {
+                                    "https://www.instagram.com/"
+                                } else {
+                                    ""
+                                }
+                            }
+                        if (directReferer.isNotBlank()) {
+                            addOption("--add-headers", "Referer:$directReferer")
+                        }
                     }
                     if (restrictFilenames) {
                         addOption("--restrict-filenames")
@@ -1426,11 +1484,25 @@ object DownloadUtil {
         val cleanUrl = url.substringBefore('#')
         val path = cleanUrl.substringBefore('?').substringAfterLast('/')
         val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }
+        // Format.isAudioOnly() treats a null vcodec as audio-only, which would
+        // file every direct image/video under the audio dir; classify by the
+        // file extension instead.
+        val directVcodec = if (ext in DIRECT_AUDIO_EXTS) "none" else "h264"
         val baseName =
             title.ifBlank { path }
                 .replace(Regex("[\\/:*?\"<>|]"), "_")
                 .take(120)
         val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
+        // requestedFormats = the chosen file: ViewState.videoFormats and the
+        // ghost-handoff candidate read requestedFormats first, and an empty
+        // list would label the task "audio" in the queue header.
+        val directFormat =
+            Format(
+                formatId = "direct",
+                ext = ext,
+                url = url,
+                vcodec = directVcodec,
+            )
         return VideoInfo(
             id = Integer.toHexString(url.hashCode()),
             title = baseName,
@@ -1440,14 +1512,8 @@ object DownloadUtil {
             extractorKey = "SleeveDirect",
             ext = ext ?: "bin",
             filename = fullName,
-            formats =
-                listOf(
-                    Format(
-                        formatId = "direct",
-                        ext = ext,
-                        url = url,
-                    )
-                ),
+            formats = listOf(directFormat),
+            requestedFormats = listOf(directFormat),
         )
     }
 
