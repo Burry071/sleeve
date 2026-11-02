@@ -48,6 +48,16 @@ const val EXTRA_QUICK_DOWNLOAD = "quick"
 class QuickDownloadActivity : ComponentActivity() {
     private var sharedUrlCached: String = ""
 
+    /** Wired in onCreate once the ViewModel exists; singleInstance delivers
+     * later shares here instead of a fresh activity, so they must re-route. */
+    private var onNewIntentHandler: ((Intent) -> Unit)? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        onNewIntentHandler?.invoke(intent)
+    }
+
     private fun Intent.getSharedURL(): String? {
         val intent = this
 
@@ -144,11 +154,22 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         val viewModel: DownloadDialogViewModel = getViewModel()
-        viewModel.postAction(
-            Action.ShowSheet(
-                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() },
-            ),
-        )
+        val postUrls: (String) -> Unit = { shared ->
+            viewModel.postAction(
+                Action.ShowSheet(
+                    shared.split("\n").map { it.trim() }.filter { it.isNotBlank() },
+                ),
+            )
+        }
+        onNewIntentHandler = { intent ->
+            intent.getSharedURL()?.let { shared ->
+                if (shared.isNotEmpty()) {
+                    sharedUrlCached = shared
+                    postUrls(shared)
+                }
+            }
+        }
+        postUrls(sharedUrlCached)
 
         setContent {
             SettingsProvider(calculateWindowSizeClass(this).widthSizeClass) {

@@ -70,7 +70,7 @@ fun String.isNumberInRange(start: Int, end: Int): Boolean {
 }
 
 private const val URL_REGEX_PATTERN =
-    "(http|https)://[\\w\\-_]+(\\.[\\w\\-_]+)+([\\w\\-.,@?^=%&:/~+#]*[\\w\\-@?^=%&/~+#])?"
+    "(http|https)://[\\w\\-_]+(\\.[\\w\\-_]+)+([\\w\\-+.,;@?^=%&:/~+#]*[\\w\\-+@?^=%&/~+#])?"
 
 fun String.isNumberInRange(range: IntRange): Boolean = this.isNumberInRange(range.first, range.last)
 

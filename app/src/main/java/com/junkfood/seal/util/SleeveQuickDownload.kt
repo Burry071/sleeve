@@ -71,8 +71,9 @@ object SleeveQuickDownload {
         )
     }
 
-    /** Resolve via gallery → instagram embed → sniff. No enqueue; the caller
-     * shows what was found and enqueues only after the user confirms. */
+    /** Resolve via anonymous Reddit → gallery → instagram embed → sniff. No
+     * enqueue; the caller shows what was found and enqueues only after the
+     * user confirms. */
     suspend fun resolve(context: Context, url: String): Result<Resolved> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -80,12 +81,21 @@ object SleeveQuickDownload {
 
                 val (source, items) =
                     runCatching {
-                        val (site, resolved) =
-                            GhostEngine.galleryResolve(url, cookiesFile).getOrThrow()
-                        if (resolved.isNotEmpty()) "gallery:$site" to resolved
-                        else "sniff" to GhostEngine.sniffMedia(url).getOrDefault(emptyList())
+                        if (RedditResolver.isPostUrl(url)) {
+                            // Anonymous Reddit posts resolve without cookies
+                            // and beat both gallery-dl and yt-dlp here.
+                            val resolved = RedditResolver.resolve(url).getOrThrow()
+                            "reddit" to resolved
+                        } else {
+                            val (site, resolved) =
+                                GhostEngine.galleryResolve(url, cookiesFile).getOrThrow()
+                            if (resolved.isNotEmpty()) "gallery:$site" to resolved
+                            else "sniff" to GhostEngine.sniffMedia(url).getOrDefault(emptyList())
+                        }
                     }.recoverCatching { galleryError ->
-                        if (url.contains("instagram.com")) {
+                        if (url.contains("instagram.com", true) ||
+                            url.contains("instagr.am", true)
+                        ) {
                             val resolved = GhostEngine.instagramEmbed(url).getOrThrow()
                             if (resolved.isEmpty()) throw galleryError
                             "instagram-embed" to resolved
@@ -148,13 +158,35 @@ object SleeveQuickDownload {
             }
         }
 
-    /** Full quick-download routing: gallery/sniff when possible, default otherwise. */
+    /**
+     * Full quick-download routing with paste parity: only lanes that BEAT
+     * yt-dlp may claim the URL (gallery-dl sites, Instagram's anonymous embed
+     * ladder, anonymous Reddit posts). Everything else — YouTube, X, generic
+     * pages, direct links — runs the exact same yt-dlp pipeline an in-app
+     * paste uses. The old blind page-sniff here hijacked sites yt-dlp
+     * handles perfectly, which is why shared links failed where pasted ones
+     * worked. A claimed lane that fails still falls back to yt-dlp.
+     */
     suspend fun quickDownload(
         context: Context,
         url: String,
         downloader: DownloaderV2,
     ): Result<Outcome> =
-        enqueue(context, url, downloader).recoverCatching {
+        runCatching {
+            val claimed =
+                GhostEngine.galleryMatches(url) ||
+                    url.contains("instagram.com", true) ||
+                    url.contains("instagr.am", true) ||
+                    RedditResolver.isPostUrl(url)
+            if (claimed) {
+                resolve(context, url)
+                    .mapCatching { enqueueResolved(downloader, it).getOrThrow() }
+                    .getOrThrow()
+            } else {
+                enqueueDefault(context, url, downloader).getOrThrow()
+                Outcome(1, "default")
+            }
+        }.recoverCatching {
             enqueueDefault(context, url, downloader).getOrThrow()
             Outcome(1, "default")
         }
