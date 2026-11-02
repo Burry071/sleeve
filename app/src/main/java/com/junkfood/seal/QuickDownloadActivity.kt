@@ -29,6 +29,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.matchUrlFromSharedText
@@ -103,7 +104,10 @@ class QuickDownloadActivity : ComponentActivity() {
                         )
                     }
                     .onFailure {
-                        ToastUtil.makeToast(it.message ?: getString(R.string.download_error_msg))
+                        ToastUtil.makeToast(
+                            DownloadErrorMessages.friendly(it)
+                                .ifEmpty { getString(R.string.download_error_msg) },
+                        )
                     }
                 finish()
             }

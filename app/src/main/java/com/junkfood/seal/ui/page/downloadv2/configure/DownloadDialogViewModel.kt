@@ -172,6 +172,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         get() = sheetStateFlow.value
 
     fun postAction(action: Action) {
+        // An explicit Retry from the error page must not be swallowed by the
+        // 3s resolve throttle (fast failures would otherwise make Retry a
+        // silent no-op).
+        if ((sheetState as? SheetState.Error)?.action == action) {
+            lastResolveAt.clear()
+        }
         with(action) {
             when (this) {
                 is Action.ProceedWithURLs -> proceedWithUrls(this)
@@ -301,6 +307,47 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             }
             return
         }
+        // Instagram without cookies fails on yt-dlp's login wall, but the
+        // anonymous embed ladder in SleeveQuickDownload.resolve serves most
+        // reels/posts — route through it when no cookie session exists, and
+        // fall back to plain yt-dlp if it comes up empty.
+        val instagramUrl =
+            urlList.firstOrNull {
+                it.contains("instagram.com", true) || it.contains("instagr.am", true)
+            }
+        if (instagramUrl != null && !preferences.cookies) {
+            viewModelScope.launch(Dispatchers.IO) {
+                SleeveQuickDownload.resolve(App.context, instagramUrl)
+                    .mapCatching { resolved ->
+                        SleeveQuickDownload.enqueueResolved(
+                                downloader,
+                                resolved,
+                                extractAudio = preferences.extractAudio,
+                            )
+                            .getOrThrow()
+                    }
+                    .onSuccess { (queued, source) ->
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(
+                                    R.string.gallery_items_queued,
+                                    queued,
+                                    source,
+                                ),
+                            )
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th ->
+                        Log.e(TAG, "instagram resolve failed, falling back to yt-dlp: ${th.message}")
+                        urlList.forEach {
+                            downloader.enqueue(Task(url = it, preferences = preferences))
+                        }
+                        withContext(Dispatchers.Main) { hideDialog() }
+                    }
+            }
+            return
+        }
         urlList.forEach { downloader.enqueue(Task(url = it, preferences = preferences)) }
         hideDialog()
     }
@@ -321,6 +368,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun hideDialog() {
         mSheetValueFlow.update { SheetValue.Hidden }
+        // A dismissed sheet must not leave a resolved gallery behind: a later
+        // DownloadWithPreset whose first URL matches would otherwise take the
+        // direct lane with stale items.
+        pendingGallery = null
         when (sheetState) {
             is SheetState.Loading -> {
                 cancel()
@@ -400,7 +451,12 @@ private val VIDEO_FIRST_HOSTS: Regex =
      */
     private fun redditPreRoute(urlList: List<String>): Boolean {
         val candidate = urlList.firstOrNull { RedditResolver.isPostUrl(it) } ?: return false
-        if (resolveThrottled("reddit")) return true
+        if (resolveThrottled("reddit")) {
+            // Claimed but throttled: still land the user in the configure
+            // sheet instead of silently doing nothing.
+            mSheetStateFlow.update { SheetState.Configure(urlList) }
+            return true
+        }
         mSheetValueFlow.update { SheetValue.Expanded }
         val job =
             viewModelScope.launch(Dispatchers.IO) {
@@ -429,7 +485,13 @@ private val VIDEO_FIRST_HOSTS: Regex =
     }
 
     private fun fetchGallery(action: Action.FetchGallery) {
-        if (resolveThrottled("gallery")) return
+        if (resolveThrottled("gallery")) {
+            // The pre-route already showed Loading for this URL: degrading to
+            // the configure sheet beats a spinner that nothing will ever
+            // replace.
+            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
+            return
+        }
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.resolve(App.context, action.url)
@@ -507,7 +569,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -631,7 +695,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -640,9 +706,24 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
+    /** taskKeys of lanes that are plain coroutines, not yt-dlp processes. */
+    private fun isResolveTaskKey(taskKey: String) =
+        taskKey.startsWith("Reddit_") ||
+            taskKey.startsWith("Gallery_") ||
+            taskKey.startsWith("FetchSpotify_") ||
+            taskKey.startsWith("FetchAudible_")
+
     private fun cancel(): Boolean {
         return when (val state = sheetState) {
             is SheetState.Loading -> {
+                if (isResolveTaskKey(state.taskKey)) {
+                    // No yt-dlp process exists under these keys. Cancelling the
+                    // job stops the follow-up state write; blocking HTTP reads
+                    // finish within their timeouts and then die at the next
+                    // suspension point.
+                    state.job.cancel()
+                    return true
+                }
                 val res = YoutubeDL.destroyProcessById(id = state.taskKey)
                 if (res) {
                     state.job.cancel()

@@ -39,7 +39,7 @@ object RedditResolver {
     /** Post URLs only: r/<sub>/comments/<id>[/slug] or bare redd.it/<id>. */
     private val POST_RE =
         Regex(
-            """https?://(?:\w+\.)?reddit\.com/(?:(?:r|user)/[^/]+/)?comments/([A-Za-z0-9]+)(?:/[^/?#&]*(?:/([A-Za-z0-9]+))?)?""",
+            """https?://(?:\w+\.)?reddit\.com/(?:(?:r|user)/[^/\s]+/)?comments/([A-Za-z0-9]+)(?:/[^/?#&\s]*(?:/([A-Za-z0-9]+))?)?""",
             RegexOption.IGNORE_CASE,
         )
     private val SHORT_RE = Regex("""https?://(?:www\.)?redd\.it/([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)

@@ -313,7 +313,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.download_error_msg,
+                            textId = R.string.fetch_info_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )
@@ -392,7 +392,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.fetch_info_error_msg,
+                            textId = R.string.download_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )
@@ -489,7 +489,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             )
                         NotificationUtil.notifyError(
                             title = viewState.title,
-                            textId = R.string.fetch_info_error_msg,
+                            textId = R.string.download_error_msg,
                             notificationId = notificationId,
                             report = throwable.stackTraceToString(),
                         )

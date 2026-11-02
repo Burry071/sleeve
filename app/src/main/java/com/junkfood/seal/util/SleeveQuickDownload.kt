@@ -66,7 +66,7 @@ object SleeveQuickDownload {
             },
             // "direct" is not a yt-dlp format id; it must never reach `-f`
             // when the audio-extraction route runs.
-            formatIdString = if (wantsAudio) "" else "direct",
+            formatIdString = if (wantsAudio) "" else DownloadUtil.DIRECT_FORMAT_ID,
             referer = item.referer,
         )
     }
@@ -110,6 +110,13 @@ object SleeveQuickDownload {
                 var queued = 0
                 resolved.items.forEach { item ->
                     runCatching {
+                        // Resolved URLs come from page content (post JSON,
+                        // page sniffing): never let them point at loopback,
+                        // private or literal-IP targets.
+                        if (!DownloadUtil.isSafeRemoteUrl(item.url)) {
+                            Log.e(TAG, "blocked unsafe media url: ${item.url.take(120)}")
+                            return@runCatching
+                        }
                         downloader.enqueue(
                             Task(
                                 url = item.url,

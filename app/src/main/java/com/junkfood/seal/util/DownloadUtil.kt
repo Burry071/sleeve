@@ -71,6 +71,9 @@ object DownloadUtil {
 
     const val EXTENSION = ".%(ext)s"
 
+    /** Direct-lane format marker: never a real yt-dlp format id. */
+    const val DIRECT_FORMAT_ID = "direct"
+
     private const val ID = "[%(id)s]"
 
     private const val CLIP_TIMESTAMP = "%(section_start)d-%(section_end)d"
@@ -476,7 +479,11 @@ object DownloadUtil {
             downloadPreferences.run {
                 addOption("--add-metadata")
                 addOption("--no-embed-info-json")
-                if (formatIdString.isNotEmpty()) {
+                // "direct" is the direct-lane marker, not a yt-dlp format id.
+                // When such a task falls back to yt-dlp (e.g. a manifest URL
+                // with the Ghost engine off), the format sorter must pick the
+                // format — `-f direct` always fails format selection.
+                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
                     addOption("-f", formatIdString)
                     if (mergeAudioStream) {
                         addOption("--audio-multistreams")
@@ -634,7 +641,7 @@ object DownloadUtil {
                         else -> {}
                     }
                 }
-                if (formatIdString.isNotEmpty()) {
+                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
                     addOption("-f", formatIdString)
                     if (mergeAudioStream) {
                         addOption("--audio-multistreams")
@@ -726,7 +733,8 @@ object DownloadUtil {
             RegexOption.IGNORE_CASE,
         )
 
-    private fun isSafeRemoteUrl(url: String): Boolean {
+    /** Shared with the direct-lane resolvers: page content decides what gets fetched. */
+    internal fun isSafeRemoteUrl(url: String): Boolean {
         if (!url.startsWith("http://") && !url.startsWith("https://")) return false
         val rest = url.substringAfter("://")
         // Bracketed IPv6 hosts must not be split on ':' (would leave "[" and
