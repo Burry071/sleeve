@@ -122,6 +122,13 @@ object NotificationUtil {
         notificationManager.notify(UPDATE_NOTIFICATION_ID + 1, notification)
     }
 
+    /** Update notifications outlive the process and the install they advertise;
+     * cleared whenever the installed build covers them. */
+    fun cancelUpdateNotifications() {
+        notificationManager.cancel(UPDATE_NOTIFICATION_ID)
+        notificationManager.cancel(UPDATE_NOTIFICATION_ID + 1)
+    }
+
     fun notifyProgress(
         title: String,
         notificationId: Int = DEFAULT_NOTIFICATION_ID,

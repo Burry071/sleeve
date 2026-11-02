@@ -162,6 +162,21 @@ class QuickDownloadActivity : ComponentActivity() {
 
                     val sheetValue = viewModel.sheetValueFlow.collectAsStateWithLifecycle().value
 
+                    // Seal's quick-download mechanics: the overlay exists only
+                    // while the sheet is on screen. The moment it is gone —
+                    // Download tapped, task enqueued, cancelled — the share
+                    // overlay finishes instead of lingering over the app.
+                    LaunchedEffect(Unit) {
+                        var sheetShown = false
+                        viewModel.sheetValueFlow.collect { value ->
+                            if (value == DownloadDialogViewModel.SheetValue.Expanded) {
+                                sheetShown = true
+                            } else if (sheetShown) {
+                                finish()
+                            }
+                        }
+                    }
+
                     val state = viewModel.sheetStateFlow.collectAsStateWithLifecycle().value
 
                     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)

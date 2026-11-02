@@ -373,6 +373,41 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             }
                         },
                     )
+                    // aria2c is the optional accelerator, never a requirement:
+                    // some hosts (generic direct links above all) fail under
+                    // the external downloader, so the first aria2c failure
+                    // retries once with yt-dlp's built-in one.
+                    .recoverCatching { throwable ->
+                        val retryable =
+                            preferences.aria2c &&
+                                throwable.message?.contains("aria2c", ignoreCase = true) == true
+                        if (!retryable) throw throwable
+                        Log.w(TAG, "aria2c failed, retrying with the built-in downloader: ${throwable.message?.take(120)}")
+                        DownloadUtil.downloadVideo(
+                                videoInfo = info,
+                                taskId = id,
+                                downloadPreferences = preferences.copy(aria2c = false),
+                                progressCallback = { progressPercentage, _, text ->
+                                    val progress = progressPercentage / 100f
+                                    when (val preState = downloadState) {
+                                        is Running -> {
+                                            downloadState =
+                                                preState.copy(progress = progress, progressText = text)
+                                            NotificationUtil.notifyProgress(
+                                                notificationId = notificationId,
+                                                progress = progressPercentage.toInt(),
+                                                text = text,
+                                                title = viewState.title,
+                                                taskId = id,
+                                            )
+                                        }
+
+                                        else -> {}
+                                    }
+                                },
+                            )
+                            .getOrThrow()
+                    }
                     .onSuccess { pathList ->
                         downloadState = Completed(pathList.firstOrNull())
 

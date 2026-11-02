@@ -101,14 +101,31 @@ object AppUpdateManager {
         check(context)
     }
 
-    /** A finished APK on disk outlives the process; offer it again instead of
-     * silently discarding a completed ~100MB download. */
+    /**
+     * A finished APK on disk outlives the process; offer it again instead of
+     * silently discarding a completed ~100MB download — but only when the
+     * installed build does not already cover it. The system installer kills
+     * the app during a self-update, so after installing, this exact file is
+     * stale: it would otherwise resurrect the "Install update" banner and
+     * notification forever. Interrupted downloads leave .part files behind
+     * that no cold start can resume; they are garbage.
+     */
     private suspend fun restoreReadyDownload(context: Context) {
         val current = mutableState.value
         if (current is State.Ready || current is State.Downloading) return
         withContext(Dispatchers.IO) {
             runCatching {
                 val dir = File(context.getExternalFilesDir(null), "updates")
+                dir.listFiles { f -> f.isFile && f.name.endsWith(".part") }
+                    ?.forEach { it.delete() }
+
+                val installed =
+                    parseVersionOrNull(
+                        context.packageManager
+                            .getPackageInfo(context.packageName, 0)
+                            .versionName
+                            .orEmpty(),
+                    ) ?: return@withContext
                 val apk =
                     dir.listFiles { f ->
                         f.isFile && f.name.startsWith("Sleeve-") && f.name.endsWith("-release.apk")
@@ -117,21 +134,46 @@ object AppUpdateManager {
                     apk.name
                         .removePrefix("Sleeve-")
                         .removeSuffix("-release.apk")
-                mutableState.value = State.Ready(version, apk)
+                val apkVersion = parseVersionOrNull(version)
+                if (apkVersion != null && compare(apkVersion, installed) > 0) {
+                    mutableState.value = State.Ready(version, apk)
+                } else {
+                    // Already installed (or unreadable name): a finished
+                    // update's leftover, not an offer to reinstall.
+                    apk.delete()
+                    NotificationUtil.cancelUpdateNotifications()
+                }
             }
         }
     }
 
     suspend fun check(context: Context) {
-        if (mutableState.value is State.Downloading || mutableState.value is State.Ready) return
+        // A download in flight owns the state; a Ready APK does not — the scan
+        // below may prove it stale (installed meanwhile) or keep it.
+        if (mutableState.value is State.Downloading) return
         lastCheckAt = System.currentTimeMillis()
         mutableState.value = State.Checking
         withContext(Dispatchers.IO) {
             runCatching {
-                val current =
-                    context.packageManager
-                        .getPackageInfo(context.packageName, 0)
-                        .versionName.orEmpty()
+                val installed =
+                    parseVersionOrNull(
+                        context.packageManager
+                            .getPackageInfo(context.packageName, 0)
+                            .versionName
+                            .orEmpty(),
+                    ) ?: VersionTuple(0, 0, 0, 4, 0)
+
+                // A finished download the installed build already covers is
+                // stale: delete it and clear the install notifications it
+                // spawned. Covers the survived-without-kill install path.
+                (mutableState.value as? State.Ready)?.let { ready ->
+                    val readyVersion = parseVersionOrNull(ready.version)
+                    if (readyVersion == null || compare(readyVersion, installed) <= 0) {
+                        ready.file.delete()
+                        NotificationUtil.cancelUpdateNotifications()
+                        mutableState.value = State.Idle
+                    }
+                }
 
                 val conn = URL(API_URL).openConnection() as HttpURLConnection
                 conn.connectTimeout = 15_000
@@ -145,8 +187,6 @@ object AppUpdateManager {
                 // /releases/latest is a single pointer: a tag that is not a
                 // version (or a release without the APK) silently hides newer
                 // builds. Scan the list and keep the newest real release APK.
-                val currentVersion =
-                    parseVersionOrNull(current) ?: VersionTuple(0, 0, 0, 4, 0)
                 val best =
                     releases
                         .asSequence()
@@ -174,18 +214,44 @@ object AppUpdateManager {
                         }
                         .maxWithOrNull { a, b -> compare(a.second, b.second) }
 
-                if (best != null && compare(best.second, currentVersion) > 0) {
-                    // One notification per version, even across repeated checks.
-                    if (lastNotifiedVersion != best.first) {
-                        lastNotifiedVersion = best.first
-                        NotificationUtil.notifyUpdateAvailable(best.first)
+                val next =
+                    if (best != null && compare(best.second, installed) > 0) {
+                        // One notification per version, even across repeated checks.
+                        if (lastNotifiedVersion != best.first) {
+                            lastNotifiedVersion = best.first
+                            NotificationUtil.notifyUpdateAvailable(best.first)
+                        }
+                        State.Available(best.first, best.third)
+                    } else {
+                        // Up to date: any lingering update notifications are
+                        // for builds this one already covers.
+                        NotificationUtil.cancelUpdateNotifications()
+                        State.UpToDate
                     }
-                    State.Available(best.first, best.third)
+
+                // A finished download is not downgraded to Available for the
+                // same version: the APK is already on disk, keep the Install
+                // card instead of re-downloading.
+                val current = mutableState.value
+                if (
+                    current is State.Ready &&
+                        next is State.Available &&
+                        current.version == next.version
+                ) {
+                    current
                 } else {
-                    State.UpToDate
+                    next
                 }
-            }.onSuccess { mutableState.value = it }
-                .onFailure { mutableState.value = State.Failed(it.message ?: "update check failed") }
+            }.onSuccess { state ->
+                if (mutableState.value is State.Checking) {
+                    mutableState.value = state
+                }
+            }
+                .onFailure {
+                    if (mutableState.value is State.Checking) {
+                        mutableState.value = State.Failed(it.message ?: "update check failed")
+                    }
+                }
         }
     }
 
