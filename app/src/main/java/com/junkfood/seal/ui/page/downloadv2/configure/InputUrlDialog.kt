@@ -257,7 +257,10 @@ private fun InputUrlPageImpl(
                 icon = Icons.AutoMirrored.Outlined.ArrowForward,
                 text = stringResource(R.string.proceed),
             ) {
-                onActionPost(Action.ProceedWithURLs(listOf(url)))
+                // An empty field would otherwise enqueue a task for "".
+                if (url.isNotBlank()) {
+                    onActionPost(Action.ProceedWithURLs(listOf(url)))
+                }
             }
         }
     }

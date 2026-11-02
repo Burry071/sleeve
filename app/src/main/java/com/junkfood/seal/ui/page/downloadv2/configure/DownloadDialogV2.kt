@@ -335,7 +335,9 @@ private fun ErrorPage(
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            FilledTonalButton(onClick = { onActionPost(state.action) }) { Text("Retry") }
+            FilledTonalButton(onClick = { onActionPost(state.action) }) {
+                Text(stringResource(R.string.retry))
+            }
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = {

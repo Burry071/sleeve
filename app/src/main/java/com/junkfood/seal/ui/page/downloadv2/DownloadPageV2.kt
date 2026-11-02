@@ -47,7 +47,6 @@ import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FloatingActionButton
@@ -563,7 +562,6 @@ fun DownloadPageImplV2(
                                 audioCount = filteredMap.size - videoCount,
                                 isGridView = isGridView,
                                 onToggleView = { isGridView = !isGridView },
-                                onShowMenu = { context.makeToast("Not implemented yet!") },
                             )
                         }
                     }
@@ -837,7 +835,6 @@ fun SubHeader(
     audioCount: Int = 0,
     isGridView: Boolean = true,
     onToggleView: () -> Unit,
-    onShowMenu: () -> Unit,
 ) {
     val text = buildString {
         if (videoCount > 0) {
@@ -878,19 +875,6 @@ fun SubHeader(
             )
         }
 
-        Spacer(Modifier.width(4.dp))
-
-        FilledIconButton(
-            onClick = onShowMenu,
-            modifier = Modifier.clearAndSetSemantics {}.size(32.dp),
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = containerColor),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.MoreVert,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-        }
     }
 }
 
