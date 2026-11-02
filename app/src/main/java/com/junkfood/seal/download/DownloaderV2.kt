@@ -19,6 +19,7 @@ import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.download.Task.RestartableAction.Download
 import com.junkfood.seal.download.Task.RestartableAction.FetchInfo
 import com.junkfood.seal.download.Task.TypeInfo
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.NotificationUtil
@@ -305,7 +306,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 return@onFailure
                             }
                         }
-                        task.downloadState = Error(throwable = throwable, action = FetchInfo)
+                        task.downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = FetchInfo,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
                             textId = R.string.download_error_msg,
@@ -380,7 +385,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
-                        downloadState = Error(throwable = throwable, action = Download)
+                        downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = Download,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
                             textId = R.string.fetch_info_error_msg,
@@ -473,7 +482,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
-                        downloadState = Error(throwable = throwable, action = Download)
+                        downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = Download,
+                            )
                         NotificationUtil.notifyError(
                             title = viewState.title,
                             textId = R.string.fetch_info_error_msg,

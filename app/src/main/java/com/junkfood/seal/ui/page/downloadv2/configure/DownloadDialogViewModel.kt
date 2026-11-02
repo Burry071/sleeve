@@ -9,6 +9,7 @@ import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
@@ -229,7 +230,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         }
                     }
                     .onFailure { th ->
-                        mSheetStateFlow.update { SheetState.Error(action = action, throwable = th) }
+                        mSheetStateFlow.update {
+                            SheetState.Error(action = action, throwable = DownloadErrorMessages.asFriendly(th))
+                        }
                     }
             }
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchPlaylist_$url", job = job) }
@@ -255,7 +258,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, throwable = th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, throwable = DownloadErrorMessages.asFriendly(th))
+                            }
                         }
                     }
             }
@@ -368,9 +373,15 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
 private val VIDEO_FIRST_HOSTS: Regex =
-    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it")
+    Regex(
+        "youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com" +
+            "|reddit\\.com|redd\\.it|instagram\\.com|instagr\\.am",
+    )
 
-    /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
+    /** Hosts whose video flows yt-dlp (with the ghost fallback) serves well
+     * skip the gallery-dl pre-route entirely — instagram above all: the
+     * share dialog stays configure-with-options and the download runs the
+     * same pipeline an in-app paste would.  */
     private fun isVideoFirstHost(url: String) =
         VIDEO_FIRST_HOSTS
             .containsMatchIn(url)
@@ -388,7 +399,18 @@ private val VIDEO_FIRST_HOSTS: Regex =
                             }
                         }
                     }
-                    .onFailure { th -> galleryError(action, th) }
+                    .onFailure { th ->
+                        // Not a dead end: degrade to the plain configure
+                        // sheet so the download runs the same pipeline an
+                        // in-app paste would (yt-dlp + ghost/ladder).
+                        Log.e(TAG, "gallery resolve failed, degrading: ${th.message}")
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(R.string.gallery_resolve_fallback),
+                            )
+                            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
+                        }
+                    }
             }
         mSheetStateFlow.update {
             SheetState.Loading(taskKey = "Gallery_${action.url}", job = job)
