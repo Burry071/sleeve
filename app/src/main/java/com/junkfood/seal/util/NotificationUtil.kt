@@ -34,9 +34,11 @@ object NotificationUtil {
     private const val PROGRESS_INITIAL = 0
     private const val CHANNEL_ID = "download_notification"
     private const val SERVICE_CHANNEL_ID = "download_service"
+    private const val UPDATE_CHANNEL_ID = "app_update"
     private const val NOTIFICATION_GROUP_ID = "seal.download.notification"
     private const val DEFAULT_NOTIFICATION_ID = 100
     const val SERVICE_NOTIFICATION_ID = 123
+    private const val UPDATE_NOTIFICATION_ID = 200
     private lateinit var serviceNotification: Notification
 
     //    private var builder =
@@ -61,9 +63,63 @@ object NotificationUtil {
                 description = context.getString(R.string.service_title)
                 group = NOTIFICATION_GROUP_ID
             }
+        val updateChannel =
+            NotificationChannel(
+                UPDATE_CHANNEL_ID,
+                context.getString(R.string.channel_app_update),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = context.getString(R.string.channel_app_update_desc)
+                group = NOTIFICATION_GROUP_ID
+            }
         notificationManager.createNotificationChannelGroup(channelGroup)
         notificationManager.createNotificationChannel(channel)
         notificationManager.createNotificationChannel(serviceChannel)
+        notificationManager.createNotificationChannel(updateChannel)
+    }
+
+    /** Update found on GitHub Releases: one nudge per version, tap opens the app. */
+    fun notifyUpdateAvailable(version: String) {
+        val intent =
+            context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+        val pendingIntent =
+            PendingIntent.getActivity(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        val notification =
+            NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_seal)
+                .setContentTitle(context.getString(R.string.app_update_notif_available_title))
+                .setContentText(context.getString(R.string.app_update_notif_available_text, version))
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+        notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
+    }
+
+    /** APK finished downloading in the background: tap opens the app to install. */
+    fun notifyUpdateReady(version: String) {
+        val intent =
+            context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+        val pendingIntent =
+            PendingIntent.getActivity(
+                context,
+                1,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        val notification =
+            NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_seal)
+                .setContentTitle(context.getString(R.string.app_update_notif_ready_title, version))
+                .setContentText(context.getString(R.string.app_update_notif_ready_text))
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+        notificationManager.notify(UPDATE_NOTIFICATION_ID + 1, notification)
     }
 
     fun notifyProgress(

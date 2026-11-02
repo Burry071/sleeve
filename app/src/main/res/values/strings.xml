@@ -203,6 +203,17 @@
     <string name="app_update_failed">Failed to update to the latest version</string>
     <string name="app_update_banner_title">New update available</string>
     <string name="app_update_banner_subtitle">Sleeve %1$s · Download and install right in the app</string>
+    <string name="app_update_banner_downloaded">Sleeve %1$s downloaded</string>
+    <string name="app_update_banner_tap_install">Tap install to finish the update</string>
+    <string name="app_update_banner_failed">Update failed: %1$s</string>
+    <string name="app_update_banner_retry">Retry check</string>
+    <string name="install">Install</string>
+    <string name="channel_app_update">App updates</string>
+    <string name="channel_app_update_desc">Notifies when a new Sleeve release is available or an update finished downloading</string>
+    <string name="app_update_notif_available_title">Sleeve update available</string>
+    <string name="app_update_notif_available_text">Sleeve %1$s is out. Tap to update in the app.</string>
+    <string name="app_update_notif_ready_title">Sleeve %1$s downloaded</string>
+    <string name="app_update_notif_ready_text">Tap to install the update.</string>
     <string name="update">Update</string>
     <string name="aria2" translatable="false">Aria2</string>
     <string name="aria2_desc">Use aria2c as the external downloader</string>

@@ -98,7 +98,7 @@ object DownloadUtil {
     ): Result<YoutubeDLInfo> =
         YoutubeDL.runCatching {
             ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
-            val request = YoutubeDLRequest(playlistURL)
+            val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
             with(request) {
                 //            addOption("--compat-options", "no-youtube-unavailable-videos")
                 addOption("--flat-playlist")
@@ -153,11 +153,13 @@ object DownloadUtil {
     ): Result<VideoInfo> {
         with(preferences) {
             val request =
-                YoutubeDLRequest(url).apply {
-                    addOption("-o", BASENAME)
-                    if (restrictFilenames) {
-                        addOption("--restrict-filenames")
-                    }
+                YoutubeDLRequest(url)
+                    .maybeRedditUserAgent(url)
+                    .apply {
+                        addOption("-o", BASENAME)
+                        if (restrictFilenames) {
+                            addOption("--restrict-filenames")
+                        }
                     if (extractAudio) {
                         addOption("-x")
                     }
@@ -384,6 +386,18 @@ object DownloadUtil {
         this.addOption("--cookies", context.getCookiesFile().absolutePath).apply {
             if (userAgentString.isNotEmpty()) {
                 addOption("--add-header", "User-Agent:$userAgentString")
+            }
+        }
+
+    /**
+     * Reddit hard-blocks non-browser user agents before the extractor can
+     * even reach the JSON API, so requests for reddit hosts present as the
+     * browser this device runs. Skipped when the user set a custom UA.
+     */
+    private fun YoutubeDLRequest.maybeRedditUserAgent(url: String): YoutubeDLRequest =
+        apply {
+            if (RedditResolver.isRedditHost(url) && !USER_AGENT.getBoolean()) {
+                addOption("--user-agent", RedditResolver.BROWSER_UA)
             }
         }
 
@@ -1231,7 +1245,7 @@ object DownloadUtil {
                 progressCallback = progressCallback,
             )?.let { return it }
 
-            val request = YoutubeDLRequest(url)
+            val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
             val pathBuilder = StringBuilder()
             val outputBuilder = StringBuilder()
 

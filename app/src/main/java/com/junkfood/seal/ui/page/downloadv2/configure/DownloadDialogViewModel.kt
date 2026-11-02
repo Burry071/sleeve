@@ -11,6 +11,7 @@ import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.PlaylistEntry
@@ -199,6 +200,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
+        if (redditPreRoute(action.urlList)) return
         mSheetStateFlow.update { SheetState.Configure(action.urlList) }
     }
 
@@ -340,6 +342,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
+        if (urlList != null && redditPreRoute(urlList)) return
         urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
             // gallery-dl check runs on IO (first call loads ~300 site modules);
             // a hit routes to the gallery flow, a miss falls through to Configure.
@@ -385,6 +388,45 @@ private val VIDEO_FIRST_HOSTS: Regex =
     private fun isVideoFirstHost(url: String) =
         VIDEO_FIRST_HOSTS
             .containsMatchIn(url)
+
+    /**
+     * Reddit pre-route: the anonymous JSON resolver fetches the post's media
+     * (video manifest, images, galleries) without any login. Success lands in
+     * the configure sheet on the direct lane — the same pipeline as gallery
+     * items; any failure quietly falls through to the plain yt-dlp configure
+     * sheet, never a dead end.
+     *
+     * @return true when a reddit URL was claimed and resolution is running.
+     */
+    private fun redditPreRoute(urlList: List<String>): Boolean {
+        val candidate = urlList.firstOrNull { RedditResolver.isPostUrl(it) } ?: return false
+        if (resolveThrottled("reddit")) return true
+        mSheetValueFlow.update { SheetValue.Expanded }
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                RedditResolver.resolve(candidate)
+                    .onSuccess { items ->
+                        val resolved =
+                            SleeveQuickDownload.Resolved(candidate, items, "reddit")
+                        withContext(Dispatchers.Main) {
+                            pendingGallery = resolved
+                            mSheetStateFlow.update {
+                                SheetState.Configure(listOf(candidate), gallery = resolved)
+                            }
+                        }
+                    }
+                    .onFailure { th ->
+                        Log.e(TAG, "reddit resolve failed, degrading: ${th.message}")
+                        withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.Configure(urlList) }
+                        }
+                    }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "Reddit_$candidate", job = job)
+        }
+        return true
+    }
 
     private fun fetchGallery(action: Action.FetchGallery) {
         if (resolveThrottled("gallery")) return

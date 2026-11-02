@@ -50,6 +50,7 @@ object AppUpdateManager {
 
     private const val CHECK_INTERVAL_MS = 30 * 60 * 1000L
     @Volatile private var lastCheckAt = 0L
+    @Volatile private var lastNotifiedVersion: String? = null
 
     private data class VersionTuple(
         val major: Long,
@@ -150,6 +151,11 @@ object AppUpdateManager {
                         .maxWithOrNull { a, b -> compare(a.second, b.second) }
 
                 if (best != null && compare(best.second, currentVersion) > 0) {
+                    // One notification per version, even across repeated checks.
+                    if (lastNotifiedVersion != best.first) {
+                        lastNotifiedVersion = best.first
+                        NotificationUtil.notifyUpdateAvailable(best.first)
+                    }
                     State.Available(best.first, best.third)
                 } else {
                     State.UpToDate
@@ -188,6 +194,9 @@ object AppUpdateManager {
                     }
                 }
                 mutableState.value = State.Ready(version, target)
+                // The download can finish while the app is backgrounded;
+                // surface the install step outside the banner too.
+                NotificationUtil.notifyUpdateReady(version)
             }.onFailure {
                 mutableState.value = State.Failed(it.message ?: "download failed")
             }

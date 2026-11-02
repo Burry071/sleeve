@@ -10,11 +10,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
 
-/** Press feedback: subtle scale-down while touched (emil-design-eng 100-160ms). */
-fun Modifier.pressScale(): Modifier =
+/**
+ * Press feedback: subtle scale-down while touched (emil-design-eng 100-160ms).
+ * Pass the SAME interaction source the clickable/button uses — a source nothing
+ * feeds never reports presses.
+ */
+fun Modifier.pressScale(interactionSource: MutableInteractionSource? = null): Modifier =
     composed {
-        val interaction = remember { MutableInteractionSource() }
-        val pressed by interaction.collectIsPressedAsState()
+        val source = interactionSource ?: remember { MutableInteractionSource() }
+        val pressed by source.collectIsPressedAsState()
         val scale by
             animateFloatAsState(
                 targetValue = if (pressed) 0.97f else 1f,
