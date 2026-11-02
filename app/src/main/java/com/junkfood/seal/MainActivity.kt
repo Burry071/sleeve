@@ -16,7 +16,7 @@ import com.junkfood.seal.ui.page.AppEntry
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.PreferenceUtil
-import com.junkfood.seal.util.matchUrlFromSharedText
+import com.junkfood.seal.util.matchAllUrlsFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.runBlocking
 import org.koin.androidx.viewmodel.ext.android.viewModel
@@ -62,7 +62,11 @@ class MainActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent) {
         val url = intent.getSharedURL()
         if (url != null) {
-            dialogViewModel.postAction(DownloadDialogViewModel.Action.ShowSheet(listOf(url)))
+            dialogViewModel.postAction(
+                DownloadDialogViewModel.Action.ShowSheet(
+                    url.split("\n").map { it.trim() }.filter { it.isNotBlank() },
+                ),
+            )
         }
     }
 
@@ -77,7 +81,7 @@ class MainActivity : AppCompatActivity() {
             Intent.ACTION_SEND -> {
                 intent.getStringExtra(Intent.EXTRA_TEXT)?.let { sharedContent ->
                     intent.removeExtra(Intent.EXTRA_TEXT)
-                    matchUrlFromSharedText(sharedContent).also { matchedUrl ->
+                    matchAllUrlsFromSharedText(sharedContent).also { matchedUrl ->
                         if (sharedUrlCached != matchedUrl) {
                             sharedUrlCached = matchedUrl
                         }

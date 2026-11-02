@@ -198,16 +198,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun proceedWithUrls(action: Action.ProceedWithURLs) {
-        action.urlList.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
-            fetchSpotify(Action.FetchSpotify(spotifyUrl))
-            return
-        }
-        action.urlList.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
-            fetchAudible(Action.FetchAudible(audibleUrl))
-            return
-        }
-        if (redditPreRoute(action.urlList)) return
-        mSheetStateFlow.update { SheetState.Configure(action.urlList) }
+        routeUrls(action.urlList)
     }
 
     private fun fetchPlaylist(action: Action.FetchPlaylist) {
@@ -383,47 +374,61 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun showDialog(action: Action.ShowSheet) {
         val urlList = action.urlList
-        urlList?.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
-            mSheetValueFlow.update { SheetValue.Expanded }
-            fetchSpotify(Action.FetchSpotify(spotifyUrl))
-            return
-        }
-        urlList?.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
-            mSheetValueFlow.update { SheetValue.Expanded }
-            fetchAudible(Action.FetchAudible(audibleUrl))
-            return
-        }
-        if (urlList != null && redditPreRoute(urlList)) return
-        urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
-            // gallery-dl check runs on IO (first call loads ~300 site modules);
-            // a hit routes to the gallery flow, a miss falls through to Configure.
-            mSheetValueFlow.update { SheetValue.Expanded }
-            val job =
-                viewModelScope.launch(Dispatchers.IO) {
-                    val matched =
-                        runCatching { GhostEngine.galleryMatches(candidate) }
-                            .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
-                            .getOrDefault(false)
-                    Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
-                    withContext(Dispatchers.Main) {
-                        if (matched) {
-                            fetchGallery(Action.FetchGallery(candidate))
-                        } else {
-                            mSheetStateFlow.update { SheetState.Configure(urlList) }
-                        }
-                    }
-                }
-            mSheetStateFlow.update {
-                SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
-            }
-            return
-        }
-        if (!urlList.isNullOrEmpty()) {
-            mSheetStateFlow.update { SheetState.Configure(urlList) }
-        } else {
+        if (urlList.isNullOrEmpty()) {
             mSheetStateFlow.update { SheetState.InputUrl }
+            mSheetValueFlow.update { SheetValue.Expanded }
+            return
         }
         mSheetValueFlow.update { SheetValue.Expanded }
+        routeUrls(urlList)
+    }
+
+    /**
+     * The one routing decision for every entry, share target and in-app paste
+     * alike. Metadata lanes claim exclusive metadata lists. Resolve lanes
+     * (reddit, gallery-dl) only claim a lone URL: a multi-URL share keeps
+     * every link in one configure sheet instead of silently dropping
+     * siblings, and the yt-dlp lane handles each link as its own task.
+     */
+    private fun routeUrls(urlList: List<String>) {
+        if (urlList.all { isSpotifyUrl(it) }) {
+            fetchSpotify(Action.FetchSpotify(urlList.first()))
+            return
+        }
+        if (urlList.all { isAudibleUrl(it) }) {
+            fetchAudible(Action.FetchAudible(urlList.first()))
+            return
+        }
+        if (urlList.size == 1) {
+            val url = urlList.first()
+            if (redditPreRoute(urlList)) return
+            if (!isVideoFirstHost(url)) {
+                galleryPreRoute(url)
+                return
+            }
+        }
+        mSheetStateFlow.update { SheetState.Configure(urlList) }
+    }
+
+    /** gallery-dl claim check on IO; a hit goes to the gallery lane, a miss
+     * (or an unloaded module registry) falls through to the configure sheet. */
+    private fun galleryPreRoute(url: String) {
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                val matched =
+                    runCatching { GhostEngine.galleryMatches(url) }
+                        .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
+                        .getOrDefault(false)
+                Log.i(TAG, "gallery pre-route: candidate=$url matched=$matched")
+                withContext(Dispatchers.Main) {
+                    if (matched) {
+                        fetchGallery(Action.FetchGallery(url))
+                    } else {
+                        mSheetStateFlow.update { SheetState.Configure(listOf(url)) }
+                    }
+                }
+            }
+        mSheetStateFlow.update { SheetState.Loading(taskKey = "Gallery_$url", job = job) }
     }
 
 private val VIDEO_FIRST_HOSTS: Regex =

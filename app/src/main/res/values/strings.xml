@@ -214,6 +214,7 @@
     <string name="app_update_notif_available_text">Sleeve %1$s is out. Tap to update in the app.</string>
     <string name="app_update_notif_ready_title">Sleeve %1$s downloaded</string>
     <string name="app_update_notif_ready_text">Tap to install the update.</string>
+    <string name="clipboard_link_detected">Link detected in clipboard</string>
     <string name="update">Update</string>
     <string name="aria2" translatable="false">Aria2</string>
     <string name="aria2_desc">Use aria2c as the external downloader</string>

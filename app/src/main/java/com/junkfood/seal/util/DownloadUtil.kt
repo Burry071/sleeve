@@ -103,6 +103,11 @@ object DownloadUtil {
             ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
             val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
             with(request) {
+                // Native YouTube clients: no JS runtime on Android.
+                addOption(
+                    "--extractor-args",
+                    "youtube:player_client=android_vr,android,ios",
+                )
                 //            addOption("--compat-options", "no-youtube-unavailable-videos")
                 addOption("--flat-playlist")
                 addOption("--dump-single-json")
@@ -160,6 +165,13 @@ object DownloadUtil {
                     .maybeRedditUserAgent(url)
                     .apply {
                         addOption("-o", BASENAME)
+                        // No JS runtime exists on Android, so YouTube web
+                        // clients degrade (nsig throttling, missing formats).
+                        // Native clients need no JavaScript.
+                        addOption(
+                            "--extractor-args",
+                            "youtube:player_client=android_vr,android,ios",
+                        )
                         if (restrictFilenames) {
                             addOption("--restrict-filenames")
                         }
@@ -183,13 +195,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     if (playlistIndex != null) {
@@ -496,13 +501,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     subtitleLanguage
@@ -621,13 +619,6 @@ object DownloadUtil {
                         addOption("--write-auto-subs")
                         if (!autoTranslatedSubtitles) {
                             addOption("--extractor-args", "youtube:skip=translated_subs")
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=android_vr,android,ios",
-                                )
                         }
                     }
                     subtitleLanguage
@@ -716,9 +707,16 @@ object DownloadUtil {
     /** processId -> embedded-engine task id, for cancellation routing. */
     private val ghostTasks = ConcurrentHashMap<String, String>()
 
-    fun cancelGhostTask(taskId: String) {
-        ghostTasks.remove(taskId)?.let { GhostEngine.cancel(it) }
-    }
+    /** @return true when an engine task was registered for this id and cancelled. */
+    fun cancelGhostTask(taskId: String): Boolean =
+        ghostTasks.remove(taskId)?.also { GhostEngine.cancel(it) } != null
+
+    /** Live N_m3u8DL-RE processes by task id, so cancel can kill them. */
+    private val nreProcesses = ConcurrentHashMap<String, Process>()
+
+    /** @return true when a running N_m3u8DL-RE process was terminated. */
+    fun cancelNm3u8DlRe(taskId: String): Boolean =
+        (nreProcesses.remove(taskId)?.also { it.destroy() }) != null
 
 
     /** Extensions that mark a direct file as audio for directory routing. */
@@ -888,6 +886,9 @@ object DownloadUtil {
                 workDir.deleteRecursively()
                 return null
             }
+        // Registered so a task cancel can terminate the process; waitFor
+        // below would otherwise block until the transfer finishes.
+        nreProcesses[taskId] = process
 
         // Stream-copy done; the produced file is the largest under workDir.
         val produced =
@@ -908,6 +909,7 @@ object DownloadUtil {
                     .maxByOrNull { it.length() }
             }
         val code = runCatching { process.waitFor() }.getOrDefault(-1)
+        nreProcesses.remove(taskId)
         if (code != 0 || produced == null || produced.length() == 0L) {
             Log.w(TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
             workDir.deleteRecursively()
@@ -1254,6 +1256,12 @@ object DownloadUtil {
             )?.let { return it }
 
             val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
+            // Native YouTube clients: no JS runtime on Android, and the
+            // download request must re-extract with the same clients.
+            request.addOption(
+                "--extractor-args",
+                "youtube:player_client=android_vr,android,ios",
+            )
             val pathBuilder = StringBuilder()
             val outputBuilder = StringBuilder()
 

@@ -96,6 +96,14 @@ fun matchUrlFromSharedText(s: String): String {
     }
 }
 
+/** All URLs in the shared text, for SEND_MULTIPLE and multi-link shares. */
+fun matchAllUrlsFromSharedText(s: String): String {
+    findURLsFromString(s, false).joinToString(separator = "\n").run {
+        if (isEmpty()) ToastUtil.makeToast(R.string.share_fail_msg)
+        return this
+    }
+}
+
 fun Number?.toBitrateText(): String {
     val br = this?.toFloat() ?: return ""
     return when {

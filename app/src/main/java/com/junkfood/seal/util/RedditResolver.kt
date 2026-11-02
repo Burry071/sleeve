@@ -44,6 +44,10 @@ object RedditResolver {
         )
     private val SHORT_RE = Regex("""https?://(?:www\.)?redd\.it/([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
 
+    /** Gallery shares: /gallery/<id> is the post id in disguise. */
+    private val GALLERY_RE =
+        Regex("""https?://(?:\w+\.)?reddit\.com/(?:r/[^/\s]+/)?gallery/([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
+
     const val BROWSER_UA =
         "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -57,7 +61,8 @@ object RedditResolver {
     fun isRedditHost(url: String): Boolean = HOST_RE.containsMatchIn(url)
 
     /** Post URLs eligible for the JSON pre-route (not v.redd.it media links). */
-    fun isPostUrl(url: String): Boolean = POST_RE.containsMatchIn(url) || SHORT_RE.containsMatchIn(url)
+    fun isPostUrl(url: String): Boolean =
+        POST_RE.containsMatchIn(url) || SHORT_RE.containsMatchIn(url) || GALLERY_RE.containsMatchIn(url)
 
     private fun postPath(url: String): String {
         POST_RE.find(url)?.let { m ->
@@ -65,6 +70,7 @@ object RedditResolver {
             return "comments/$id" + if (slug.isNotEmpty()) "/$slug" else ""
         }
         SHORT_RE.find(url)?.let { return "comments/${it.groupValues[1]}" }
+        GALLERY_RE.find(url)?.let { return "comments/${it.groupValues[1]}" }
         throw IllegalArgumentException("not a reddit post url")
     }
 

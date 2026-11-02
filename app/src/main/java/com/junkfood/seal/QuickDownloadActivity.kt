@@ -32,7 +32,7 @@ import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PreferenceUtil
-import com.junkfood.seal.util.matchUrlFromSharedText
+import com.junkfood.seal.util.matchAllUrlsFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -57,12 +57,15 @@ class QuickDownloadActivity : ComponentActivity() {
             }
 
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
-                // ACTION_SEND_MULTIPLE senders may put a list under EXTRA_TEXT,
-                // so read it as Any and only accept a String.
+                // ACTION_SEND_MULTIPLE senders may put one string, an
+                // ArrayList<String>, or HTML under EXTRA_TEXT.
                 val sharedContent =
                     (intent.extras?.get(Intent.EXTRA_TEXT) as? String)
+                        ?: (intent.extras?.get(Intent.EXTRA_TEXT) as? ArrayList<*>)
+                            ?.filterIsInstance<String>()
+                            ?.joinToString("\n")
                         ?: (intent.extras?.get(Intent.EXTRA_HTML_TEXT) as? String)
-                sharedContent?.let { matchUrlFromSharedText(it) }
+                sharedContent?.let { matchAllUrlsFromSharedText(it) }
             }
 
             else -> {
@@ -95,20 +98,25 @@ class QuickDownloadActivity : ComponentActivity() {
             // default pipeline, no configure dialog. The gallery route inside
             // handles Instagram and other image sites anonymously first.
             App.startService()
-            val url = sharedUrlCached
+            val urls =
+                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() }
             lifecycleScope.launch {
-                SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
-                    .onSuccess { (queued, source) ->
-                        ToastUtil.makeToast(
-                            getString(R.string.gallery_items_queued, queued, source),
-                        )
-                    }
-                    .onFailure {
-                        ToastUtil.makeToast(
-                            DownloadErrorMessages.friendly(it)
-                                .ifEmpty { getString(R.string.download_error_msg) },
-                        )
-                    }
+                var queued = 0
+                urls.forEach { url ->
+                    SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
+                        .onSuccess { (count, _) -> queued += count }
+                        .onFailure {
+                            ToastUtil.makeToast(
+                                DownloadErrorMessages.friendly(it)
+                                    .ifEmpty { getString(R.string.download_error_msg) },
+                            )
+                        }
+                }
+                if (queued > 0) {
+                    ToastUtil.makeToast(
+                        getString(R.string.gallery_items_queued, queued, "quick"),
+                    )
+                }
                 finish()
             }
             return
@@ -136,7 +144,11 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         val viewModel: DownloadDialogViewModel = getViewModel()
-        viewModel.postAction(Action.ShowSheet(listOf(sharedUrlCached)))
+        viewModel.postAction(
+            Action.ShowSheet(
+                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() },
+            ),
+        )
 
         setContent {
             SettingsProvider(calculateWindowSizeClass(this).widthSizeClass) {

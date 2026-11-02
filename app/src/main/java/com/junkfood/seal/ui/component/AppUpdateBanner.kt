@@ -136,7 +136,8 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                         }
                     }
 
-                    is State.Downloading ->
+                    is State.Downloading -> {
+                        val interaction = remember { MutableInteractionSource() }
                         Row(
                             modifier =
                                 Modifier.fillMaxWidth()
@@ -153,7 +154,16 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.SemiBold,
                             )
+                            Spacer(Modifier.width(8.dp))
+                            FilledTonalButton(
+                                onClick = { AppUpdateManager.cancelDownload() },
+                                interactionSource = interaction,
+                                modifier = Modifier.pressScale(interaction),
+                            ) {
+                                Text(stringResource(R.string.cancel))
+                            }
                         }
+                    }
 
                     is State.Ready -> {
                         val interaction = remember { MutableInteractionSource() }

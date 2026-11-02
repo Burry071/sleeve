@@ -128,6 +128,7 @@ class RedditResolverTest {
         assertTrue(RedditResolver.isRedditHost("https://i.redd.it/photo.jpg"))
         assertTrue(RedditResolver.isPostUrl("https://www.reddit.com/r/x/comments/1abc/some_title/"))
         assertTrue(RedditResolver.isPostUrl("https://redd.it/1abc"))
+        assertTrue(RedditResolver.isPostUrl("https://www.reddit.com/r/pics/gallery/1abc9"))
         assertFalse(RedditResolver.isPostUrl("https://v.redd.it/xyz"))
         assertFalse(RedditResolver.isPostUrl("https://youtube.com/watch?v=1"))
     }

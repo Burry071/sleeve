@@ -94,6 +94,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -101,6 +104,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.constraintlayout.compose.ConstraintLayout
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.ClipboardManager
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material3.IconButton
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.junkfood.seal.util.findURLsFromString
 import com.junkfood.seal.R
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
@@ -220,6 +231,29 @@ fun DownloadPageV2(
     val clipboardManager = LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
 
+    // Clipboard watch: one offer per copied link, re-armed on every resume
+    // while the app is foregrounded.
+    var clipboardOffer by remember { mutableStateOf<String?>(null) }
+    var lastClipboardOffer by remember { mutableStateOf<String?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            val detected =
+                runCatching {
+                    context
+                        .getSystemService(ClipboardManager::class.java)
+                        ?.primaryClip
+                        ?.getItemAt(0)
+                        ?.text
+                        ?.toString()
+                }.getOrNull()
+                    ?.let { text -> findURLsFromString(text, firstMatchOnly = true).firstOrNull() }
+            if (detected != null && detected != lastClipboardOffer) {
+                clipboardOffer = detected
+            }
+        }
+    }
+
     DownloadPageImplV2(
         modifier = modifier,
         taskDownloadStateMap = downloader.getTaskStateMap(),
@@ -228,6 +262,16 @@ fun DownloadPageV2(
             dialogViewModel.postAction(Action.ShowSheet())
         },
         onMenuOpen = onMenuOpen,
+        clipboardOffer = clipboardOffer,
+        onClipboardDownload = { url ->
+            lastClipboardOffer = url
+            clipboardOffer = null
+            dialogViewModel.postAction(Action.ShowSheet(listOf(url)))
+        },
+        onClipboardDismiss = {
+            lastClipboardOffer = clipboardOffer
+            clipboardOffer = null
+        },
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -340,6 +384,9 @@ fun DownloadPageImplV2(
     taskDownloadStateMap: SnapshotStateMap<Task, Task.State>,
     downloadCallback: () -> Unit = {},
     onMenuOpen: (() -> Unit) = {},
+    clipboardOffer: String? = null,
+    onClipboardDownload: (String) -> Unit = {},
+    onClipboardDismiss: () -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
@@ -404,6 +451,49 @@ fun DownloadPageImplV2(
             CompositionLocalProvider(LocalOverscrollFactory provides null) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(with(LocalDensity.current) { headerOffset.toDp() }))
+                    clipboardOffer?.let { url ->
+                        // Cobalt-style paste flow: a link copied anywhere shows
+                        // up here with a one-tap download using the defaults.
+                        Surface(
+                            modifier =
+                                Modifier.fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentPaste,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.clipboard_link_detected),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = url,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                FilledTonalButton(onClick = { onClipboardDownload(url) }) {
+                                    Text(stringResource(R.string.download))
+                                }
+                                IconButton(onClick = onClipboardDismiss) {
+                                    Icon(Icons.Rounded.Close, contentDescription = null)
+                                }
+                            }
+                        }
+                    }
                     UpdateBanner(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                     Header(onMenuOpen = onMenuOpen, modifier = Modifier.padding(horizontal = 16.dp))
                     SelectionGroupRow(
