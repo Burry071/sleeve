@@ -273,7 +273,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         if (gallery != null && urlList.firstOrNull() == gallery.url) {
             pendingGallery = null
             viewModelScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.enqueueResolved(downloader, gallery)
+                SleeveQuickDownload.enqueueResolved(
+                        downloader,
+                        gallery,
+                        extractAudio = preferences.extractAudio,
+                    )
                     .onSuccess { (queued, source) ->
                         withContext(Dispatchers.Main) {
                             ToastUtil.makeToast(

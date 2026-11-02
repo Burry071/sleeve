@@ -37,15 +37,39 @@ object SleeveQuickDownload {
             file.absolutePath
         }.getOrDefault("")
 
-    private fun directPreferences(item: GalleryItem): DownloadUtil.DownloadPreferences =
-        DownloadUtil.DownloadPreferences.createFromPreferences().copy(
+    /** Extensions that mark a direct item as an extractable video. */
+    private val DIRECT_VIDEO_EXTS = setOf("mp4", "webm", "mkv", "mov", "m4v")
+
+    private fun directPreferences(
+        item: GalleryItem,
+        extractAudio: Boolean = false,
+    ): DownloadUtil.DownloadPreferences {
+        val ext =
+            (item.filename.ifBlank { item.url })
+                .substringBefore('?')
+                .substringBefore('#')
+                .substringAfterLast('/')
+                .substringAfterLast('.')
+                .lowercase()
+        // Picking Audio means yt-dlp post-processing (-x), which the ghost
+        // transfer lane does not do: direct video files take the stock
+        // extraction route, images stay on the transfer lane unchanged. This
+        // intentionally overrides the global EXTRACT_AUDIO preference, so the
+        // dialog answer can't leak into unrelated quick-download items —
+        // inheriting the global pref produced `-f direct` on the stock route.
+        val wantsAudio = extractAudio && ext in DIRECT_VIDEO_EXTS
+        return DownloadUtil.DownloadPreferences.createFromPreferences().copy(
             galleryDirect = true,
+            extractAudio = wantsAudio,
             newTitle = item.filename.substringBeforeLast('.').ifBlank {
                 item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
             },
-            formatIdString = "direct",
+            // "direct" is not a yt-dlp format id; it must never reach `-f`
+            // when the audio-extraction route runs.
+            formatIdString = if (wantsAudio) "" else "direct",
             referer = item.referer,
         )
+    }
 
     /** Resolve via gallery → instagram embed → sniff. No enqueue; the caller
      * shows what was found and enqueues only after the user confirms. */
@@ -79,6 +103,7 @@ object SleeveQuickDownload {
     suspend fun enqueueResolved(
         downloader: DownloaderV2,
         resolved: Resolved,
+        extractAudio: Boolean = false,
     ): Result<Outcome> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -86,7 +111,10 @@ object SleeveQuickDownload {
                 resolved.items.forEach { item ->
                     runCatching {
                         downloader.enqueue(
-                            Task(url = item.url, preferences = directPreferences(item))
+                            Task(
+                                url = item.url,
+                                preferences = directPreferences(item, extractAudio),
+                            )
                         )
                         queued++
                     }.onFailure { Log.e(TAG, "enqueue failed for ${item.url}: ${it.message}") }

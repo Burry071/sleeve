@@ -563,6 +563,15 @@ private fun ConfigurePage(
                 title = stringResource(R.string.settings_before_download),
                 icon = Icons.Outlined.DoneAll,
             )
+            // Upstream Seal's sheetContent keeps a centered one-liner between
+            // the header and the download-type group; Sleeve dropped it.
+            Text(
+                text = stringResource(R.string.settings_before_download_text),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
                 typeEntries = typeEntries,
@@ -572,71 +581,71 @@ private fun ConfigurePage(
             // Gallery/embed items are already resolved direct files; format
             // selection and command templates don't apply to them.
             if (gallery == null) {
-            Column(modifier = Modifier.animateContentSize()) {
-                if (selectedType != Command) {
-                    DrawerSheetSubtitle(
-                        text = stringResource(id = R.string.format_selection),
-                        modifier = Modifier,
-                    )
-                    Preset(
-                        modifier = Modifier,
-                        preference = preferences,
-                        selected = !useFormatSelection,
-                        downloadType = selectedType,
-                        onClick = { useFormatSelection = false },
-                        showEditIcon = !useFormatSelection && selectedType != Playlist,
-                        onEdit = { onPresetEdit(selectedType) },
-                    )
-                    Custom(
-                        selected = useFormatSelection,
-                        enabled = selectedType != Playlist,
-                        onClick = { useFormatSelection = true },
-                    )
-                } else {
-                    if (showTemplateSelectionDialog) {
-                        TemplatePickerDialog { showTemplateSelectionDialog = false }
-                    }
-                    if (showTemplateCreatorDialog) {
-                        CommandTemplateDialog(
-                            onDismissRequest = { showTemplateCreatorDialog = false },
-                            confirmationCallback = { scope.launch { TEMPLATE_ID.updateInt(it) } },
+                Column(modifier = Modifier.animateContentSize()) {
+                    if (selectedType != Command) {
+                        DrawerSheetSubtitle(
+                            text = stringResource(id = R.string.format_selection),
+                            modifier = Modifier,
                         )
-                    }
-                    if (showTemplateEditorDialog) {
-                        CommandTemplateDialog(
-                            commandTemplate = template,
-                            onDismissRequest = { showTemplateEditorDialog = false },
+                        Preset(
+                            modifier = Modifier,
+                            preference = preferences,
+                            selected = !useFormatSelection,
+                            downloadType = selectedType,
+                            onClick = { useFormatSelection = false },
+                            showEditIcon = !useFormatSelection && selectedType != Playlist,
+                            onEdit = { onPresetEdit(selectedType) },
                         )
-                    }
-                    DrawerSheetSubtitle(
-                        text = stringResource(id = R.string.template_selection),
-                        modifier = Modifier,
-                    )
-                    LazyRow(modifier = Modifier) {
-                        item {
-                            ButtonChip(
-                                icon = Icons.Outlined.Code,
-                                label = template.name,
-                                onClick = { showTemplateSelectionDialog = true },
+                        Custom(
+                            selected = useFormatSelection,
+                            enabled = selectedType != Playlist,
+                            onClick = { useFormatSelection = true },
+                        )
+                    } else {
+                        if (showTemplateSelectionDialog) {
+                            TemplatePickerDialog { showTemplateSelectionDialog = false }
+                        }
+                        if (showTemplateCreatorDialog) {
+                            CommandTemplateDialog(
+                                onDismissRequest = { showTemplateCreatorDialog = false },
+                                confirmationCallback = { scope.launch { TEMPLATE_ID.updateInt(it) } },
                             )
                         }
-                        item {
-                            ButtonChip(
-                                icon = Icons.Outlined.NewLabel,
-                                label = stringResource(id = R.string.new_template),
-                                onClick = { showTemplateCreatorDialog = true },
+                        if (showTemplateEditorDialog) {
+                            CommandTemplateDialog(
+                                commandTemplate = template,
+                                onDismissRequest = { showTemplateEditorDialog = false },
                             )
                         }
-                        item {
-                            ButtonChip(
-                                icon = Icons.Outlined.Edit,
-                                label = stringResource(id = R.string.edit_template, template.name),
-                                onClick = { showTemplateEditorDialog = true },
-                            )
+                        DrawerSheetSubtitle(
+                            text = stringResource(id = R.string.template_selection),
+                            modifier = Modifier,
+                        )
+                        LazyRow(modifier = Modifier) {
+                            item {
+                                ButtonChip(
+                                    icon = Icons.Outlined.Code,
+                                    label = template.name,
+                                    onClick = { showTemplateSelectionDialog = true },
+                                )
+                            }
+                            item {
+                                ButtonChip(
+                                    icon = Icons.Outlined.NewLabel,
+                                    label = stringResource(id = R.string.new_template),
+                                    onClick = { showTemplateCreatorDialog = true },
+                                )
+                            }
+                            item {
+                                ButtonChip(
+                                    icon = Icons.Outlined.Edit,
+                                    label = stringResource(id = R.string.edit_template, template.name),
+                                    onClick = { showTemplateEditorDialog = true },
+                                )
+                            }
                         }
                     }
                 }
-            }
             }
         }
         var expanded by remember { mutableStateOf(false) }
@@ -715,6 +724,13 @@ fun ConfigurePagePlaylistVariant(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
                 title = stringResource(R.string.settings_before_download),
                 icon = Icons.Outlined.DoneAll,
+            )
+            Text(
+                text = stringResource(R.string.settings_before_download_text),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
