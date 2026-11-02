@@ -255,6 +255,10 @@ object DownloadUtil {
         val mergeAudioStream: Boolean,
         val mergeToMkv: Boolean,
         val galleryDirect: Boolean = false,
+        // Page the direct media URL was resolved from (gallery-dl/embed/sniff
+        // items). Instagram CDN hosts 403 without it. Default keeps backups
+        // written before this field decodable.
+        val referer: String = "",
     ) {
         companion object {
             val EMPTY =
@@ -696,6 +700,10 @@ object DownloadUtil {
     }
 
 
+    /** Extensions that mark a direct file as audio for directory routing. */
+    private val DIRECT_AUDIO_EXTS =
+        setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma")
+
     /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
     private val PRIVATE_HOST_RE =
         Regex(
@@ -1006,21 +1014,23 @@ object DownloadUtil {
             else
                 if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
 
-        // Gallery/embed items carry a per-item Referer upstream, but the Task
-        // plumbing drops it before this handoff. Reconstruct it from what is
-        // available here: the extraction page (yt-dlp formats), falling back
-        // to the canonical instagram referer for instagram CDN hosts, which
-        // reject signed media without it. Direct items keep the media url as
-        // their page, which is not a referer — skip those.
+        // Gallery/embed items carry a per-item Referer from the resolver;
+        // prefer it, and reconstruct from what is available here otherwise:
+        // the extraction page (yt-dlp formats), falling back to the canonical
+        // instagram referer for instagram CDN hosts, which reject signed
+        // media without it. Direct items keep the media url as their page,
+        // which is not a referer — skip those.
         val mediaUrl = eligibleFormat.url!!
         val pageReferer =
             listOfNotNull(videoInfo.webpageUrl, videoInfo.originalUrl)
                 .firstOrNull { it.isNotBlank() && it != mediaUrl }
         val referer =
-            if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
-                "https://www.instagram.com/"
-            } else {
-                pageReferer
+            preferences.referer.ifBlank {
+                if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
+                    "https://www.instagram.com/"
+                } else {
+                    pageReferer
+                }
             }
         val engineHeaders =
             if (referer.isNullOrBlank()) {
@@ -1232,6 +1242,24 @@ object DownloadUtil {
                     if (cookies) {
                         enableCookies(userAgentString)
                     }
+                    if (galleryDirect) {
+                        // Engine declined this direct item and we fell back to
+                        // yt-dlp: without the page referer the generic
+                        // extractor gets 403 from instagram CDN hosts.
+                        val directReferer =
+                            referer.ifBlank {
+                                if (
+                                    url.contains("cdninstagram") || url.contains("fbcdn")
+                                ) {
+                                    "https://www.instagram.com/"
+                                } else {
+                                    ""
+                                }
+                            }
+                        if (directReferer.isNotBlank()) {
+                            addOption("--add-headers", "Referer:$directReferer")
+                        }
+                    }
                     if (restrictFilenames) {
                         addOption("--restrict-filenames")
                     }
@@ -1426,11 +1454,25 @@ object DownloadUtil {
         val cleanUrl = url.substringBefore('#')
         val path = cleanUrl.substringBefore('?').substringAfterLast('/')
         val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }
+        // Format.isAudioOnly() treats a null vcodec as audio-only, which would
+        // file every direct image/video under the audio dir; classify by the
+        // file extension instead.
+        val directVcodec = if (ext in DIRECT_AUDIO_EXTS) "none" else "h264"
         val baseName =
             title.ifBlank { path }
                 .replace(Regex("[\\/:*?\"<>|]"), "_")
                 .take(120)
         val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
+        // requestedFormats = the chosen file: ViewState.videoFormats and the
+        // ghost-handoff candidate read requestedFormats first, and an empty
+        // list would label the task "audio" in the queue header.
+        val directFormat =
+            Format(
+                formatId = "direct",
+                ext = ext,
+                url = url,
+                vcodec = directVcodec,
+            )
         return VideoInfo(
             id = Integer.toHexString(url.hashCode()),
             title = baseName,
@@ -1440,14 +1482,8 @@ object DownloadUtil {
             extractorKey = "SleeveDirect",
             ext = ext ?: "bin",
             filename = fullName,
-            formats =
-                listOf(
-                    Format(
-                        formatId = "direct",
-                        ext = ext,
-                        url = url,
-                    )
-                ),
+            formats = listOf(directFormat),
+            requestedFormats = listOf(directFormat),
         )
     }
 

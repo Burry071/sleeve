@@ -138,6 +138,7 @@ import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.SUBTITLE
+import com.junkfood.seal.util.SleeveQuickDownload
 import com.junkfood.seal.util.TEMPLATE_ID
 import com.junkfood.seal.util.THUMBNAIL
 import com.junkfood.seal.util.ToastUtil
@@ -362,6 +363,10 @@ private fun DownloadDialogContent(
                         url = state.urlList.first(),
                         config = config,
                         preferences = preferences,
+                        typeEntries =
+                            if (state.gallery != null) listOf(Video, Audio)
+                            else config.typeEntries,
+                        gallery = state.gallery,
                         onPresetEdit = onPresetEdit,
                         onConfigSave = {
                             Config.updatePreferences(newValue = it, oldValue = config)
@@ -521,15 +526,21 @@ private fun ConfigurePage(
     url: String = "",
     config: Config,
     preferences: DownloadUtil.DownloadPreferences,
+    typeEntries: List<DownloadType> = config.typeEntries,
+    gallery: SleeveQuickDownload.Resolved? = null,
     settingChips: @Composable () -> Unit,
     onPresetEdit: (DownloadType?) -> Unit = {},
     onConfigSave: (Config) -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var selectedType by remember(config) { mutableStateOf(config.downloadType) }
-    var useFormatSelection by remember(config) { mutableStateOf(config.useFormatSelection) }
-    val canProceed = selectedType in config.typeEntries
+    var selectedType by remember(config, typeEntries) {
+        mutableStateOf(config.downloadType?.takeIf { it in typeEntries } ?: typeEntries.firstOrNull())
+    }
+    var useFormatSelection by remember(config) {
+        mutableStateOf(if (gallery == null) config.useFormatSelection else false)
+    }
+    val canProceed = selectedType in typeEntries
 
     var showTemplateSelectionDialog by remember { mutableStateOf(false) }
     var showTemplateCreatorDialog by remember { mutableStateOf(false) }
@@ -554,10 +565,13 @@ private fun ConfigurePage(
             )
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
-                typeEntries = config.typeEntries,
+                typeEntries = typeEntries,
                 selectedType = selectedType,
                 onSelect = { selectedType = it },
             )
+            // Gallery/embed items are already resolved direct files; format
+            // selection and command templates don't apply to them.
+            if (gallery == null) {
             Column(modifier = Modifier.animateContentSize()) {
                 if (selectedType != Command) {
                     DrawerSheetSubtitle(
@@ -622,6 +636,7 @@ private fun ConfigurePage(
                         }
                     }
                 }
+            }
             }
         }
         var expanded by remember { mutableStateOf(false) }

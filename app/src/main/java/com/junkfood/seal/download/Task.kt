@@ -150,7 +150,7 @@ data class Task(
                 return ViewState(
                     url = info.originalUrl.toString(),
                     title = info.title,
-                    uploader = info.uploader ?: info.channel ?: info.uploaderId.toString(),
+                    uploader = info.uploader ?: info.channel ?: info.uploaderId ?: "",
                     extractorKey = info.extractorKey,
                     duration = info.duration?.roundToInt() ?: 0,
                     thumbnailUrl = info.thumbnail.toHttpsUrl(),

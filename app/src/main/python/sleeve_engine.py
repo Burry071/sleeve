@@ -585,10 +585,13 @@ def instagram_embed(url):
         return None
 
     def _unescape(raw):
+        # Embed pages are HTML: attribute values carry &amp; for every
+        # ampersand in a signed CDN query (sniff_media's _absolute does the
+        # same). Without this the queued URL 403s on Instagram's CDN.
         try:
-            return json.loads('"%s"' % raw)
+            return json.loads('"%s"' % raw).replace("&amp;", "&")
         except Exception:
-            return raw.replace("\\u0026", "&").replace("\\/", "/")
+            return raw.replace("\\u0026", "&").replace("\\/", "/").replace("&amp;", "&")
 
     def _emit(target, is_video, referer):
         ext = "mp4" if is_video else "jpg"

@@ -25,6 +25,9 @@ object SleeveQuickDownload {
 
     data class Outcome(val queued: Int, val source: String)
 
+    /** Media found on a page, before anything is queued. */
+    data class Resolved(val url: String, val items: List<GalleryItem>, val source: String)
+
     private fun cookiesFile(): String =
         runCatching {
             val content = DownloadUtil.getCookiesContentFromDatabase().getOrDefault("")
@@ -41,10 +44,12 @@ object SleeveQuickDownload {
                 item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
             },
             formatIdString = "direct",
+            referer = item.referer,
         )
 
-    /** Resolve via gallery → instagram embed → sniff, then enqueue each item. */
-    suspend fun enqueue(context: Context, url: String, downloader: DownloaderV2): Result<Outcome> =
+    /** Resolve via gallery → instagram embed → sniff. No enqueue; the caller
+     * shows what was found and enqueues only after the user confirms. */
+    suspend fun resolve(context: Context, url: String): Result<Resolved> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val cookiesFile = cookiesFile()
@@ -66,9 +71,19 @@ object SleeveQuickDownload {
                     }.getOrThrow()
 
                 if (items.isEmpty()) error("no media found on this page")
+                Resolved(url, items, source)
+            }
+        }
 
+    /** Enqueue an already-resolved item list (the post-confirm step). */
+    suspend fun enqueueResolved(
+        downloader: DownloaderV2,
+        resolved: Resolved,
+    ): Result<Outcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
                 var queued = 0
-                items.forEach { item ->
+                resolved.items.forEach { item ->
                     runCatching {
                         downloader.enqueue(
                             Task(url = item.url, preferences = directPreferences(item))
@@ -77,9 +92,13 @@ object SleeveQuickDownload {
                     }.onFailure { Log.e(TAG, "enqueue failed for ${item.url}: ${it.message}") }
                 }
                 if (queued == 0) error("could not queue any of the resolved items")
-                Outcome(queued, source)
+                Outcome(queued, resolved.source)
             }
         }
+
+    /** Resolve via gallery → instagram embed → sniff, then enqueue each item. */
+    suspend fun enqueue(context: Context, url: String, downloader: DownloaderV2): Result<Outcome> =
+        resolve(context, url).mapCatching { enqueueResolved(downloader, it).getOrThrow() }
 
     /** Plain default-preferences enqueue for URLs no extractor claims. */
     suspend fun enqueueDefault(context: Context, url: String, downloader: DownloaderV2): Result<Unit> =

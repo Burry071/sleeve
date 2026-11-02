@@ -42,7 +42,6 @@ import com.junkfood.seal.util.ToastUtil
 import org.koin.android.ext.android.get
 import org.koin.androidx.viewmodel.ext.android.getViewModel
 
-private const val TAG = "QuickDownloadActivity"
 const val EXTRA_QUICK_DOWNLOAD = "quick"
 
 class QuickDownloadActivity : ComponentActivity() {
@@ -82,14 +81,13 @@ class QuickDownloadActivity : ComponentActivity() {
             return
         }
 
-        // The share sheet launches this activity with a plain ACTION_SEND that
-        // carries neither the shortcut extra nor the shortcut ID, so the share
-        // action itself is the quick signal. ACTION_VIEW (open link) keeps the
-        // configure sheet.
+        // Sharing a link from another app (ACTION_SEND) opens the configure
+        // sheet, like the stock Seal share target — the user picks format,
+        // preset and destination before anything is queued. Only the
+        // dedicated quick-download shortcut (app shortcut / tile with the
+        // quick extra) skips the dialog and downloads immediately.
         if (
-            intent.action == Intent.ACTION_SEND ||
-                intent.action == Intent.ACTION_SEND_MULTIPLE ||
-                intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
+            intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
                 intent.getStringExtra("android.intent.extra.shortcut.ID") == "quick-download"
         ) {
             // Share-sheet "Quick download": straight to the queue with the
@@ -156,11 +154,18 @@ class QuickDownloadActivity : ComponentActivity() {
                         viewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
                     var showDialog by remember { mutableStateOf(false) }
+                    // The flows start at Hidden/Idle, so only auto-close after
+                    // the sheet actually expanded once — otherwise the first
+                    // composition finishes the activity before ShowSheet lands.
+                    var wasExpanded by remember { mutableStateOf(false) }
 
                     LaunchedEffect(sheetValue, selectionState) {
                         if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
+                            wasExpanded = true
                             showDialog = true
-                        } else if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) {
+                        } else if (
+                            sheetValue == DownloadDialogViewModel.SheetValue.Hidden && wasExpanded
+                        ) {
                             launch { sheetState.hide() }
                                 .invokeOnCompletion {
                                     showDialog = false

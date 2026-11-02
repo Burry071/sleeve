@@ -29,6 +29,7 @@ import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
@@ -239,9 +240,31 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         check(downloadState == Idle)
         if (type is TypeInfo.CustomCommand) {
             execute()
-        } else {
-            fetchInfo()
+            return
         }
+        if (preferences.galleryDirect) {
+            // The URL is already the media file (gallery/embed/sniff item);
+            // running yt-dlp's generic extractor on it only adds a failing
+            // round-trip before the same fallback below.
+            val synth =
+                DownloadUtil.buildDirectVideoInfo(
+                    url = url,
+                    title = preferences.newTitle.ifBlank { viewState.title },
+                )
+            if (synth != null) {
+                val job =
+                    scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                        info = synth
+                        viewState = Task.ViewState.fromVideoInfo(synth)
+                        downloadState = ReadyWithInfo
+                        download()
+                    }
+                downloadState = FetchingInfo(job = job, taskId = id)
+                job.start()
+                return
+            }
+        }
+        fetchInfo()
     }
 
     private fun Task.fetchInfo() {
@@ -300,8 +323,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             execute()
             return
         }
+        // LAZY + state-before-start: with eager launch the download body can
+        // begin (and its first progress write can trigger a snapshot emission)
+        // while this task still reads as ReadyWithInfo, and doYourWork then
+        // launches a second downloadVideo for the same task.
         scope
-            .launch(Dispatchers.Default) {
+            .launch(Dispatchers.Default, CoroutineStart.LAZY) {
                 DownloadUtil.downloadVideo(
                         videoInfo = info,
                         taskId = id,
@@ -362,7 +389,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         )
                     }
             }
-            .also { job -> downloadState = Running(job = job, taskId = id) }
+            .also { job ->
+                downloadState = Running(job = job, taskId = id)
+                job.start()
+            }
     }
 
     private fun Task.cancelImpl(): Boolean {

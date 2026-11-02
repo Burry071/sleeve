@@ -8,7 +8,6 @@ import com.junkfood.seal.download.Task
 import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
-import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
@@ -92,7 +91,16 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     sealed interface SheetState {
         data object InputUrl : SheetState
 
-        data class Configure(val urlList: List<String>) : SheetState
+        /**
+         * Seal's DownloadSettingDialog equivalent: type chips + toggles + Download.
+         * [gallery] is set when the URL resolved through the gallery/embed path —
+         * the download then runs through the ghost-aware enqueue with the
+         * resolved direct items instead of yt-dlp extraction.
+         */
+        data class Configure(
+            val urlList: List<String>,
+            val gallery: SleeveQuickDownload.Resolved? = null,
+        ) : SheetState
 
         data class Loading(val taskKey: String, val job: Job) : SheetState
 
@@ -255,10 +263,33 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchFormat_$url", job = job) }
     }
 
+    private var pendingGallery: SleeveQuickDownload.Resolved? = null
+
     private fun downloadWithPreset(
         urlList: List<String>,
         preferences: DownloadUtil.DownloadPreferences,
     ) {
+        val gallery = pendingGallery
+        if (gallery != null && urlList.firstOrNull() == gallery.url) {
+            pendingGallery = null
+            viewModelScope.launch(Dispatchers.IO) {
+                SleeveQuickDownload.enqueueResolved(downloader, gallery)
+                    .onSuccess { (queued, source) ->
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                App.context.getString(
+                                    R.string.gallery_items_queued,
+                                    queued,
+                                    source,
+                                ),
+                            )
+                            hideDialog()
+                        }
+                    }
+                    .onFailure { th -> galleryError(Action.FetchGallery(gallery.url), th) }
+            }
+            return
+        }
         urlList.forEach { downloader.enqueue(Task(url = it, preferences = preferences)) }
         hideDialog()
     }
@@ -344,38 +375,39 @@ private val VIDEO_FIRST_HOSTS: Regex =
         if (resolveThrottled("gallery")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.enqueue(App.context, action.url, downloader)
-                    .onSuccess { (source, queued) ->
+                SleeveQuickDownload.resolve(App.context, action.url)
+                    .onSuccess { resolved ->
                         withContext(Dispatchers.Main) {
-                            resetSelectionState()
-                            ToastUtil.makeToast(
-                                App.context.getString(R.string.gallery_items_queued, queued, source),
-                            )
-                            hideDialog()
-                        }
-                    }
-                    .onFailure { th ->
-                        Log.e(TAG, "gallery resolve failed: ${th.message}")
-                        val message = th.message ?: ""
-                        val friendly =
-                            if (
-                                Regex(
-                                    "401|403|429|login required|login page|redirect to login|rate.?limit",
-                                    RegexOption.IGNORE_CASE,
-                                )
-                                    .containsMatchIn(message)
-                            ) {
-                                App.context.getString(R.string.gallery_auth_required)
-                            } else {
-                                message
+                            pendingGallery = resolved
+                            mSheetStateFlow.update {
+                                SheetState.Configure(listOf(resolved.url), gallery = resolved)
                             }
-                        withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
                         }
                     }
+                    .onFailure { th -> galleryError(action, th) }
             }
         mSheetStateFlow.update {
             SheetState.Loading(taskKey = "Gallery_${action.url}", job = job)
+        }
+    }
+
+    private suspend fun galleryError(action: Action.FetchGallery, th: Throwable) {
+        Log.e(TAG, "gallery resolve failed: ${th.message}")
+        val message = th.message ?: ""
+        val friendly =
+            if (
+                Regex(
+                        "401|403|429|login required|login page|redirect to login|rate.?limit",
+                        RegexOption.IGNORE_CASE,
+                    )
+                    .containsMatchIn(message)
+            ) {
+                App.context.getString(R.string.gallery_auth_required)
+            } else {
+                message
+            }
+        withContext(Dispatchers.Main) {
+            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
         }
     }
 
