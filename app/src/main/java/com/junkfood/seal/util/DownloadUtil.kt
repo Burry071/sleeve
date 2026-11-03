@@ -49,6 +49,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -1603,11 +1605,36 @@ object DownloadUtil {
         }
 
     /**
+     * Best-effort content length for a direct media URL via a bounded HEAD
+     * request; 0 means unknown. Callers run on background dispatchers
+     * (DownloaderV2.prepare launches on Dispatchers.Default). No fallback
+     * guess is made when the server withholds Content-Length.
+     */
+    private fun fetchContentLength(url: String): Long =
+        runCatching {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "HEAD"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)")
+            val len = if (conn.responseCode in 200..299) conn.contentLengthLong else -1L
+            conn.disconnect()
+            if (len > 0) len else 0L
+        }.getOrDefault(0L)
+
+    /**
      * Minimal VideoInfo for a raw media URL (gallery-dl item, sniffed page
      * asset): one synthetic "direct" format so the Ghost handoff transfers the
-     * bytes without yt-dlp extraction.
+     * bytes without yt-dlp extraction. [contentLength] is injectable for
+     * tests; production resolves it with a bounded HEAD so the queue card
+     * shows the real size instead of a defaulting "0.00 MB".
      */
-    fun buildDirectVideoInfo(url: String, title: String): VideoInfo? {
+    fun buildDirectVideoInfo(
+        url: String,
+        title: String,
+        contentLength: Long = fetchContentLength(url),
+    ): VideoInfo? {
         if (!isSafeRemoteUrl(url)) return null
         val cleanUrl = url.substringBefore('#').substringBefore('?').substringBefore('？')
         val path = cleanUrl.substringBefore('?').substringAfterLast('/')
@@ -1642,6 +1669,9 @@ object DownloadUtil {
             filename = fullName,
             formats = listOf(directFormat),
             requestedFormats = listOf(directFormat),
+            // Content-Length from the HEAD probe; 0 stays 0 (unknown) — the
+            // size is never invented.
+            fileSizeApprox = if (contentLength > 0) contentLength.toDouble() else .0,
         )
     }
 
