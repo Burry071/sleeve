@@ -17,6 +17,7 @@ import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.PlaylistEntry
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.PreferenceUtil.getInt
+import com.junkfood.seal.util.splitFusedUrls
 import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
@@ -391,23 +392,31 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
      * siblings, and the yt-dlp lane handles each link as its own task.
      */
     private fun routeUrls(urlList: List<String>) {
-        if (urlList.all { isSpotifyUrl(it) }) {
-            fetchSpotify(Action.FetchSpotify(urlList.first()))
+        // Paste-glitch defense before any lane claims the list: split a fused
+        // pair back apart and drop schemeless debris. One bogus arg fails the
+        // whole extraction; this keeps only the surviving links.
+        val sanitized = urlList.flatMap { splitFusedUrls(it) }
+        if (sanitized.isEmpty()) {
+            ToastUtil.makeToast(R.string.share_fail_msg)
             return
         }
-        if (urlList.all { isAudibleUrl(it) }) {
-            fetchAudible(Action.FetchAudible(urlList.first()))
+        if (sanitized.all { isSpotifyUrl(it) }) {
+            fetchSpotify(Action.FetchSpotify(sanitized.first()))
             return
         }
-        if (urlList.size == 1) {
-            val url = urlList.first()
-            if (redditPreRoute(urlList)) return
+        if (sanitized.all { isAudibleUrl(it) }) {
+            fetchAudible(Action.FetchAudible(sanitized.first()))
+            return
+        }
+        if (sanitized.size == 1) {
+            val url = sanitized.first()
+            if (redditPreRoute(sanitized)) return
             if (!isVideoFirstHost(url)) {
                 galleryPreRoute(url)
                 return
             }
         }
-        mSheetStateFlow.update { SheetState.Configure(urlList) }
+        mSheetStateFlow.update { SheetState.Configure(sanitized) }
     }
 
     /** gallery-dl claim check on IO; a hit goes to the gallery lane, a miss

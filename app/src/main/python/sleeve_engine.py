@@ -49,6 +49,10 @@ class SegmentedHttpStep:
 
     def __init__(self, url, output_path, headers=None, user_agent=None, subworkers=8):
         self.url = url
+        # Redirect-resolved GET target (set by probe). Range fetches must use
+        # the FINAL url: the original can 302 on every request, and a raw
+        # http.client GET on a 302 is a non-200 status, not a transfer.
+        self._final_url = url
         self.output_path = output_path
         self.headers = dict(headers or {})
         if user_agent:
@@ -110,6 +114,7 @@ class SegmentedHttpStep:
             conn.request("HEAD", target, headers=self.headers)
             resp = conn.getresponse()
             resp.read()
+            print(f"[engine] head {parsed.netloc} -> {resp.status}")
             if resp.status in (301, 302, 303, 307, 308):
                 location = resp.getheader("Location")
                 conn.close()
@@ -123,9 +128,11 @@ class SegmentedHttpStep:
     def probe(self):
         """HEAD probe for size + range support, HEAD-fallback to 1-byte GET."""
         conn, target, url, resp = self._resolve()
+        self._final_url = url
         accept_ranges = (resp.getheader("Accept-Ranges") or "").lower() == "bytes"
         length = resp.getheader("Content-Length")
         conn.close()
+        print(f"[engine] probe final={urllib.parse.urlsplit(url).netloc} status={resp.status} ranges={accept_ranges} len={length}")
         if not accept_ranges or length is None:
             conn2, target2, url2, resp2 = self._request_range(url, 0, 0)
             cr = resp2.getheader("Content-Range") or ""
@@ -138,15 +145,30 @@ class SegmentedHttpStep:
         return self.total, accept_ranges
 
     def _request_range(self, url, start, end):
-        parsed = urllib.parse.urlsplit(url)
-        target = parsed.path or "/"
-        if parsed.query:
-            target += "?" + parsed.query
-        conn = self._connect(parsed)
-        headers = dict(self.headers)
-        headers["Range"] = f"bytes={start}-{end}" if end else f"bytes={start}-"
-        conn.request("GET", target, headers=headers)
-        return conn, target, url, conn.getresponse()
+        """Range GET on `url`, following redirects defensively (a CDN may 302
+        on every request even after the probe resolved it once)."""
+        redirects = 0
+        while True:
+            parsed = urllib.parse.urlsplit(url)
+            target = parsed.path or "/"
+            if parsed.query:
+                target += "?" + parsed.query
+            conn = self._connect(parsed)
+            headers = dict(self.headers)
+            headers["Range"] = f"bytes={start}-{end}" if end else f"bytes={start}-"
+            conn.request("GET", target, headers=headers)
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
+                resp.read()
+                conn.close()
+                redirects += 1
+                if redirects >= _MAX_REDIRECTS:
+                    raise IOError("too many redirects during range request")
+                print(f"[engine] range GET redirect {redirects} -> {resp.getheader('Location')[:120]}")
+                url = urllib.parse.urljoin(url, resp.getheader("Location"))
+                continue
+            print(f"[engine] range GET {parsed.netloc} -> {resp.status}")
+            return conn, target, url, resp
 
     def _fetch_range(self, url, start, end, part_path):
         """Fetch [start, end] into part_path; resume if a shorter part exists."""
@@ -193,12 +215,14 @@ class SegmentedHttpStep:
 
     def run(self):
         self.state = RUNNING
+        print(f"[engine] step started: {self.url[:140]}")
         try:
             total, accept_ranges = self.probe()
+            print(f"[engine] run probe: total={self.total} ranges={accept_ranges}")
             if self._cancel.is_set():
                 raise Cancelled()
             if not accept_ranges or self.total <= 0 or self.subworkers <= 1:
-                self._stream_single(self.url)
+                self._stream_single(self._final_url)
             else:
                 part_dir = self.output_path + ".parts"
                 os.makedirs(part_dir, exist_ok=True)
@@ -209,7 +233,7 @@ class SegmentedHttpStep:
                 ]
                 with ThreadPoolExecutor(max_workers=self.subworkers) as pool:
                     futures = [
-                        pool.submit(self._fetch_range, self.url, s, e, os.path.join(part_dir, f"{i:03d}.part"))
+                        pool.submit(self._fetch_range, self._final_url, s, e, os.path.join(part_dir, f"{i:03d}.part"))
                         for i, (s, e) in enumerate(bounds)
                     ]
                     for f in futures:

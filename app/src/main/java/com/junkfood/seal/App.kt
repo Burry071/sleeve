@@ -138,6 +138,11 @@ class App : Application() {
 
         var isServiceRunning = false
 
+        /** Tracks the STARTED half of the service: a bound-only service dies
+         * with its binder, which froze the process mid-download whenever the
+         * quick-download overlay closed before the transfer finished. */
+        private var isServiceStarted = false
+
         private val connection =
             object : ServiceConnection {
                 override fun onServiceConnected(className: ComponentName, service: IBinder) {
@@ -149,9 +154,19 @@ class App : Application() {
             }
 
         fun startService() {
-            if (isServiceRunning) return
-            Intent(context.applicationContext, DownloadService::class.java).also { intent ->
-                context.applicationContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            val intent = Intent(context.applicationContext, DownloadService::class.java)
+            if (!isServiceRunning) {
+                context.applicationContext.bindService(
+                    intent,
+                    connection,
+                    Context.BIND_AUTO_CREATE,
+                )
+            }
+            if (!isServiceStarted) {
+                // Started + foreground: the process stays alive with no
+                // activity on screen while tasks are in the queue.
+                context.applicationContext.startService(intent)
+                isServiceStarted = true
             }
         }
 
@@ -174,6 +189,16 @@ class App : Application() {
         }
 
         fun stopService() {
+            if (isServiceStarted) {
+                isServiceStarted = false
+                try {
+                    context.applicationContext.stopService(
+                        Intent(context.applicationContext, DownloadService::class.java),
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             if (!isServiceRunning) return
             try {
                 isServiceRunning = false

@@ -104,6 +104,27 @@ fun matchAllUrlsFromSharedText(s: String): String {
     }
 }
 
+/**
+ * Boundary-split a fused URL pair and drop schemeless debris. The URL regex
+ * swallows a second scheme because ':' and '/' are legal URL characters
+ * ("…jNQXAC9IVRwhttps://youtu.be/…"). A split only happens when the scheme
+ * does not sit right after a query marker ('?', '=', '&'), where the scheme
+ * is a parameter value ("?url=https://…") rather than a new link.
+ */
+fun splitFusedUrls(token: String): List<String> =
+    listOf(0)
+        .plus(embeddedSchemeIndices(token))
+        .plus(token.length)
+        .zipWithNext { a, b -> token.substring(a, b) }
+        .filter { it.startsWith("https://") || it.startsWith("http://") }
+
+private fun embeddedSchemeIndices(s: String): List<Int> =
+    Regex("https?://")
+        .findAll(s)
+        .map { it.range.first }
+        .filter { i -> i > 0 && s[i - 1] !in "?=&" }
+        .toList()
+
 fun Number?.toBitrateText(): String {
     val br = this?.toFloat() ?: return ""
     return when {
@@ -131,10 +152,10 @@ fun findURLsFromString(input: String, firstMatchOnly: Boolean = false): List<Str
     with(pattern.matcher(input)) {
         if (!firstMatchOnly) {
             while (find()) {
-                result += group()
+                result += splitFusedUrls(group())
             }
         } else {
-            if (find()) result += (group())
+            if (find()) result += splitFusedUrls(group()).take(1)
         }
     }
     return result

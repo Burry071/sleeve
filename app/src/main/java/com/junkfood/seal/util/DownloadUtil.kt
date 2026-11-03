@@ -761,6 +761,40 @@ object DownloadUtil {
     private val DIRECT_AUDIO_EXTS =
         setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma")
 
+    /** Extensions that mark a bare direct media link (a CDN asset such as
+     * instagram.fbcdn/…jpg or video.twimg/…mp4?tag=29). These must bypass
+     * yt-dlp's generic extractor: generic makes the whole URL the video id,
+     * so the default "[%(id)s]" output template produces 700-byte filenames
+     * (Errno 36) and plain video files hit "Requested format is not
+     * available". */
+    val DIRECT_MEDIA_EXTS =
+        setOf(
+            "jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "jfif",
+            "mp4", "m4v", "webm", "mkv", "mov", "avi", "3gp", "ts", "flv",
+            "mp3", "m4a", "aac", "opus", "wav", "flac", "oga", "wma",
+        )
+
+    private val DIRECT_IMAGE_EXTS =
+        setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "jfif")
+
+    fun isDirectMediaUrl(url: String): Boolean {
+        val path = url.substringBefore('#').substringBefore('?').substringBefore('？')
+        val ext =
+            path.substringAfterLast('/')
+                .substringAfterLast('.')
+                .lowercase()
+        return ext in DIRECT_MEDIA_EXTS
+    }
+
+    fun isDirectImageUrl(url: String): Boolean {
+        val path = url.substringBefore('#').substringBefore('?').substringBefore('？')
+        val ext =
+            path.substringAfterLast('/')
+                .substringAfterLast('.')
+                .lowercase()
+        return ext in DIRECT_IMAGE_EXTS
+    }
+
     /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
     private val PRIVATE_HOST_RE =
         Regex(
@@ -884,6 +918,7 @@ object DownloadUtil {
             preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
                 .ifBlank { "download" }
                 .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                .take(120)
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
         val fileName = "$baseName.mp4" // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
@@ -1070,6 +1105,7 @@ object DownloadUtil {
             preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
                 .ifBlank { "download" }
                 .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                .take(120)
         val fileName = "$baseName.$ext"
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir
@@ -1293,177 +1329,220 @@ object DownloadUtil {
                 progressCallback = progressCallback,
             )?.let { return it }
 
-            val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
-            // The download request re-extracts, so it must use the client set
-            // that won during info fetch; native clients are the default (no
-            // JS runtime on Android makes web clients degrade).
-            val clients =
-                successfulExtractionClients[taskId] ?: "android_vr,android,ios"
-            request.addOption(
-                "--extractor-args",
-                "youtube:player_client=$clients",
-            )
-            val pathBuilder = StringBuilder()
-            val outputBuilder = StringBuilder()
+            // The download re-extracts, so the winning info-fetch client set
+            // goes first. That win is no media win: SABR-era YouTube can 403
+            // the media GET of a client that claimed the info fine
+            // ("android_vr client https formats require a GVS PO Token",
+            // "SABR-only streaming"). Any failure rotates down the ladder:
+            // yt-dlp's own client selection next, then the no-JS "tv" rung.
+            val downloadClientLadder: List<String?> =
+                listOf(
+                    successfulExtractionClients[taskId] ?: "android_vr,android,ios",
+                    null,
+                    "tv",
+                )
+            for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
+                val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
+                if (clients != null) {
+                    Log.i(TAG, "download attempt ${attemptIndex + 1}: player_client=$clients")
+                    request.addOption("--extractor-args", "youtube:player_client=$clients")
+                } else {
+                    Log.i(TAG, "download attempt ${attemptIndex + 1}: yt-dlp default clients")
+                }
+                val pathBuilder = StringBuilder()
+                val outputBuilder = StringBuilder()
 
-            request
-                .apply {
-                    addOption("--no-mtime")
-                    //                addOption("-v")
-                    if (cookies) {
-                        enableCookies(userAgentString)
-                    }
-                    if (galleryDirect) {
-                        // Engine declined this direct item and we fell back to
-                        // yt-dlp: without the page referer the generic
-                        // extractor gets 403 from instagram CDN hosts.
-                        val directReferer =
-                            referer.ifBlank {
-                                if (
-                                    url.contains("cdninstagram") || url.contains("fbcdn")
-                                ) {
-                                    "https://www.instagram.com/"
-                                } else {
-                                    ""
-                                }
-                            }
-                        if (directReferer.isNotBlank()) {
-                            addOption("--add-headers", "Referer:$directReferer")
+                val attemptFailure =
+                    request
+                    .apply {
+                        addOption("--no-mtime")
+                        //                addOption("-v")
+                        if (cookies) {
+                            enableCookies(userAgentString)
                         }
-                    }
-                    if (restrictFilenames) {
-                        addOption("--restrict-filenames")
-                    }
-                    if (proxy) {
-                        enableProxy(proxyUrl)
-                    }
-                    if (forceIpv4) {
-                        addOption("-4")
-                    }
-                    if (debug) {
-                        addOption("-v")
-                    }
-                    if (useDownloadArchive) {
-                        val archiveFile = context.getArchiveFile()
-                        val archiveFileContent = archiveFile.readText()
-                        if (archiveFileContent.contains("${videoInfo.extractor} ${videoInfo.id}")) {
-                            return Result.failure(
-                                YoutubeDLException(
-                                    context.getString(R.string.download_archive_error)
+                        if (galleryDirect) {
+                            // Engine declined this direct item and we fell back to
+                            // yt-dlp: without the page referer the generic
+                            // extractor gets 403 from instagram CDN hosts.
+                            val directReferer =
+                                referer.ifBlank {
+                                    if (
+                                        url.contains("cdninstagram") || url.contains("fbcdn")
+                                    ) {
+                                        "https://www.instagram.com/"
+                                    } else {
+                                        ""
+                                    }
+                                }
+                            if (directReferer.isNotBlank()) {
+                                addOption("--add-headers", "Referer:$directReferer")
+                            }
+                        }
+                        if (restrictFilenames) {
+                            addOption("--restrict-filenames")
+                        }
+                        if (proxy) {
+                            enableProxy(proxyUrl)
+                        }
+                        if (forceIpv4) {
+                            addOption("-4")
+                        }
+                        if (debug) {
+                            addOption("-v")
+                        }
+                        if (useDownloadArchive) {
+                            val archiveFile = context.getArchiveFile()
+                            val archiveFileContent = archiveFile.readText()
+                            if (archiveFileContent.contains("${videoInfo.extractor} ${videoInfo.id}")) {
+                                return Result.failure(
+                                    YoutubeDLException(
+                                        context.getString(R.string.download_archive_error)
+                                    )
                                 )
+                            } else {
+                                useDownloadArchive()
+                            }
+                        }
+
+                        if (rateLimit && maxDownloadRate.isNumberInRange(1, 1000000)) {
+                            addOption("-r", "${maxDownloadRate}K")
+                        }
+
+                        if (playlistItem != 0 && downloadPlaylist) {
+                            addOption("--playlist-items", playlistItem)
+                            if (subdirectoryPlaylistTitle && !videoInfo.playlist.isNullOrEmpty()) {
+                                outputBuilder.append(PLAYLIST_TITLE_SUBDIRECTORY_PREFIX)
+                            }
+                            //                    addOption("--compat-options",
+                            // "no-youtube-unavailable-videos")
+                        } else {
+                            addOption("--no-playlist")
+                        }
+
+                        if (aria2c) {
+                            enableAria2c()
+                        } else if (concurrentFragments > 1) {
+                            addOption("--concurrent-fragments", concurrentFragments)
+                        }
+
+                        if (extractAudio || (videoInfo.vcodec == "none")) {
+                            if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
+                            else pathBuilder.append(audioDownloadDir)
+                            addOptionsForAudioDownloads(
+                                id = videoInfo.id,
+                                preferences = downloadPreferences,
+                                playlistUrl = playlistUrl,
                             )
                         } else {
-                            useDownloadArchive()
+                            if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
+                            else pathBuilder.append(videoDownloadDir)
+                            addOptionsForVideoDownloads(downloadPreferences)
                         }
-                    }
-
-                    if (rateLimit && maxDownloadRate.isNumberInRange(1, 1000000)) {
-                        addOption("-r", "${maxDownloadRate}K")
-                    }
-
-                    if (playlistItem != 0 && downloadPlaylist) {
-                        addOption("--playlist-items", playlistItem)
-                        if (subdirectoryPlaylistTitle && !videoInfo.playlist.isNullOrEmpty()) {
-                            outputBuilder.append(PLAYLIST_TITLE_SUBDIRECTORY_PREFIX)
+                        if (sponsorBlock) {
+                            addOption("--sponsorblock-remove", sponsorBlockCategory)
                         }
-                        //                    addOption("--compat-options",
-                        // "no-youtube-unavailable-videos")
-                    } else {
-                        addOption("--no-playlist")
-                    }
 
-                    if (aria2c) {
-                        enableAria2c()
-                    } else if (concurrentFragments > 1) {
-                        addOption("--concurrent-fragments", concurrentFragments)
-                    }
+                        if (createThumbnail) {
+                            addOption("--write-thumbnail")
+                            addOption("--convert-thumbnails", "png")
+                        }
+                        if (subdirectoryExtractor) {
+                            pathBuilder.append("/${videoInfo.extractorKey}")
+                        }
 
-                    if (extractAudio || (videoInfo.vcodec == "none")) {
-                        if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
-                        else pathBuilder.append(audioDownloadDir)
-                        addOptionsForAudioDownloads(
-                            id = videoInfo.id,
-                            preferences = downloadPreferences,
-                            playlistUrl = playlistUrl,
-                        )
-                    } else {
-                        if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
-                        else pathBuilder.append(videoDownloadDir)
-                        addOptionsForVideoDownloads(downloadPreferences)
-                    }
-                    if (sponsorBlock) {
-                        addOption("--sponsorblock-remove", sponsorBlockCategory)
-                    }
-
-                    if (createThumbnail) {
-                        addOption("--write-thumbnail")
-                        addOption("--convert-thumbnails", "png")
-                    }
-                    if (subdirectoryExtractor) {
-                        pathBuilder.append("/${videoInfo.extractorKey}")
-                    }
-
-                    if (sdcard) {
-                        addOption("-P", context.getSdcardTempDir(videoInfo.id).absolutePath)
-                    } else {
-                        addOption("-P", pathBuilder.toString())
-                    }
-
-                    videoClips.forEach {
-                        addOption(
-                            "--download-sections",
-                            "*%d-%d".format(locale = Locale.US, it.start, it.end),
-                        )
-                    }
-                    if (newTitle.isNotEmpty()) {
-                        addCommands(listOf("--replace-in-metadata", "title", ".+", newTitle))
-                    }
-                    if (Build.VERSION.SDK_INT > 23 && !sdcard)
-                        addOption("-P", "temp:" + getExternalTempDir())
-
-                    if (splitByChapter) {
-                        addOption("-o", OUTPUT_TEMPLATE_CHAPTERS)
-                        addOption("--split-chapters")
-                    }
-
-                    val output =
-                        if (splitByChapter) {
-                            OUTPUT_TEMPLATE_SPLIT
-                        } else if (videoClips.isEmpty()) {
-                            outputTemplate
+                        if (sdcard) {
+                            addOption("-P", context.getSdcardTempDir(videoInfo.id).absolutePath)
                         } else {
-                            OUTPUT_TEMPLATE_CLIPS
+                            addOption("-P", pathBuilder.toString())
                         }
 
-                    addOption("-o", outputBuilder.append(output).toString())
+                        videoClips.forEach {
+                            addOption(
+                                "--download-sections",
+                                "*%d-%d".format(locale = Locale.US, it.start, it.end),
+                            )
+                        }
+                        if (newTitle.isNotEmpty()) {
+                            addCommands(listOf("--replace-in-metadata", "title", ".+", newTitle))
+                        }
+                        if (Build.VERSION.SDK_INT > 23 && !sdcard)
+                            addOption("-P", "temp:" + getExternalTempDir())
 
-                    for (s in request.buildCommand()) Log.d(TAG, s)
+                        if (splitByChapter) {
+                            addOption("-o", OUTPUT_TEMPLATE_CHAPTERS)
+                            addOption("--split-chapters")
+                        }
+
+                        // Generic/direct links make yt-dlp use the whole URL as
+                        // the video id, so a template containing [%(id)s] (the
+                        // default) produces 700-char filenames and Errno 36 on
+                        // CDN shares. Trim the final name (extension preserved)
+                        // at the source; 80 chars keeps even fullwidth names
+                        // inside ext4's 255-byte component limit.
+                        addOption("--trim-filenames", "80")
+
+                        val output =
+                            if (splitByChapter) {
+                                OUTPUT_TEMPLATE_SPLIT
+                            } else if (videoClips.isEmpty()) {
+                                outputTemplate
+                            } else {
+                                OUTPUT_TEMPLATE_CLIPS
+                            }
+
+                        addOption("-o", outputBuilder.append(output).toString())
+
+                        for (s in request.buildCommand()) Log.d(TAG, s)
+                    }
+                    .runCatching {
+                        YoutubeDL.getInstance()
+                            .execute(request = this, processId = taskId, callback = progressCallback)
+                    }
+                    .exceptionOrNull()
+                if (attemptFailure == null) {
+                    return onFinishDownloading(
+                        preferences = this,
+                        videoInfo = videoInfo,
+                        downloadPath = pathBuilder.toString(),
+                        sdcardUri = sdcardUri,
+                    )
                 }
-                .runCatching {
-                    YoutubeDL.getInstance()
-                        .execute(request = this, processId = taskId, callback = progressCallback)
+                val failureMessage = attemptFailure.message.orEmpty()
+                // Extraction success is no media success: the parallel info
+                // call never touches the media host. Any rung-1/rung-2 failure
+                // costs one more attempt; the next rung re-extracts fresh.
+                if (attemptIndex < downloadClientLadder.lastIndex) {
+                    Log.w(
+                        TAG,
+                        "player_client=${clients ?: "<yt-dlp default>"} failure: " +
+                            "$failureMessage; rotating extraction clients",
+                    )
+                    successfulExtractionClients.remove(taskId)
+                    continue
                 }
-                .onFailure { th ->
-                    return if (
-                        sponsorBlock &&
-                            th.message?.contains("Unable to communicate with SponsorBlock API") ==
-                                true
-                    ) {
-                        th.printStackTrace()
-                        onFinishDownloading(
-                            preferences = this,
-                            videoInfo = videoInfo,
-                            downloadPath = pathBuilder.toString(),
-                            sdcardUri = sdcardUri,
+                if (
+                    sponsorBlock &&
+                        failureMessage.contains(
+                            "Unable to communicate with SponsorBlock API",
                         )
-                    } else Result.failure(th)
+                ) {
+                    attemptFailure.printStackTrace()
+                    return onFinishDownloading(
+                        preferences = this,
+                        videoInfo = videoInfo,
+                        downloadPath = pathBuilder.toString(),
+                        sdcardUri = sdcardUri,
+                    )
                 }
-            return onFinishDownloading(
-                preferences = this,
-                videoInfo = videoInfo,
-                downloadPath = pathBuilder.toString(),
-                sdcardUri = sdcardUri,
-            )
+                Log.e(
+                    TAG,
+                    "download failed on player_client=${clients ?: "<yt-dlp default>"}: " +
+                        "$failureMessage",
+                )
+                return Result.failure(attemptFailure)
+            }
+            // Every rung returns above; kept for exhaustiveness.
+            return Result.failure(IllegalStateException("download failed"))
         }
     }
 
@@ -1475,11 +1554,11 @@ object DownloadUtil {
     ): Result<List<String>> =
         preferences.run {
             val fileName =
-                preferences.newTitle.ifEmpty {
+                (preferences.newTitle.ifEmpty {
                     videoInfo.filename
                         ?: videoInfo.requestedDownloads?.firstOrNull()?.filename
                         ?: videoInfo.title
-                }
+                }).substringBefore('?').take(150)
 
             Log.d(TAG, "onFinishDownloading: $fileName")
             if (sdcard) {
@@ -1522,7 +1601,7 @@ object DownloadUtil {
      */
     fun buildDirectVideoInfo(url: String, title: String): VideoInfo? {
         if (!isSafeRemoteUrl(url)) return null
-        val cleanUrl = url.substringBefore('#')
+        val cleanUrl = url.substringBefore('#').substringBefore('?').substringBefore('？')
         val path = cleanUrl.substringBefore('?').substringAfterLast('/')
         val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }
         // Format.isAudioOnly() treats a null vcodec as audio-only, which would

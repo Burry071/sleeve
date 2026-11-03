@@ -112,7 +112,18 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 }
                 .map { it.countRunning() }
                 .distinctUntilChanged()
-                .collect { if (it > 0) App.startService() else App.stopService() }
+                .collect {
+                    if (it > 0) {
+                        // Some OEMs deny plain startService from background
+                        // contexts; a throw here would kill the scheduler
+                        // coroutine and stall every future download.
+                        runCatching { App.startService() }
+                            .onFailure { Log.e(TAG, "startService failed", it) }
+                    } else {
+                        runCatching { App.stopService() }
+                            .onFailure { Log.e(TAG, "stopService failed", it) }
+                    }
+                }
         }
 
         scope.launch(Dispatchers.IO) {
@@ -260,10 +271,16 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             execute()
             return
         }
-        if (preferences.galleryDirect) {
-            // The URL is already the media file (gallery/embed/sniff item);
-            // running yt-dlp's generic extractor on it only adds a failing
-            // round-trip before the same fallback below.
+        if (
+            preferences.galleryDirect ||
+            (DownloadUtil.isDirectMediaUrl(url) &&
+                (!preferences.extractAudio || DownloadUtil.isDirectImageUrl(url)))
+        ) {
+            // The URL is already the media file (gallery/embed/sniff item, or
+            // a bare CDN link whose generic round-trip only adds a failing
+            // extraction before the same fallback below). Audio-extraction
+            // requests on extractable video stay on yt-dlp: the ghost handoff
+            // cannot remux.
             val synth =
                 DownloadUtil.buildDirectVideoInfo(
                     url = url,

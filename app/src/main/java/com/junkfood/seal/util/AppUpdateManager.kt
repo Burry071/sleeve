@@ -314,6 +314,14 @@ object AppUpdateManager {
     }
 
     fun install(context: Context, file: File) {
+        // The installer takes over here; the "tap to install" notification's
+        // job is done either way (the process dies on a self-update).
+        NotificationUtil.cancelUpdateNotifications()
+        // Drop the Ready banner: the system installer now owns the APK, and a
+        // stale "tap to install" would look like a phantom update. A cancelled
+        // install self-heals — checkIfStale() re-arms the on-disk APK since
+        // restoreReadyDownload compares it to the installed build.
+        mutableState.value = State.Idle
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         val intent =
             Intent(Intent.ACTION_VIEW)

@@ -61,9 +61,21 @@ object SleeveQuickDownload {
         return DownloadUtil.DownloadPreferences.createFromPreferences().copy(
             galleryDirect = true,
             extractAudio = wantsAudio,
-            newTitle = item.filename.substringBeforeLast('.').ifBlank {
-                item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
-            },
+            // Resolver filenames can carry the CDN URL's query string; an
+            // uncapped name becomes the output filename and Errno 36.
+            newTitle =
+                item.filename
+                    .substringBefore('?')
+                    .substringBefore('？')
+                    .substringBeforeLast('.')
+                    .ifBlank {
+                        item.url
+                            .substringBefore('?')
+                            .substringAfterLast('/')
+                            .substringBeforeLast('.')
+                    }
+                    .replace(Regex("[\\/:*?\"<>|]"), "_")
+                    .take(100),
             // "direct" is not a yt-dlp format id; it must never reach `-f`
             // when the audio-extraction route runs.
             formatIdString = if (wantsAudio) "" else DownloadUtil.DIRECT_FORMAT_ID,
