@@ -299,8 +299,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
                         info = synth
                         viewState = Task.ViewState.fromVideoInfo(synth)
+                        // No explicit download() here: writing ReadyWithInfo
+                        // wakes doYourWork, which starts the download. Calling
+                        // it from inside the job raced the scheduler's pick of
+                        // the same ReadyWithInfo state and ran downloadVideo
+                        // twice per task (two concurrent Ghost transfers, one
+                        // orphaned and uncancellable — observed on hardware).
                         downloadState = ReadyWithInfo
-                        download()
                     }
                 downloadState = FetchingInfo(job = job, taskId = id)
                 job.start()
@@ -343,8 +348,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             if (synth != null) {
                                 info = synth
                                 viewState = Task.ViewState.fromVideoInfo(synth)
+                                // Same rule as prepare(): the ReadyWithInfo
+                                // write is the trigger — doYourWork starts the
+                                // download exactly once.
                                 downloadState = ReadyWithInfo
-                                task.download()
                                 return@onFailure
                             }
                         }
