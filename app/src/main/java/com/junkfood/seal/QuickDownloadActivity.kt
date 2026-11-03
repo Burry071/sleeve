@@ -106,8 +106,8 @@ class QuickDownloadActivity : ComponentActivity() {
         ) {
             // Share-sheet "Quick download": straight to the queue with the
             // default pipeline, no configure dialog. The gallery route inside
-            // handles Instagram and other image sites anonymously first.
-            App.startService()
+            // handles Instagram and other image sites anonymously first. The
+            // scheduler starts the foreground service when a task lands.
             val urls =
                 sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() }
             lifecycleScope.launch {
@@ -131,8 +131,6 @@ class QuickDownloadActivity : ComponentActivity() {
             }
             return
         }
-
-        App.startService()
 
         enableEdgeToEdge()
 

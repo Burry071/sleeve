@@ -291,9 +291,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             pendingGallery = null
             // Close the sheet instantly (Seal mechanics); the transfer
             // reports through toasts — a lingering sheet invited a second
-            // tap and a duplicate download.
+            // tap and a duplicate download. Runs in the APP scope: the
+            // overlay finishes right after hideDialog(), destroying the
+            // activity's viewModelScope — an activity-scoped coroutine here
+            // was cancelled mid-resolve and the task never got enqueued.
             hideDialog()
-            viewModelScope.launch(Dispatchers.IO) {
+            App.applicationScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.enqueueResolved(
                         downloader,
                         gallery,
@@ -332,8 +335,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         if (instagramUrl != null && !preferences.cookies) {
             // Same instant-close as the gallery branch: the resolve and the
             // transfer run in the background and report through toasts.
+            // APP scope: survives the overlay finish.
             hideDialog()
-            viewModelScope.launch(Dispatchers.IO) {
+            App.applicationScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.resolve(App.context, instagramUrl)
                     .mapCatching { resolved ->
                         SleeveQuickDownload.enqueueResolved(
