@@ -182,7 +182,6 @@ class App : Application() {
                             .setType("text/plain")
                             .putExtra(EXTRA_QUICK_DOWNLOAD, true),
                     )
-                    .setCategories(setOf("com.sleeve.app.category.QUICK_DOWNLOAD"))
                     .setLongLived(true)
                     .build()
             ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)

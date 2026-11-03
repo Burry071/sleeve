@@ -177,7 +177,7 @@
     <string name="format_unavailable_hint">The selected format is not available for this media. Use the default preset (Format preference) and retry.</string>
     <string name="site_rate_limited">The site is rate-limiting requests. Wait a moment, then retry.</string>
     <string name="quick_download_label">Quick download</string>
-    <string name="quick_download_pushed">Quick download enabled in share sheets</string>
+    <string name="quick_download_pushed">Quick download shortcut added (app long-press)</string>
     <string name="gallery_auth_required">This content needs a login. Import cookies in Settings → Cookies &amp; profiles, then retry.</string>
     <string name="status_error">Error</string>
     <string name="copy_link">Copy link</string>
