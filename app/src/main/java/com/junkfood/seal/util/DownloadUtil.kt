@@ -1300,6 +1300,18 @@ object DownloadUtil {
         if (videoInfo == null)
             return Result.failure(Throwable(context.getString(R.string.fetch_info_error_msg)))
 
+        // Direct-media items (gallery/embed/synth CDN links) ARE the final
+        // artifact: yt-dlp's thumbnail postprocessor errors on them
+        // ("Postprocessing: Error opening output files"), and a picture does
+        // not need a thumbnail of itself. Stripping the flags also lets the
+        // ghost handoff accept the task again when the user saves thumbnails.
+        val directItem = downloadPreferences.galleryDirect ||
+            videoInfo.extractorKey == "SleeveDirect"
+        val downloadPreferences =
+            if (directItem)
+                downloadPreferences.copy(createThumbnail = false, embedThumbnail = false)
+            else downloadPreferences
+
         with(downloadPreferences) {
             val url =
                 playlistUrl.ifEmpty {

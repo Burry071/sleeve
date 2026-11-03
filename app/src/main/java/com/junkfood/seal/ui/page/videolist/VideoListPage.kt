@@ -69,7 +69,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -84,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.junkfood.seal.App
+import androidx.compose.ui.res.painterResource
 import com.junkfood.seal.R
 import com.junkfood.seal.database.backup.BackupUtil
 import com.junkfood.seal.database.backup.BackupUtil.BackupDestination.Clipboard
@@ -102,7 +102,6 @@ import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.component.SealSearchBar
 import com.junkfood.seal.ui.component.VideoFilterChip
 import com.junkfood.seal.ui.common.motion.EmphasizedDecelerate
-import com.junkfood.seal.ui.svg.drawablevectors.sleeveWaveMark
 import com.junkfood.seal.ui.svg.drawablevectors.videoSteaming
 import com.junkfood.seal.util.AUDIO_REGEX
 import com.junkfood.seal.util.FileUtil
@@ -423,10 +422,7 @@ fun VideoListPage(viewModel: VideoListViewModel = koinViewModel(), onNavigateBac
     ) { innerPadding ->
         if (fullVideoList.isEmpty())
             Box(modifier = Modifier.fillMaxSize()) {
-                val painter =
-                    rememberVectorPainter(
-                        image = sleeveWaveMark(MaterialTheme.colorScheme.primary),
-                    )
+                val painter = painterResource(R.drawable.seal_mascot)
                 // First-impression entrance: rare tier, so a gentle stagger is welcome.
                 val entered = remember { MutableTransitionState(false).apply { targetState = true } }
                 Column(

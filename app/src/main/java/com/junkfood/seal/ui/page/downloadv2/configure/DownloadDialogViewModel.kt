@@ -270,13 +270,29 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private var pendingGallery: SleeveQuickDownload.Resolved? = null
 
+    /** Double-tap guard: a laggy recomposition must not enqueue the same
+     * media twice. Keyed on the first URL + audio intent within 1.5s. */
+    private val lastPresetDownloadAt = mutableMapOf<String, Long>()
+
     private fun downloadWithPreset(
         urlList: List<String>,
         preferences: DownloadUtil.DownloadPreferences,
     ) {
+        val dedupeKey = urlList.firstOrNull().orEmpty() + "#" + preferences.extractAudio
+        val now = System.currentTimeMillis()
+        if (now - (lastPresetDownloadAt[dedupeKey] ?: 0) < 1500) {
+            hideDialog()
+            return
+        }
+        lastPresetDownloadAt[dedupeKey] = now
+
         val gallery = pendingGallery
         if (gallery != null && urlList.firstOrNull() == gallery.url) {
             pendingGallery = null
+            // Close the sheet instantly (Seal mechanics); the transfer
+            // reports through toasts — a lingering sheet invited a second
+            // tap and a duplicate download.
+            hideDialog()
             viewModelScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.enqueueResolved(
                         downloader,
@@ -292,10 +308,16 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                                     source,
                                 ),
                             )
-                            hideDialog()
                         }
                     }
-                    .onFailure { th -> galleryError(Action.FetchGallery(gallery.url), th) }
+                    .onFailure { th ->
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                DownloadErrorMessages.friendly(th)
+                                    .ifEmpty { App.context.getString(R.string.download_error_msg) },
+                            )
+                        }
+                    }
             }
             return
         }
@@ -308,6 +330,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                 it.contains("instagram.com", true) || it.contains("instagr.am", true)
             }
         if (instagramUrl != null && !preferences.cookies) {
+            // Same instant-close as the gallery branch: the resolve and the
+            // transfer run in the background and report through toasts.
+            hideDialog()
             viewModelScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.resolve(App.context, instagramUrl)
                     .mapCatching { resolved ->
@@ -327,7 +352,6 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                                     source,
                                 ),
                             )
-                            hideDialog()
                         }
                     }
                     .onFailure { th ->
@@ -335,7 +359,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         urlList.forEach {
                             downloader.enqueue(Task(url = it, preferences = preferences))
                         }
-                        withContext(Dispatchers.Main) { hideDialog() }
+                        withContext(Dispatchers.Main) {
+                            ToastUtil.makeToast(
+                                DownloadErrorMessages.friendly(th)
+                                    .ifEmpty { App.context.getString(R.string.download_error_msg) },
+                            )
+                        }
                     }
             }
             return
