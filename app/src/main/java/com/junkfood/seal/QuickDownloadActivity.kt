@@ -95,6 +95,18 @@ class QuickDownloadActivity : ComponentActivity() {
             return
         }
 
+        // Start the foreground service NOW, while this activity is still
+        // foreground and startService is legal. Both lanes (quick and sheet)
+        // download in App.applicationScope after this overlay closes — an
+        // app with no visible activity and no running service drops into the
+        // cached bucket and Android's freezer suspends the download mid-flight
+        // (logcat: "freezing com.sleeve.app" 18s after the sheet closed, task
+        // never finished, no notification ever shown). The FGS badge is the
+        // user's visible "Sleeve is downloading" feedback and the freezer
+        // exemption in one; it drains via App.stopService when the queue
+        // empties, so starting it here cannot leave a zombie.
+        App.startService()
+
         // Sharing a link from another app (ACTION_SEND) opens the configure
         // sheet, like the stock Seal share target — the user picks format,
         // preset and destination before anything is queued. Only the
@@ -106,8 +118,8 @@ class QuickDownloadActivity : ComponentActivity() {
         ) {
             // Share-sheet "Quick download": straight to the queue with the
             // default pipeline, no configure dialog. The gallery route inside
-            // handles Instagram and other image sites anonymously first. The
-            // scheduler starts the foreground service when a task lands.
+            // handles Instagram and other image sites anonymously first.
+            // The service is already running (started above while foreground).
             val urls =
                 sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() }
             lifecycleScope.launch {
