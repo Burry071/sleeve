@@ -104,10 +104,23 @@ object FileUtil {
         }
 
     @CheckResult
-    fun scanFileToMediaLibraryPostDownload(title: String, downloadDir: String): List<String> =
+    fun scanFileToMediaLibraryPostDownload(
+        title: String,
+        downloadDir: String,
+        modifiedAfterMs: Long? = null,
+    ): List<String> =
         File(downloadDir)
             .walkTopDown()
-            .filter { it.isFile && it.absolutePath.contains(title) }
+            .filter {
+                it.isFile &&
+                    (
+                        it.absolutePath.contains(title) ||
+                            // --trim-filenames caps long names, so a title
+                            // match can fail on exactly the downloads that
+                            // need the scan; fall back to modification time.
+                            (modifiedAfterMs != null && it.lastModified() >= modifiedAfterMs)
+                        )
+            }
             .map { it.absolutePath }
             .toMutableList()
             .apply {

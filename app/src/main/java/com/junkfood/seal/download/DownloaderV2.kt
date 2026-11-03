@@ -131,23 +131,31 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             enqueueFromBackup()
 
             snapshotFlow
-                .map { it.filter { it.value.downloadState !is Completed } }
-                .distinctUntilChanged()
-                .collect {
-                    it.forEach { Log.d(TAG, it.value.viewState.title) }
-                    PreferenceUtil.encodeTaskListBackup(it)
+                .map { state ->
+                    // Completed downloads persist too: the user reopening the
+                    // app must still see what they downloaded. Cap the backup
+                    // so a long session cannot grow MMKV without bound.
+                    val entries = state.entries.toList()
+                    val active = entries.filter { it.value.downloadState !is Completed }
+                    val completed =
+                        entries.filter { it.value.downloadState is Completed }.takeLast(40)
+                    (active + completed).associate { it.key to it.value }
                 }
+                .distinctUntilChanged()
+                .collect { PreferenceUtil.encodeTaskListBackup(it) }
         }
     }
 
     private fun enqueueFromBackup() {
         val taskList =
             PreferenceUtil.decodeTaskListBackup()
-                .filter { it.value.downloadState !is Completed }
                 .mapValues { (_, state) ->
                     val preState = state.downloadState
                     val downloadState =
                         when (preState) {
+                            // Completed downloads keep their state and show
+                            // as Downloaded cards after a restart.
+                            is Completed -> preState
                             is FetchingInfo,
                             Idle -> {
                                 Canceled(action = FetchInfo)
@@ -165,7 +173,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         }
                     state.copy(downloadState = downloadState)
                 }
-        taskList.forEach(::enqueue)
+        taskList.forEach { (task, state) -> enqueue(task, state) }
     }
 
     private fun Map<Task, Task.State>.countRunning(): Int = count { (_, state) ->

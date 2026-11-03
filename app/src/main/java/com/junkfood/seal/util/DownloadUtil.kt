@@ -943,6 +943,7 @@ object DownloadUtil {
         // Registered so a task cancel can terminate the process; waitFor
         // below would otherwise block until the transfer finishes.
         nreProcesses[taskId] = process
+        val nreStartedAtMs = System.currentTimeMillis()
 
         // Stream-copy done; the produced file is the largest under workDir.
         val produced =
@@ -989,6 +990,7 @@ object DownloadUtil {
             videoInfo = videoInfo,
             downloadPath = downloadDir,
             sdcardUri = preferences.sdcardUri,
+            startedAtMs = nreStartedAtMs,
         )
     }
 
@@ -1136,6 +1138,7 @@ object DownloadUtil {
             }
         ghostTasks[taskId] = engineTaskId
         Log.i(TAG, "Ghost engine took over $taskId -> $engineTaskId ($fileName)")
+        val engineStartedAtMs = System.currentTimeMillis()
 
         val outcome =
             runBlocking {
@@ -1334,6 +1337,7 @@ object DownloadUtil {
                     null,
                     "tv",
                 )
+            val downloadStartedAtMs = System.currentTimeMillis()
             for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
                 val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
                 if (clients != null) {
@@ -1498,6 +1502,7 @@ object DownloadUtil {
                         videoInfo = videoInfo,
                         downloadPath = pathBuilder.toString(),
                         sdcardUri = sdcardUri,
+                        startedAtMs = downloadStartedAtMs,
                     )
                 }
                 val failureMessage = attemptFailure.message.orEmpty()
@@ -1525,6 +1530,7 @@ object DownloadUtil {
                         videoInfo = videoInfo,
                         downloadPath = pathBuilder.toString(),
                         sdcardUri = sdcardUri,
+                        startedAtMs = downloadStartedAtMs,
                     )
                 }
                 Log.e(
@@ -1544,6 +1550,7 @@ object DownloadUtil {
         videoInfo: VideoInfo,
         downloadPath: String,
         sdcardUri: String,
+        startedAtMs: Long? = null,
     ): Result<List<String>> =
         preferences.run {
             val fileName =
