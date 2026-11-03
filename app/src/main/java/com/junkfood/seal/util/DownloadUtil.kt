@@ -767,33 +767,14 @@ object DownloadUtil {
      * so the default "[%(id)s]" output template produces 700-byte filenames
      * (Errno 36) and plain video files hit "Requested format is not
      * available". */
-    val DIRECT_MEDIA_EXTS =
-        setOf(
-            "jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "jfif",
-            "mp4", "m4v", "webm", "mkv", "mov", "avi", "3gp", "ts", "flv",
-            "mp3", "m4a", "aac", "opus", "wav", "flac", "oga", "wma",
-        )
+    // Routing table lives in DirectMediaRules (pure, unit-tested) — the
+    // user's .heic Instagram share was missing from it and fell into the
+    // generic extractor.
+    val DIRECT_MEDIA_EXTS get() = DirectMediaRules.MEDIA_EXTS
 
-    private val DIRECT_IMAGE_EXTS =
-        setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "jfif")
+    fun isDirectMediaUrl(url: String): Boolean = DirectMediaRules.isDirectMediaUrl(url)
 
-    fun isDirectMediaUrl(url: String): Boolean {
-        val path = url.substringBefore('#').substringBefore('?').substringBefore('？')
-        val ext =
-            path.substringAfterLast('/')
-                .substringAfterLast('.')
-                .lowercase()
-        return ext in DIRECT_MEDIA_EXTS
-    }
-
-    fun isDirectImageUrl(url: String): Boolean {
-        val path = url.substringBefore('#').substringBefore('?').substringBefore('？')
-        val ext =
-            path.substringAfterLast('/')
-                .substringAfterLast('.')
-                .lowercase()
-        return ext in DIRECT_IMAGE_EXTS
-    }
+    fun isDirectImageUrl(url: String): Boolean = DirectMediaRules.isDirectImageUrl(url)
 
     /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
     private val PRIVATE_HOST_RE =
