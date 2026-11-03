@@ -1183,6 +1183,7 @@ object DownloadUtil {
                     videoInfo = videoInfo,
                     downloadPath = downloadDir,
                     sdcardUri = preferences.sdcardUri,
+                    startedAtMs = engineStartedAtMs,
                 )
             else -> {
                 val reason =
@@ -1579,6 +1580,13 @@ object DownloadUtil {
                 FileUtil.scanFileToMediaLibraryPostDownload(
                         title = fileName,
                         downloadDir = downloadPath,
+                        // The disk filename can fail the title match
+                        // (--trim-filenames 80, sanitized quick-download
+                        // titles): a title-only scan returns an empty list and
+                        // the history insert never runs, silently dropping the
+                        // completed task from Downloads. Files modified since
+                        // the download started are the real match.
+                        modifiedAfterMs = startedAtMs,
                     )
                     .run {
                         if (privateMode) Result.success(emptyList())
