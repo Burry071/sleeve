@@ -67,6 +67,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -110,6 +111,7 @@ import androidx.compose.material3.IconButton
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.junkfood.seal.util.resolveClipboardOffer
 import com.junkfood.seal.util.findURLsFromString
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.R
@@ -232,10 +234,13 @@ fun DownloadPageV2(
     val clipboardManager = LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
 
-    // Clipboard watch: one offer per copied link, re-armed on every resume
-    // while the app is foregrounded.
+    // Clipboard watch: the offer MIRRORS the clipboard's current content.
+    // It appears when a link is copied, and disappears when the clipboard
+    // moves on or empties, when the user dismissed that exact link, or when
+    // a task with that link reaches the queue — never a stale leftover.
+    // Decision logic: resolveClipboardOffer (unit-tested).
     var clipboardOffer by remember { mutableStateOf<String?>(null) }
-    var lastClipboardOffer by remember { mutableStateOf<String?>(null) }
+    val handledClipboardLinks = remember { mutableStateListOf<String>() }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -249,9 +254,18 @@ fun DownloadPageV2(
                         ?.toString()
                 }.getOrNull()
                     ?.let { text -> findURLsFromString(text, firstMatchOnly = true).firstOrNull() }
-            if (detected != null && detected != lastClipboardOffer) {
-                clipboardOffer = detected
-            }
+            clipboardOffer = resolveClipboardOffer(detected, handledClipboardLinks.toSet())
+        }
+    }
+
+    // Any lane that enqueues the offered link (banner, share, paste) retires
+    // the offer — a downloaded link is not a suggestion.
+    val taskMap = downloader.getTaskStateMap()
+    LaunchedEffect(taskMap.size) {
+        val offered = clipboardOffer ?: return@LaunchedEffect
+        if (taskMap.keys.any { it.url == offered }) {
+            handledClipboardLinks.add(offered)
+            clipboardOffer = null
         }
     }
 
@@ -266,12 +280,12 @@ fun DownloadPageV2(
         onNavigateToCookies = onNavigateToCookies,
         clipboardOffer = clipboardOffer,
         onClipboardDownload = { url ->
-            lastClipboardOffer = url
+            handledClipboardLinks.add(url)
             clipboardOffer = null
             dialogViewModel.postAction(Action.ShowSheet(listOf(url)))
         },
         onClipboardDismiss = {
-            lastClipboardOffer = clipboardOffer
+            handledClipboardLinks.add(clipboardOffer.orEmpty())
             clipboardOffer = null
         },
     ) { task, action ->

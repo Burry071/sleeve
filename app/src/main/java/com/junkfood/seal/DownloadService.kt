@@ -21,6 +21,14 @@ class DownloadService : Service() {
     private var isStartedMode = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // START_STICKY restart after the system killed the process: this
+            // fresh process has no queued tasks, so resurrecting the
+            // "downloading" badge here would be a zombie with nothing behind
+            // it. The scheduler re-promotes the service when a task arrives.
+            stopSelf()
+            return START_NOT_STICKY
+        }
         isStartedMode = true
         startForeground(SERVICE_NOTIFICATION_ID, makeServiceNotification())
         return START_STICKY
@@ -61,6 +69,12 @@ class DownloadService : Service() {
                 android.app.PendingIntent.FLAG_IMMUTABLE,
             )
         return NotificationUtil.makeServiceNotification(pendingIntent)
+    }
+
+    override fun onDestroy() {
+        // Guarantee the badge goes away no matter which stop path ran.
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        super.onDestroy()
     }
 
     inner class DownloadServiceBinder : Binder() {

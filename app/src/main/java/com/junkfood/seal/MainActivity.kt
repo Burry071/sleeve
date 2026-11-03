@@ -23,6 +23,10 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.compose.KoinContext
 
 class MainActivity : AppCompatActivity() {
+
+    // Per-instance: a process-wide static held a stale link across
+    // unrelated shares.
+    private var sharedUrlCached = ""
     private val dialogViewModel: DownloadDialogViewModel by viewModel()
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
@@ -97,6 +101,5 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private var sharedUrlCached = ""
     }
 }
