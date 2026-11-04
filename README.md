@@ -10,6 +10,7 @@ A free, open-source video and audio downloader for Android. No ads, no
 tracking, no accounts.
 
 [![Release](https://img.shields.io/github/v/release/Burry071/sleeve?label=release)](https://github.com/Burry071/sleeve/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Burry071/sleeve/total?label=downloads&color=3DDC84)](https://github.com/Burry071/sleeve/releases)
 [![License](https://img.shields.io/github/license/Burry071/sleeve)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/Burry071/sleeve/ci.yml?branch=main&label=build)](https://github.com/Burry071/sleeve/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Android%207.0%2B-3DDC84)](https://developer.android.com)
@@ -78,8 +79,11 @@ third-party mirrors are not checked by anyone.
 
 ## Download
 
-**[Download the latest APK](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk)**
-(direct, signed, arm64-v8a + x86_64, Android 7.0+). Release notes live on the
+[![Download APK](https://img.shields.io/badge/Download_APK-latest-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk)
+
+Direct, signed APK (arm64-v8a + x86_64, Android 7.0+). The button always
+serves the current release, so there is no need to open the releases page
+first. Release notes and older versions are on the
 [releases page](https://github.com/Burry071/sleeve/releases).
 
 Also available on the
