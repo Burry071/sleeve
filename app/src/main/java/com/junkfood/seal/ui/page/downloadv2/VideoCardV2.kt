@@ -28,7 +28,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.rounded.Cookie
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Pause
@@ -445,16 +444,23 @@ private fun TitleText(
 
 @Composable
 private fun VideoInfoLabel(modifier: Modifier = Modifier, duration: Int, fileSizeApprox: Double) {
+    // Direct/CDN lanes know neither size nor duration until the file lands.
+    // "0.00 MB · 00:00" would be an invented value, so unknown parts are
+    // dropped and a fully unknown label is not drawn at all.
+    val parts =
+        buildList {
+            if (fileSizeApprox > 0) add(fileSizeApprox.toFileSizeText())
+            if (duration > 0) add(duration.toDurationText())
+        }
+    if (parts.isEmpty()) return
     Surface(
         modifier = modifier.padding(10.dp),
         color = Color.Black.copy(alpha = 0.62f),
         shape = CircleShape,
     ) {
-        val fileSizeText = fileSizeApprox.toFileSizeText()
-        val durationText = duration.toDurationText()
         Text(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            text = "$fileSizeText · $durationText",
+            text = parts.joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
             color = Color.White,
         )
@@ -641,49 +647,25 @@ fun ListItemStateText(
     }
 }
 
-/** Inline actions rendered on failed task cards: retry, plus the one-tap
- * cookie fix when the failure is a login wall. */
+/** Inline retry action rendered on failed task cards. */
 @Composable
-fun ErrorFooter(
-    modifier: Modifier = Modifier,
-    onRetry: () -> Unit,
-    onAddCookies: (() -> Unit)? = null,
-) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilledTonalButton(
-            onClick = onRetry,
-            colors =
-                ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.RestartAlt,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(text = stringResource(R.string.retry))
-        }
-        if (onAddCookies != null) {
-            FilledTonalButton(
-                onClick = onAddCookies,
-                colors =
-                    ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    ),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Cookie,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(text = stringResource(R.string.add_cookies))
-            }
-        }
+fun ErrorFooter(modifier: Modifier = Modifier, onRetry: () -> Unit) {
+    FilledTonalButton(
+        onClick = onRetry,
+        modifier = modifier,
+        colors =
+            ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.RestartAlt,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(text = stringResource(R.string.retry))
     }
 }
 

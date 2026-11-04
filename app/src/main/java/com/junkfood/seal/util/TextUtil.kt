@@ -97,21 +97,6 @@ fun matchUrlFromSharedText(s: String): String {
 }
 
 /** All URLs in the shared text, for SEND_MULTIPLE and multi-link shares. */
-/**
- * Decide the clipboard-offer banner from the clipboard's CURRENT content and
- * the set of links already handled (dismissed or downloaded). The banner is
- * a mirror, not a memory: it clears the moment the clipboard moves on or
- * empties, and a handled link is never re-offered — stale banners made the
- * app look broken ("link detected" after the video had downloaded and the
- * clipboard was cleared).
- */
-fun resolveClipboardOffer(detected: String?, handled: Set<String>): String? =
-    when {
-        detected == null -> null
-        detected in handled -> null
-        else -> detected
-    }
-
 fun matchAllUrlsFromSharedText(s: String): String {
     findURLsFromString(s, false).joinToString(separator = "\n").run {
         if (isEmpty()) ToastUtil.makeToast(R.string.share_fail_msg)

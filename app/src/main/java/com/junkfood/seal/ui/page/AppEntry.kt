@@ -1,5 +1,6 @@
 package com.junkfood.seal.ui.page
 
+import android.os.SystemClock
 import android.webkit.CookieManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -107,6 +109,12 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     var currentTopDestination by rememberSaveable { mutableStateOf(currentRoute) }
 
+    // Drawer items navigate only after the drawer close animation, so a
+    // double tap delivers two completions. Both used to run navigate(), and
+    // because popUpTo(HOME) makes HOME the top before each push, the second
+    // call pushed a second copy of the destination (Back then looked dead).
+    var lastNavigationAt by remember { mutableStateOf(0L) }
+
     LaunchedEffect(currentRoute) {
         if (currentRoute in TopDestinations) {
             currentTopDestination = currentRoute
@@ -122,9 +130,11 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
             showQuickSettings = true,
             gesturesEnabled = currentRoute == Route.HOME,
             onDismissRequest = { drawerState.close() },
-            onNavigateToRoute = {
-                if (currentRoute != it) {
-                    navController.navigate(it) {
+            onNavigateToRoute = { route ->
+                val now = SystemClock.elapsedRealtime()
+                if (currentRoute != route && now - lastNavigationAt > 400) {
+                    lastNavigationAt = now
+                    navController.navigate(route) {
                         launchSingleTop = true
                         popUpTo(route = Route.HOME)
                     }
@@ -142,11 +152,6 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
                         onMenuOpen = {
                             view.slightHapticFeedback()
                             scope.launch { drawerState.open() }
-                        },
-                        onNavigateToCookies = {
-                            navController.navigate(Route.COOKIE_PROFILE) {
-                                launchSingleTop = true
-                            }
                         },
                     )
                 }

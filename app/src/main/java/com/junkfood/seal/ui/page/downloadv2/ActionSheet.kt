@@ -444,10 +444,17 @@ fun ActionSheetInfo(modifier: Modifier = Modifier, task: Task, viewState: ViewSt
                         task.timeCreated.toLocalizedString(),
                         style = MaterialTheme.typography.titleSmall,
                     )
-                    Text(
-                        "${duration.toDurationText()} · ${fileSizeApprox.toFileSizeText()}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    val infoParts =
+                        buildList {
+                            if (duration > 0) add(duration.toDurationText())
+                            if (fileSizeApprox > 0) add(fileSizeApprox.toFileSizeText())
+                        }
+                    if (infoParts.isNotEmpty()) {
+                        Text(
+                            infoParts.joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 },
                 leadingIcon = {
                     Icon(imageVector = Icons.Outlined.FileDownload, contentDescription = null)
@@ -460,7 +467,12 @@ fun ActionSheetInfo(modifier: Modifier = Modifier, task: Task, viewState: ViewSt
                 val bitRateText = fmt.vbr.toBitrateText()
                 val codecText = fmt.vcodec?.substringBefore(delimiter = ".") ?: ""
 
-                val title = "${stringResource(R.string.video)} #$index: ${fmt.formatNote}"
+                val title =
+                    listOfNotNull(
+                            "${stringResource(R.string.video)} #$index",
+                            fmt.formatNote?.takeIf { it.isNotBlank() },
+                        )
+                        .joinToString(separator = ": ")
                 val details =
                     listOf(codecText, fmt.resolution, bitRateText, fileSizeText)
                         .filterNot { it.isNullOrBlank() }
@@ -488,7 +500,12 @@ fun ActionSheetInfo(modifier: Modifier = Modifier, task: Task, viewState: ViewSt
                 val bitRateText = fmt.abr.toBitrateText()
                 val codecText = fmt.acodec?.substringBefore(delimiter = ".") ?: ""
 
-                val title = "${stringResource(R.string.audio)} #$index: ${fmt.formatNote}"
+                val title =
+                    listOfNotNull(
+                            "${stringResource(R.string.audio)} #$index",
+                            fmt.formatNote?.takeIf { it.isNotBlank() },
+                        )
+                        .joinToString(separator = ": ")
                 val details =
                     listOf(codecText, bitRateText, fileSizeText)
                         .filterNot { it.isBlank() }

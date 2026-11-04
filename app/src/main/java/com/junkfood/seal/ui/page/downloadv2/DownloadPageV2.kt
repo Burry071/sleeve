@@ -1,7 +1,9 @@
 package com.junkfood.seal.ui.page.downloadv2
 
+import android.Manifest
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -67,7 +69,6 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -94,9 +95,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Surface
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -104,16 +102,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.constraintlayout.compose.ConstraintLayout
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import android.content.ClipboardManager
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material3.IconButton
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.repeatOnLifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.junkfood.seal.util.resolveClipboardOffer
-import com.junkfood.seal.util.findURLsFromString
-import com.junkfood.seal.util.DownloadErrorMessages
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import com.junkfood.seal.R
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
@@ -141,10 +132,14 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
+import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.NOTIFICATION
+import com.junkfood.seal.util.PreferenceUtil.getBoolean
+import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.getErrorReport
 import com.junkfood.seal.util.makeToast
 import kotlinx.coroutines.CoroutineScope
@@ -156,6 +151,12 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private const val TAG = "DownloadPageV2"
+
+/** Sheet actions that hand a task to the download pipeline. */
+private fun Action.startsDownload(): Boolean =
+    this is Action.DownloadWithPreset ||
+        this is Action.RunCommand ||
+        this is Action.DownloadMetadataTracks
 
 enum class Filter {
     All,
@@ -219,12 +220,11 @@ sealed interface UiAction {
     data class CopyErrorReport(val throwable: Throwable) : UiAction
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun DownloadPageV2(
     modifier: Modifier = Modifier,
     onMenuOpen: (() -> Unit) = {},
-    onNavigateToCookies: (() -> Unit) = {},
     dialogViewModel: DownloadDialogViewModel,
     downloader: DownloaderV2 = koinInject(),
 ) {
@@ -234,39 +234,28 @@ fun DownloadPageV2(
     val clipboardManager = LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
 
-    // Clipboard watch: the offer MIRRORS the clipboard's current content.
-    // It appears when a link is copied, and disappears when the clipboard
-    // moves on or empties, when the user dismissed that exact link, or when
-    // a task with that link reaches the queue — never a stale leftover.
-    // Decision logic: resolveClipboardOffer (unit-tested).
-    var clipboardOffer by remember { mutableStateOf<String?>(null) }
-    val handledClipboardLinks = remember { mutableStateListOf<String>() }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            val detected =
-                runCatching {
-                    context
-                        .getSystemService(ClipboardManager::class.java)
-                        ?.primaryClip
-                        ?.getItemAt(0)
-                        ?.text
-                        ?.toString()
-                }.getOrNull()
-                    ?.let { text -> findURLsFromString(text, firstMatchOnly = true).firstOrNull() }
-            clipboardOffer = resolveClipboardOffer(detected, handledClipboardLinks.toSet())
-        }
-    }
+    // Downloads notify progress/finish from DownloadService, but Android 13+
+    // only shows those notifications after POST_NOTIFICATIONS is granted.
+    // Nothing in the V2 flow ever asked for it, so the queue stayed silent.
+    var showNotificationDialog by remember { mutableStateOf(false) }
+    val notificationPermission =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            rememberPermissionState(permission = Manifest.permission.POST_NOTIFICATIONS) {
+                    granted ->
+                showNotificationDialog = false
+                if (!granted) context.makeToast(R.string.permission_denied)
+            }
+        } else null
 
-    // Any lane that enqueues the offered link (banner, share, paste) retires
-    // the offer — a downloaded link is not a suggestion.
-    val taskMap = downloader.getTaskStateMap()
-    LaunchedEffect(taskMap.size) {
-        val offered = clipboardOffer ?: return@LaunchedEffect
-        if (taskMap.keys.any { it.url == offered }) {
-            handledClipboardLinks.add(offered)
-            clipboardOffer = null
+    fun postAction(action: Action) {
+        if (
+            action.startsDownload() &&
+                NOTIFICATION.getBoolean() &&
+                notificationPermission?.status?.isGranted == false
+        ) {
+            showNotificationDialog = true
         }
+        dialogViewModel.postAction(action)
     }
 
     DownloadPageImplV2(
@@ -277,17 +266,6 @@ fun DownloadPageV2(
             dialogViewModel.postAction(Action.ShowSheet())
         },
         onMenuOpen = onMenuOpen,
-        onNavigateToCookies = onNavigateToCookies,
-        clipboardOffer = clipboardOffer,
-        onClipboardDownload = { url ->
-            handledClipboardLinks.add(url)
-            clipboardOffer = null
-            dialogViewModel.postAction(Action.ShowSheet(listOf(url)))
-        },
-        onClipboardDismiss = {
-            handledClipboardLinks.add(clipboardOffer.orEmpty())
-            clipboardOffer = null
-        },
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -343,6 +321,16 @@ fun DownloadPageV2(
         }
     }
 
+    if (showNotificationDialog) {
+        NotificationPermissionDialog(
+            onDismissRequest = {
+                showNotificationDialog = false
+                NOTIFICATION.updateBoolean(false)
+            },
+            onPermissionGranted = { notificationPermission?.launchPermissionRequest() },
+        )
+    }
+
     if (showDialog) {
 
         DownloadDialog(
@@ -351,8 +339,7 @@ fun DownloadPageV2(
             config = Config(),
             preferences = preferences,
             onPreferencesUpdate = { preferences = it },
-            onNavigateToCookies = onNavigateToCookies,
-            onActionPost = { dialogViewModel.postAction(it) },
+            onActionPost = { postAction(it) },
         )
     }
     when (selectionState) {
@@ -366,7 +353,7 @@ fun DownloadPageV2(
             MetadataTracksPage(
                 state = selectionState,
                 onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
-                onActionPost = { dialogViewModel.postAction(it) },
+                onActionPost = { postAction(it) },
             )
 
         is DownloadDialogViewModel.SelectionState.PlaylistSelection -> {
@@ -401,10 +388,6 @@ fun DownloadPageImplV2(
     taskDownloadStateMap: SnapshotStateMap<Task, Task.State>,
     downloadCallback: () -> Unit = {},
     onMenuOpen: (() -> Unit) = {},
-    onNavigateToCookies: (() -> Unit) = {},
-    clipboardOffer: String? = null,
-    onClipboardDownload: (String) -> Unit = {},
-    onClipboardDismiss: () -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
@@ -413,7 +396,6 @@ fun DownloadPageImplV2(
             derivedStateOf { taskDownloadStateMap.filter { activeFilter.predict(it.toPair()) } }
         }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     var selectedTask by remember { mutableStateOf<Task?>(null) }
@@ -469,49 +451,6 @@ fun DownloadPageImplV2(
             CompositionLocalProvider(LocalOverscrollFactory provides null) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(with(LocalDensity.current) { headerOffset.toDp() }))
-                    clipboardOffer?.let { url ->
-                        // Cobalt-style paste flow: a link copied anywhere shows
-                        // up here with a one-tap download using the defaults.
-                        Surface(
-                            modifier =
-                                Modifier.fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                            shape = MaterialTheme.shapes.large,
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentPaste,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = stringResource(R.string.clipboard_link_detected),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Text(
-                                        text = url,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                FilledTonalButton(onClick = { onClipboardDownload(url) }) {
-                                    Text(stringResource(R.string.download))
-                                }
-                                IconButton(onClick = onClipboardDismiss) {
-                                    Icon(Icons.Rounded.Close, contentDescription = null)
-                                }
-                            }
-                        }
-                    }
                     UpdateBanner(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                     Header(onMenuOpen = onMenuOpen, modifier = Modifier.padding(horizontal = 16.dp))
                     SelectionGroupRow(
@@ -597,18 +536,8 @@ fun DownloadPageImplV2(
                                     footerContent =
                                         if (state.downloadState is Error) {
                                             {
-                                                val errState =
-                                                    state.downloadState as Error
                                                 ErrorFooter(
-                                                    onRetry = { onActionPost(task, UiAction.Resume) },
-                                                    onAddCookies =
-                                                        if (
-                                                            errState.throwable is
-                                                                DownloadErrorMessages
-                                                                    .LoginRequiredError
-                                                        )
-                                                            onNavigateToCookies
-                                                        else null,
+                                                    onRetry = { onActionPost(task, UiAction.Resume) }
                                                 )
                                             }
                                         } else null,

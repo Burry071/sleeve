@@ -94,18 +94,19 @@ fun FormatVideoPreview(
                     isAudio = false,
                     contentDescription = stringResource(id = R.string.thumbnail),
                 )
-                Surface(
-                    modifier = Modifier.padding(2.dp).align(Alignment.BottomEnd),
-                    color = Color.Black.copy(alpha = 0.68f),
-                    shape = MaterialTheme.shapes.extraSmall,
-                ) {
-                    val durationText = duration.toDurationText()
-                    Text(
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                        text = durationText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                    )
+                if (duration > 0) {
+                    Surface(
+                        modifier = Modifier.padding(2.dp).align(Alignment.BottomEnd),
+                        color = Color.Black.copy(alpha = 0.68f),
+                        shape = MaterialTheme.shapes.extraSmall,
+                    ) {
+                        Text(
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                            text = duration.toDurationText(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                        )
+                    }
                 }
             }
 
@@ -221,7 +222,7 @@ fun SuggestedFormatItem(
     val duration = videoInfo.duration ?: 0.0
 
     val containsVideo = requestedFormats.any { it.containsVideo() }
-    val containsAudio = requestedFormats.any { it.containsVideo() }
+    val containsAudio = requestedFormats.any { it.containsAudio() }
 
     val title = requestedFormats.joinToString(separator = " + ") { it.format.toString() }
 
@@ -231,7 +232,7 @@ fun SuggestedFormatItem(
                 (format.fileSize ?: format.fileSizeApprox ?: (duration * (format.tbr ?: 0.0) * 125))
             // kbps -> bytes 1000/8
         }
-    val fileSizeText = totalFileSize.toFileSizeText()
+    val fileSizeText = totalFileSize.takeIf { it > 0 }.toFileSizeText()
 
     val totalTbr =
         requestedFormats.fold(initial = 0.0) { acc: Double, format: Format ->
