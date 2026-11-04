@@ -49,6 +49,7 @@ import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FloatingActionButton
@@ -59,6 +60,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
@@ -106,6 +108,8 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.junkfood.seal.R
+import com.junkfood.seal.download.BatchInfo
+import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Canceled
@@ -138,6 +142,7 @@ import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.NOTIFICATION
+import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.getErrorReport
@@ -160,6 +165,7 @@ private fun Action.startsDownload(): Boolean =
 
 enum class Filter {
     All,
+    Playlist,
     Downloading,
     Canceled,
     Finished;
@@ -169,17 +175,21 @@ enum class Filter {
     fun label(): String =
         when (this) {
             All -> stringResource(R.string.all)
+            Playlist -> stringResource(R.string.playlist)
             Downloading -> stringResource(R.string.status_downloading)
             Canceled -> stringResource(R.string.status_canceled)
             Finished -> stringResource(R.string.status_completed)
         }
 
     fun predict(entry: Pair<Task, Task.State>): Boolean {
-        if (this == All) return true
-        val state = entry.second.downloadState
+        val (task, state) = entry
+        // Batch songs live only inside their card.
+        if (task.batch != null) return false
         return when (this) {
+            All -> true
+            Playlist -> false
             Downloading -> {
-                when (state) {
+                when (state.downloadState) {
                     is FetchingInfo,
                     Idle,
                     ReadyWithInfo,
@@ -188,13 +198,10 @@ enum class Filter {
                 }
             }
             Canceled -> {
-                state is Error || state is Task.DownloadState.Canceled
+                state.downloadState is Error || state.downloadState is Task.DownloadState.Canceled
             }
             Finished -> {
-                state is Completed
-            }
-            else -> {
-                true
+                state.downloadState is Completed
             }
         }
     }
@@ -207,7 +214,7 @@ sealed interface UiAction {
 
     data class OpenThumbnailURL(val url: String) : UiAction
 
-    data object CopyVideoURL : UiAction
+    data class CopyVideoURL(val url: String) : UiAction
 
     data class OpenVideoURL(val url: String) : UiAction
 
@@ -266,6 +273,9 @@ fun DownloadPageV2(
             dialogViewModel.postAction(Action.ShowSheet())
         },
         onMenuOpen = onMenuOpen,
+        onBatchStop = { batchId -> downloader.cancelBatch(batchId) },
+        onBatchResume = { batchId -> downloader.resumeBatch(batchId) },
+        onBatchDismiss = { batchId -> downloader.dismissBatch(batchId) },
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -278,8 +288,8 @@ fun DownloadPageV2(
                 )
                 context.makeToast(R.string.error_copied)
             }
-            UiAction.CopyVideoURL -> {
-                clipboardManager.setText(AnnotatedString(task.url))
+            is UiAction.CopyVideoURL -> {
+                clipboardManager.setText(AnnotatedString(action.url))
                 context.makeToast(R.string.link_copied)
             }
             is UiAction.OpenFile -> {
@@ -387,10 +397,20 @@ fun DownloadPageImplV2(
     modifier: Modifier = Modifier,
     taskDownloadStateMap: SnapshotStateMap<Task, Task.State>,
     downloadCallback: () -> Unit = {},
-    onMenuOpen: (() -> Unit) = {},
+    onMenuOpen: () -> Unit = {},
+    onBatchStop: (String) -> Unit = {},
+    onBatchResume: (String) -> Unit = {},
+    onBatchDismiss: (String) -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
+    var dismissedBatches by remember { mutableStateOf(PreferenceUtil.getDismissedBatches()) }
+    var dismissTarget by remember { mutableStateOf<BatchInfo?>(null) }
+    val expandedBatches = remember { mutableStateMapOf<String, Boolean>() }
+    val playlists by
+        remember(activeFilter, dismissedBatches) {
+            derivedStateOf { BatchOps.groups(taskDownloadStateMap, dismissedBatches) }
+        }
     val filteredMap by
         remember(activeFilter) {
             derivedStateOf { taskDownloadStateMap.filter { activeFilter.predict(it.toPair()) } }
@@ -503,7 +523,7 @@ fun DownloadPageImplV2(
                             PaddingValues(start = 20.dp, end = 20.dp, bottom = 80.dp),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
-                    if (filteredMap.isNotEmpty()) {
+                    if (activeFilter != Filter.Playlist && filteredMap.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             val videoCount =
                                 filteredMap.count {
@@ -519,15 +539,38 @@ fun DownloadPageImplV2(
                         }
                     }
 
-                    if (isGridView) {
+                    if (activeFilter == Filter.Playlist) {
+                        items(
+                            items = playlists,
+                            key = { it.batch.id },
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) { group ->
+                            PlaylistBatchCard(
+                                modifier = Modifier.animateItem().padding(bottom = 16.dp),
+                                batch = group.batch,
+                                entries = group.entries,
+                                expanded = expandedBatches[group.batch.id] != false,
+                                onToggleExpanded = {
+                                    expandedBatches[group.batch.id] =
+                                        expandedBatches[group.batch.id] == false
+                                },
+                                onStop = { onBatchStop(group.batch.id) },
+                                onResume = { onBatchResume(group.batch.id) },
+                                onDismiss = { dismissTarget = group.batch },
+                                onSongClick = { showActionSheet(it) },
+                                onSongAction = { task, action -> onActionPost(task, action) },
+                            )
+                        }
+                    } else if (isGridView) {
                         items(
                             items =
                                 filteredMap.toList().sortedBy { (_, state) -> state.downloadState },
-                            key = { (task, _) -> task.id },
+                            key = { (task, _) -> task.uiKey },
                         ) { (task, state) ->
                             with(state.viewState) {
                                 VideoCardV2(
-                                    modifier = Modifier.animateItem().padding(bottom = 20.dp).padding(),
+                                    modifier =
+                                        Modifier.animateItem().padding(bottom = 20.dp).padding(),
                                     viewState = this,
                                     progress =
                                         (state.downloadState as? Running)
@@ -563,7 +606,7 @@ fun DownloadPageImplV2(
                         items(
                             items =
                                 filteredMap.toList().sortedBy { (_, state) -> state.downloadState },
-                            key = { (task, _) -> task.id },
+                            key = { (task, _) -> task.uiKey },
                             span = { GridItemSpan(maxLineSpan) },
                         ) { (task, state) ->
                             VideoListItem(
@@ -582,12 +625,26 @@ fun DownloadPageImplV2(
                 }
             }
         }
-        if (filteredMap.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                DownloadQueuePlaceholder(
-                    modifier =
-                        Modifier.fillMaxHeight(0.4f).widthIn(max = 360.dp).align(Alignment.Center)
-                )
+        when {
+            activeFilter == Filter.Playlist && playlists.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Text(
+                        text = stringResource(R.string.no_playlists_yet),
+                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            activeFilter != Filter.Playlist && filteredMap.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    DownloadQueuePlaceholder(
+                        modifier =
+                            Modifier.fillMaxHeight(0.4f)
+                                .widthIn(max = 360.dp)
+                                .align(Alignment.Center)
+                    )
+                }
             }
         }
     }
@@ -611,6 +668,30 @@ fun DownloadPageImplV2(
                 onActionPost = onActionPost,
             )
         }
+    }
+    dismissTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { dismissTarget = null },
+            title = { Text(stringResource(R.string.dismiss_playlist)) },
+            text = { Text(stringResource(R.string.dismiss_playlist_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onBatchDismiss(target.id)
+                        PreferenceUtil.addDismissedBatch(target.id)
+                        dismissedBatches = dismissedBatches + target.id
+                        dismissTarget = null
+                    }
+                ) {
+                    Text(stringResource(R.string.remove))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { dismissTarget = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }
 

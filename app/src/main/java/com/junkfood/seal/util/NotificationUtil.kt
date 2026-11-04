@@ -168,6 +168,35 @@ object NotificationUtil {
             }
     }
 
+    /** One aggregate notification per playlist batch; no per-song Cancel action. */
+    fun notifyBatch(
+        title: String,
+        text: String,
+        progress: Int,
+        notificationId: Int,
+    ) {
+        if (!NOTIFICATION.getBoolean()) return
+        val pendingIntent =
+            context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { intent ->
+                PendingIntent.getActivity(
+                    context,
+                    notificationId,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
+        NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_seal)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setProgress(PROGRESS_MAX, progress, false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(pendingIntent)
+            .build()
+            .also { notificationManager.notify(notificationId, it) }
+    }
+
     fun finishNotification(
         notificationId: Int = DEFAULT_NOTIFICATION_ID,
         title: String? = null,

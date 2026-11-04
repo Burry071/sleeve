@@ -446,6 +446,13 @@
     <string name="every_month">Every month</string>
     <string name="all_languages">All languages</string>
     <string name="playlist">Playlist</string>
+    <string name="batch_notification_progress">%1$d/%2$d downloaded</string>
+    <string name="stop">Stop</string>
+    <string name="no_playlists_yet">No playlists yet</string>
+    <string name="playlist_progress">%1$d/%2$d done</string>
+    <string name="playlist_progress_failed">%1$d/%2$d done · %3$d failed</string>
+    <string name="dismiss_playlist">Dismiss playlist</string>
+    <string name="dismiss_playlist_message">Stop unfinished songs and remove this playlist from Downloads? Downloaded files are kept.</string>
     <string name="proceed">Continue</string>
     <string name="preset">Preset</string>
     <string name="prefer_placeholder">Prefer %1$s</string>

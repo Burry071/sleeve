@@ -334,14 +334,21 @@ fun LazyListScope.ActionButtons(
             }
         }
     }
-    item(key = "CopyURLButton") {
-        CopyURLButton(modifier = Modifier.animateItem()) {
-            onActionPost(task, UiAction.CopyVideoURL)
+    // A batch metadata song only gets a real URL once metadata matching completes;
+    // until then task.url is a synthetic metadata:// placeholder that must not be
+    // copied or opened.
+    val resolvedUrl =
+        viewState.url.ifBlank { task.url }.takeIf { !it.startsWith("metadata://") }
+    if (resolvedUrl != null) {
+        item(key = "CopyURLButton") {
+            CopyURLButton(modifier = Modifier.animateItem()) {
+                onActionPost(task, UiAction.CopyVideoURL(resolvedUrl))
+            }
         }
-    }
-    item(key = "OpenVideoURLButton") {
-        OpenVideoURLButton(modifier = Modifier.animateItem()) {
-            onActionPost(task, UiAction.OpenVideoURL(viewState.url))
+        item(key = "OpenVideoURLButton") {
+            OpenVideoURLButton(modifier = Modifier.animateItem()) {
+                onActionPost(task, UiAction.OpenVideoURL(resolvedUrl))
+            }
         }
     }
     if (!viewState.thumbnailUrl.isNullOrEmpty()) {

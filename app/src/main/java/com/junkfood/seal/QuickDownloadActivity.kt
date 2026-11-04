@@ -264,7 +264,15 @@ class QuickDownloadActivity : ComponentActivity() {
                                     viewModel.postAction(Action.Reset)
                                     this.finish()
                                 },
-                                onActionPost = { viewModel.postAction(it) },
+                                onActionPost = { action ->
+                                    viewModel.postAction(action)
+                                    // The metadata page replaced the sheet, so the
+                                    // Hidden-state finish above already fired. Queue
+                                    // first, then close this overlay ourselves.
+                                    if (action is Action.DownloadMetadataTracks) {
+                                        this@QuickDownloadActivity.finish()
+                                    }
+                                },
                             )
                     }
                 }

@@ -21,6 +21,7 @@ import com.junkfood.seal.Downloader.toNotificationId
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.database.objects.DownloadedVideoInfo
+import com.junkfood.seal.download.Task
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.TaskState
 import com.junkfood.seal.ui.page.settings.network.Cookie
@@ -47,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.HttpURLConnection
@@ -100,9 +102,13 @@ object DownloadUtil {
     fun getPlaylistOrVideoInfo(
         playlistURL: String,
         downloadPreferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
+        silent: Boolean = false,
+        processId: String? = null,
     ): Result<YoutubeDLInfo> =
         YoutubeDL.runCatching {
-            ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
+            if (!silent) {
+                ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
+            }
             val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
             with(request) {
                 // Native YouTube clients: no JS runtime on Android.
@@ -135,12 +141,106 @@ object DownloadUtil {
                     }
                 }
             }
-            execute(request, playlistURL).out.run {
+            // The task id lets a canceled match kill its yt-dlp search through
+            // destroyProcessById; playlist browsing keeps the URL key.
+            execute(request, processId ?: playlistURL).out.run {
                 val playlistInfo = jsonFormat.decodeFromString<PlaylistResult>(this)
                 if (playlistInfo.type != "playlist") {
                     jsonFormat.decodeFromString<VideoInfo>(this)
                 } else playlistInfo
             }
+        }
+
+    /** Normalized YouTube query for a catalogue track. */
+    internal fun buildMetadataQuery(track: GhostEngine.SpotifyTrack): String =
+        listOf(track.artist, track.title, "audio")
+            .filter { it.isNotBlank() }
+            .joinToString(separator = " ")
+            .let { Regex("\\s+").replace(it, " ").trim() }
+
+    /** A missing or weak YouTube Music match widens to a plain YouTube search. */
+    internal fun shouldWidenSearch(bestScore: Double?): Boolean =
+        bestScore == null || bestScore < 0.5
+
+    /** Cancellation bail-out for [resolveMetadataTrack]; returned, never thrown. */
+    private fun matchCanceled(): Result<VideoInfo> =
+        Result.failure(IllegalStateException("match canceled"))
+
+    /**
+     * spotDL-pattern matching for one catalogue track: rank a YouTube Music pool,
+     * widen when confidence is low, then resolve the winner through the normal
+     * extractor so the download stage reuses the winning client.
+     *
+     * [isActive] is polled between the legs. A cancel destroys the in-flight
+     * yt-dlp process, which reads as a failed (empty) search here; without the
+     * poll the widening leg and the extraction would spawn two more processes
+     * that no later cancel can reach.
+     */
+    @CheckResult
+    fun resolveMetadataTrack(
+        metadata: Task.TypeInfo.MetadataTrack,
+        taskKey: String,
+        preferences: DownloadPreferences,
+        isActive: () -> Boolean = { true },
+    ): Result<VideoInfo> =
+        runCatching {
+            val track =
+                GhostEngine.SpotifyTrack(
+                    title = metadata.title,
+                    artist = metadata.artist,
+                    album = metadata.album,
+                    durationMs = metadata.durationMs,
+                )
+            val query = buildMetadataQuery(track)
+
+            fun search(pool: String): List<PlaylistEntry> =
+                getPlaylistOrVideoInfo(
+                        playlistURL = "$pool:$query",
+                        downloadPreferences = preferences,
+                        silent = true,
+                        processId = taskKey,
+                    )
+                    .map { it as? PlaylistResult }
+                    .getOrElse { null }
+                    ?.entries
+                    .orEmpty()
+
+            fun rank(candidates: List<PlaylistEntry>) =
+                GhostEngine.rankCandidates(
+                        track = track,
+                        candidatesJson = jsonFormat.encodeToString(candidates),
+                        strictness = RANKING_STRICTNESS.getInt(),
+                    )
+                    .getOrThrow()
+
+            val musicPool = search("ytmsearch5")
+            val musicBest = musicPool.takeIf { it.isNotEmpty() }?.let(::rank)
+
+            // A canceled first leg degrades to an empty pool, so widen only
+            // while the task is still matching.
+            if (!isActive()) return matchCanceled()
+
+            val best =
+                if (shouldWidenSearch(musicBest?.score)) {
+                    val wideBest = search("ytsearch10").takeIf { it.isNotEmpty() }?.let(::rank)
+                    listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
+                        ?: throw IllegalStateException("no candidates")
+                } else {
+                    musicBest!!
+                }
+
+            if (!isActive()) return matchCanceled()
+
+            val resolvedUrl = best.url.ifBlank { "https://www.youtube.com/watch?v=" + best.id }
+            val resolved =
+                fetchVideoInfoFromUrl(
+                        url = resolvedUrl,
+                        preferences = preferences,
+                        taskKey = taskKey,
+                    )
+                    .getOrThrow()
+            if (!isActive()) return matchCanceled()
+            resolved
         }
 
     @CheckResult
