@@ -22,6 +22,11 @@ const val THUMBNAIL_REGEX = "\\.(jpg|png)$"
 const val SUBTITLE_REGEX = "\\.(lrc|vtt|srt|ass|json3|srv.|ttml)$"
 private const val PRIVATE_DIRECTORY_SUFFIX = ".Seal"
 
+// Engine scratch written next to the output: "<name>.tmp" and the
+// "<name>.parts[-<tag>]" segment directory.
+private val SCRATCH_FILE_REGEX = Regex(""".*\.(tmp|part)""", RegexOption.IGNORE_CASE)
+private val SCRATCH_DIR_REGEX = Regex("""\.parts(-[0-9a-f]+)?[\\/]""")
+
 object FileUtil {
     fun openFileFromResult(downloadResult: Result<List<String>>) {
         val filePaths = downloadResult.getOrNull()
@@ -108,27 +113,43 @@ object FileUtil {
         title: String,
         downloadDir: String,
         modifiedAfterMs: Long? = null,
-    ): List<String> =
-        File(downloadDir)
-            .walkTopDown()
-            .filter {
-                it.isFile &&
-                    (
-                        it.absolutePath.contains(title) ||
-                            // --trim-filenames caps long names, so a title
-                            // match can fail on exactly the downloads that
-                            // need the scan; fall back to modification time.
-                            (modifiedAfterMs != null && it.lastModified() >= modifiedAfterMs)
-                        )
-            }
+        keepImages: Boolean = false,
+    ): List<String> {
+        val candidates =
+            File(downloadDir)
+                .walkTopDown()
+                .filter {
+                    // A zero-byte file is a failed write, never a finished
+                    // download; counting it would complete the task with no media.
+                    it.isFile &&
+                        it.length() > 0 &&
+                        // Transfer scratch lives beside the output and its path
+                        // also matches the title; only publish real media.
+                        !it.name.matches(SCRATCH_FILE_REGEX) &&
+                        !it.path.contains(SCRATCH_DIR_REGEX)
+                }
+                .toList()
+        // Files written since the download started are the real output. The
+        // title is only a fallback: matching on it alone also picks up older
+        // downloads that happen to share the name.
+        val fresh =
+            if (modifiedAfterMs != null) candidates.filter { it.lastModified() >= modifiedAfterMs }
+            else emptyList()
+        return (if (fresh.isNotEmpty()) fresh else candidates.filter { it.absolutePath.contains(title) })
             .map { it.absolutePath }
             .toMutableList()
             .apply {
                 MediaScannerConnection.scanFile(context, this.toList().toTypedArray(), null, null)
+                // A thumbnail sidecar (.jpg/.png) must not be reported as the
+                // download, but a gallery/photo item IS the image: dropping it
+                // made the task fail after the file had already been written,
+                // and the yt-dlp retry downloaded the same image twice.
                 removeAll {
-                    it.contains(Regex(THUMBNAIL_REGEX)) || it.contains(Regex(SUBTITLE_REGEX))
+                    it.contains(Regex(SUBTITLE_REGEX)) ||
+                        (!keepImages && it.contains(Regex(THUMBNAIL_REGEX)))
                 }
             }
+    }
 
     fun scanDownloadDirectoryToMediaLibrary(downloadDir: String) =
         File(downloadDir)

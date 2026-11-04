@@ -94,14 +94,34 @@ data class Format(
     @SerialName("filesize") val fileSize: Double? = null,
     @SerialName("filesize_approx") val fileSizeApprox: Double? = null,
 ) {
-    fun isAudioOnly(): Boolean = vcodec == null || vcodec == "none"
+    // The generic extractor reports direct links without codec fields, so a
+    // null vcodec is "unknown", not "no video": classify by the container
+    // instead, or an .mp4 link lands in the audio folder. Audio-only formats
+    // from yt-dlp always carry vcodec="none" and never reach this fallback.
+    fun isAudioOnly(): Boolean =
+        when {
+            vcodec == "none" -> true
+            vcodec != null -> false
+            ext == null -> true
+            else -> ext.lowercase() in AUDIO_FILE_EXTENSIONS
+        }
 
     fun isVideoOnly(): Boolean = acodec == null || acodec == "none"
 
-    fun containsVideo(): Boolean = vcodec != null && vcodec != "none"
+    fun containsVideo(): Boolean =
+        when {
+            vcodec == "none" -> false
+            vcodec != null -> true
+            ext == null -> false
+            else -> ext.lowercase() !in AUDIO_FILE_EXTENSIONS
+        }
 
     fun containsAudio(): Boolean = acodec != null && acodec != "none"
 }
+
+/** Containers that only ever hold audio; used when yt-dlp omits codec info. */
+val AUDIO_FILE_EXTENSIONS =
+    setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma", "weba", "mka")
 
 @Serializable
 data class VideoClip(val start: Int = 0, val end: Int = 0) {

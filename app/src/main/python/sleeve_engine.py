@@ -34,6 +34,18 @@ CANCELLED = "cancelled"
 _CHUNK = 65536
 _MAX_REDIRECTS = 6
 _SPEED_WINDOW = 3.0
+_DIRECT_VIDEO_EXT = {
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".flv",
+    ".ts",
+    ".m3u8",
+    ".mpd",
+}
 
 
 class Cancelled(Exception):
@@ -198,10 +210,11 @@ class SegmentedHttpStep:
 
     def _stream_single(self, url):
         conn, _, _, resp = self._request_range(url, 0, None)
+        tmp = self.output_path + ".tmp"
         try:
             if resp.status not in (200, 206):
                 raise IOError(f"HTTP {resp.status}")
-            with open(self.output_path, "wb") as fh:
+            with open(tmp, "wb") as fh:
                 while True:
                     if self._cancel.is_set():
                         raise Cancelled()
@@ -210,8 +223,17 @@ class SegmentedHttpStep:
                         break
                     fh.write(chunk)
                     self._add_bytes(len(chunk))
+            # Publish only a complete file: a leftover output from an earlier
+            # install may be unwritable, while replacing it needs only a
+            # writable directory.
+            os.replace(tmp, self.output_path)
         finally:
             conn.close()
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
     def run(self):
         self.state = RUNNING
@@ -224,8 +246,12 @@ class SegmentedHttpStep:
             if not accept_ranges or self.total <= 0 or self.subworkers <= 1:
                 self._stream_single(self._final_url)
             else:
-                part_dir = self.output_path + ".parts"
-                os.makedirs(part_dir, exist_ok=True)
+                # A fixed ".parts" directory can be left behind by a previous
+                # install (different app UID) and then rejects every write with
+                # EACCES. A per-attempt directory can never be poisoned.
+                part_dir = self.output_path + ".parts-" + uuid.uuid4().hex[:8]
+                os.makedirs(part_dir)
+                tmp = self.output_path + ".tmp"
                 span = self.total // self.subworkers
                 bounds = [
                     (i * span, (self.total - 1) if i == self.subworkers - 1 else ((i + 1) * span - 1))
@@ -238,7 +264,7 @@ class SegmentedHttpStep:
                     ]
                     for f in futures:
                         f.result()
-                with open(self.output_path, "wb") as out:
+                with open(tmp, "wb") as out:
                     for i in range(self.subworkers):
                         with open(os.path.join(part_dir, f"{i:03d}.part"), "rb") as part:
                             while True:
@@ -246,9 +272,15 @@ class SegmentedHttpStep:
                                 if not chunk:
                                     break
                                 out.write(chunk)
-                for i in range(self.subworkers):
-                    os.remove(os.path.join(part_dir, f"{i:03d}.part"))
-                os.rmdir(part_dir)
+                os.replace(tmp, self.output_path)
+                # The transfer is published at this point; failing to remove
+                # scratch files must not turn a finished download into an error.
+                try:
+                    for i in range(self.subworkers):
+                        os.remove(os.path.join(part_dir, f"{i:03d}.part"))
+                    os.rmdir(part_dir)
+                except OSError:
+                    pass
             self.state = CANCELLED if self._cancel.is_set() else COMPLETED
         except Cancelled:
             self.state = CANCELLED
@@ -308,6 +340,7 @@ class Task:
 
 
 _ENGINE_LOCK = threading.Lock()
+_GALLERY_LOCK = threading.Lock()
 _TASKS: dict[str, Task] = {}
 
 
@@ -385,7 +418,24 @@ def gallery_matches(url):
     try:
         from gallery_dl import extractor
 
-        return extractor.find(url) is not None
+        # gallery-dl's registry is a lazily built generator; calling find()
+        # from two threads (startup warmup vs a share arriving) raises
+        # ValueError("generator already executing"). Serialize all registry
+        # access behind one lock so a cold start cannot silently report "no
+        # match" and skip the configure sheet.
+        with _GALLERY_LOCK:
+            ext = extractor.find(url)
+            if ext is None:
+                return False
+            # gallery-dl's directlink extractor claims every media URL. A
+            # direct video must still reach the configure sheet
+            # (quality/audio choice), like any page-based video; direct
+            # images can stay on the quick lane.
+            if getattr(ext, "category", "") == "directlink":
+                path = urllib.parse.urlsplit(url).path
+                if os.path.splitext(path)[1].lower() in _DIRECT_VIDEO_EXT:
+                    return False
+            return True
     except Exception:
         return False
 
@@ -450,20 +500,21 @@ def gallery_resolve(url, cookies_file=None, max_items=None):
             from gallery_dl import config as _gdl_config
 
             _gdl_config.set(("extractor",), "cookies", cookies_file)
-        ext = extractor.find(url)
-        if ext is None:
-            return json.dumps({"ok": False, "error": "no site module matched"})
-        out, pages = [], []
-        _gallery_scan(ext, out, pages, 0)
-        for page in pages:
-            if len(out) >= limit:
-                break
-            try:
-                sub = extractor.find(page)
-                if sub is not None:
-                    _gallery_scan(sub, out, pages, 1)
-            except Exception:
-                pass
+        with _GALLERY_LOCK:
+            ext = extractor.find(url)
+            if ext is None:
+                return json.dumps({"ok": False, "error": "no site module matched"})
+            out, pages = [], []
+            _gallery_scan(ext, out, pages, 0)
+            for page in pages:
+                if len(out) >= limit:
+                    break
+                try:
+                    sub = extractor.find(page)
+                    if sub is not None:
+                        _gallery_scan(sub, out, pages, 1)
+                except Exception:
+                    pass
         del out[limit:]
         return json.dumps(
             {
@@ -556,7 +607,8 @@ def gallery_warmup():
         return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
     started = time.monotonic()
     try:
-        extractor.find("https://warmup.invalid/warmup")
+        with _GALLERY_LOCK:
+            extractor.find("https://warmup.invalid/warmup")
         return json.dumps({"ok": True, "seconds": round(time.monotonic() - started, 2)})
     except Exception as e:
         print("gallery warmup find failed: %r" % (e,), file=_sys.stderr)

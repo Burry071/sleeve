@@ -2,9 +2,11 @@ package com.junkfood.seal.download
 
 import android.app.PendingIntent
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.junkfood.seal.App
 import com.junkfood.seal.R
@@ -26,6 +28,7 @@ import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
+import java.io.File
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
@@ -185,12 +188,26 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     }
 
     override fun enqueue(task: Task) {
+        // A second share/confirm for a task already in flight must not reset it
+        // to Idle: the scheduler would start a duplicate transfer over the
+        // same output path while the first job keeps running.
+        when (taskStateMap[task]?.downloadState) {
+            is FetchingInfo,
+            is Running,
+            ReadyWithInfo -> return
+            else -> {}
+        }
         taskStateMap +=
             task to Task.State(Idle, null, Task.ViewState(url = task.url, title = task.url))
+        // snapshotFlow only re-checks after an apply notification, and the
+        // frame loop that sends them does not run when no UI is attached —
+        // e.g. a share quick-download that starts with the app closed.
+        Snapshot.sendApplyNotifications()
     }
 
     override fun enqueue(task: Task, state: Task.State) {
         taskStateMap += task to state
+        Snapshot.sendApplyNotifications()
     }
 
     /**
@@ -201,6 +218,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     override fun remove(task: Task): Boolean {
         if (taskStateMap.contains(task)) {
             taskStateMap.remove(task)
+            Snapshot.sendApplyNotifications()
             return true
         }
         return false
@@ -219,7 +237,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     private var Task.state: Task.State
         get() = taskStateMap[this] ?: Task.State(Idle, null, Task.ViewState(url = url, title = url))
         set(value) {
-            if (taskStateMap.containsKey(this)) taskStateMap[this] = value
+            if (taskStateMap.containsKey(this)) {
+                taskStateMap[this] = value
+                Snapshot.sendApplyNotifications()
+            }
         }
 
     private var Task.downloadState: DownloadState
@@ -228,6 +249,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             if (taskStateMap.containsKey(this)) {
                 val prevState = state
                 taskStateMap[this] = prevState.copy(downloadState = value)
+                Snapshot.sendApplyNotifications()
             }
         }
 
@@ -237,6 +259,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             if (taskStateMap.containsKey(this)) {
                 val prevState = state
                 taskStateMap[this] = prevState.copy(videoInfo = value)
+                Snapshot.sendApplyNotifications()
             }
         }
 
@@ -246,11 +269,44 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             if (taskStateMap.containsKey(this)) {
                 val prevState = state
                 taskStateMap[this] = prevState.copy(viewState = value)
+                Snapshot.sendApplyNotifications()
             }
         }
 
     private val Task.notificationId: Int
         get() = id.hashCode()
+
+    /**
+     * The direct/CDN lane synthesizes [VideoInfo] before any byte is fetched,
+     * so duration and exact size are unknown up to this point. Once the file
+     * exists they are measurable — fill them in instead of leaving the card
+     * on a "0.00 MB · 00:00" placeholder.
+     */
+    private fun Task.enrichWithCompletedFile(path: String) {
+        val file = File(path)
+        if (!file.isFile) return
+        val length = file.length()
+        val probedDuration =
+            runCatching {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(file.absolutePath)
+                        retriever
+                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            ?.toLongOrNull()
+                            ?.div(1000L)
+                            ?.toInt()
+                    } finally {
+                        retriever.release()
+                    }
+                }
+                .getOrNull() ?: 0
+        viewState =
+            viewState.copy(
+                duration = viewState.duration.takeIf { it > 0 } ?: probedDuration,
+                fileSizeApprox = length.takeIf { it > 0 }?.toDouble() ?: viewState.fileSizeApprox,
+            )
+    }
 
     /** Processes pending tasks, prioritizing downloads. */
     private fun doYourWork() {
@@ -292,7 +348,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             val synth =
                 DownloadUtil.buildDirectVideoInfo(
                     url = url,
-                    title = preferences.newTitle.ifBlank { viewState.title },
+                    // Blank lets the builder derive a real name from the URL
+                    // path instead of showing the whole URL as the title.
+                    title = preferences.newTitle,
                 )
             if (synth != null) {
                 val job =
@@ -343,7 +401,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             val synth =
                                 DownloadUtil.buildDirectVideoInfo(
                                     url = url,
-                                    title = viewState.title,
+                                    title = preferences.newTitle,
                                 )
                             if (synth != null) {
                                 info = synth
@@ -442,6 +500,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     }
                     .onSuccess { pathList ->
                         downloadState = Completed(pathList.firstOrNull())
+                        pathList.firstOrNull()?.let { enrichWithCompletedFile(it) }
 
                         val text =
                             appContext.getString(

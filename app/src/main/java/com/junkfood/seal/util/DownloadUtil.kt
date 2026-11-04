@@ -760,8 +760,7 @@ object DownloadUtil {
 
 
     /** Extensions that mark a direct file as audio for directory routing. */
-    private val DIRECT_AUDIO_EXTS =
-        setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma")
+    private val DIRECT_AUDIO_EXTS = AUDIO_FILE_EXTENSIONS
 
     /** Extensions that mark a bare direct media link (a CDN asset such as
      * instagram.fbcdn/…jpg or video.twimg/…mp4?tag=29). These must bypass
@@ -827,6 +826,23 @@ object DownloadUtil {
         val dir = App.context.applicationInfo.nativeLibraryDir ?: return null
         val f = File(dir, name)
         return if (f.exists()) f else null
+    }
+
+    /**
+     * First free "name.ext", "name (1).ext", … inside [dir]. Files under
+     * Download/Sleeve survive re-installs, and a name owned by another app UID
+     * cannot be replaced (EPERM), so never plan to overwrite one.
+     */
+    private fun uniqueFileName(dir: String, name: String): String {
+        if (!File(dir, name).exists()) return name
+        val stem = name.substringBeforeLast('.', name)
+        val suffix = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
+        var index = 1
+        while (true) {
+            val candidate = "$stem ($index)$suffix"
+            if (!File(dir, candidate).exists()) return candidate
+            index++
+        }
     }
 
     /**
@@ -1091,11 +1107,23 @@ object DownloadUtil {
                 .ifBlank { "download" }
                 .replace(Regex("[\\\\/:*?\"<>|]"), "_")
                 .take(120)
-        val fileName = "$baseName.$ext"
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir
             else
                 if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
+        // The engine writes atomically with a rename, which fails with EPERM
+        // when the destination already exists and belongs to another install
+        // (shared Download/Sleeve keeps files across app re-installs). Pick a
+        // free name instead of overwriting, the same way yt-dlp lands a new
+        // file beside an existing one.
+        // videoInfo.filename already carries the container (direct links name
+        // the file after the URL), so appending ext again wrote "clip.mp4.mp4".
+        val fileName =
+            uniqueFileName(
+                downloadDir,
+                if (baseName.endsWith(".$ext", ignoreCase = true)) baseName
+                else "$baseName.$ext",
+            )
 
         // Gallery/embed items carry a per-item Referer from the resolver;
         // prefer it, and reconstruct from what is available here otherwise:
@@ -1170,12 +1198,23 @@ object DownloadUtil {
             }
         ghostTasks.remove(taskId)
 
-        if (outcome?.state == TaskState.COMPLETED && preferences.embedMetadata) {
-            embedMetadataWithFfmpeg(
-                filePath = File(downloadDir, fileName).absolutePath,
-                videoInfo = videoInfo,
-                preferences = preferences,
-            )
+        if (outcome?.state == TaskState.COMPLETED) {
+            // The engine reporting COMPLETED is not proof of a file: verify the
+            // exact output exists and is non-empty before history/UI claim it.
+            val produced = File(downloadDir, fileName)
+            if (!produced.isFile || produced.length() == 0L) {
+                Log.w(TAG, "Ghost reported COMPLETED without output: ${produced.absolutePath}")
+                return Result.failure(
+                    YoutubeDLException("Ghost engine: no output file produced")
+                )
+            }
+            if (preferences.embedMetadata) {
+                embedMetadataWithFfmpeg(
+                    filePath = produced.absolutePath,
+                    videoInfo = videoInfo,
+                    preferences = preferences,
+                )
+            }
         }
 
         return when (outcome?.state) {
@@ -1190,6 +1229,15 @@ object DownloadUtil {
             else -> {
                 val reason =
                     outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
+                Log.w(TAG, "Ghost engine failed for $taskId: $reason")
+                // A failed transfer leaves either a single-stream partial, the
+                // staging file, or the segment directory; none is media, and a
+                // later retry would scan them as output. Drop them now.
+                File(downloadDir).listFiles()?.forEach { file ->
+                    if (file.name == fileName || file.name.startsWith("$fileName.")) {
+                        file.deleteRecursively()
+                    }
+                }
                 Result.failure(YoutubeDLException("Ghost engine: $reason"))
             }
         }
@@ -1321,12 +1369,22 @@ object DownloadUtil {
             // Ghost engine handoff: when the embedded engine can transfer this
             // download itself, it reports progress through the same callback and
             // finishes through the same history insertion as the yt-dlp path.
+            // A failed handoff must not end the task: CDNs can reject the plain
+            // transfer (googlevideo answers 403 for range GETs) while yt-dlp
+            // succeeds with its own headers, so fall through to that ladder.
             runGhostDownloadIfEligible(
-                videoInfo = videoInfo,
-                preferences = downloadPreferences,
-                taskId = taskId,
-                progressCallback = progressCallback,
-            )?.let { return it }
+                    videoInfo = videoInfo,
+                    preferences = downloadPreferences,
+                    taskId = taskId,
+                    progressCallback = progressCallback,
+                )
+                ?.let { ghostResult ->
+                    if (ghostResult.isSuccess) return ghostResult
+                    Log.w(
+                        TAG,
+                        "Ghost handoff failed, retrying via yt-dlp: ${ghostResult.exceptionOrNull()?.message}",
+                    )
+                }
 
             // The download re-extracts, so the winning info-fetch client set
             // goes first. That win is no media win: SABR-era YouTube can 403
@@ -1564,44 +1622,53 @@ object DownloadUtil {
                 }).substringBefore('?').take(150)
 
             Log.d(TAG, "onFinishDownloading: $fileName")
-            if (sdcard) {
-                moveFilesToSdcard(
+            val savedFiles =
+                if (sdcard) {
+                    moveFilesToSdcard(
                         sdcardUri = sdcardUri,
                         tempPath = context.getSdcardTempDir(videoInfo.id),
                     )
-                    .onSuccess {
-                        if (privateMode) {
-                            return Result.success(emptyList())
-                        } else if (splitByChapter) {
-                            insertSplitChapterIntoHistory(videoInfo, it)
-                        } else {
-                            insertInfoIntoDownloadHistory(videoInfo, it)
-                        }
-                    }
-            } else {
-                FileUtil.scanFileToMediaLibraryPostDownload(
-                        title = fileName,
-                        downloadDir = downloadPath,
-                        // The disk filename can fail the title match
-                        // (--trim-filenames 80, sanitized quick-download
-                        // titles): a title-only scan returns an empty list and
-                        // the history insert never runs, silently dropping the
-                        // completed task from Downloads. Files modified since
-                        // the download started are the real match.
-                        modifiedAfterMs = startedAtMs,
+                } else {
+                    Result.success(
+                        FileUtil.scanFileToMediaLibraryPostDownload(
+                            title = fileName,
+                            downloadDir = downloadPath,
+                            // The disk filename can fail the title match
+                            // (--trim-filenames 80, sanitized quick-download
+                            // titles): a title-only scan returns an empty list
+                            // and the history insert never runs, silently
+                            // dropping the completed task from Downloads.
+                            // Files modified since the download started are
+                            // the real match.
+                            modifiedAfterMs = startedAtMs,
+                            // Gallery/photo items are pictures, not thumbnail
+                            // sidecars: keep them in the completed set.
+                            keepImages = galleryDirect,
+                        )
                     )
-                    .run {
-                        if (privateMode) Result.success(emptyList())
-                        else
-                            Result.success(
-                                if (splitByChapter) {
-                                    insertSplitChapterIntoHistory(videoInfo, this)
-                                } else {
-                                    insertInfoIntoDownloadHistory(videoInfo, this)
-                                }
+                }
+            savedFiles.fold(
+                onSuccess = { paths ->
+                    Log.d(TAG, "history insert: ${paths.size} file(s) $paths")
+                    when {
+                        // Private mode deliberately keeps files out of history.
+                        privateMode -> Result.success(emptyList())
+                        // No output means the transfer did not really finish.
+                        // Reporting success here would render the card as
+                        // "Downloaded" with no file behind it.
+                        paths.isEmpty() ->
+                            Result.failure(
+                                IllegalStateException(
+                                    context.getString(R.string.download_error_msg)
+                                )
                             )
+                        splitByChapter ->
+                            Result.success(insertSplitChapterIntoHistory(videoInfo, paths))
+                        else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
                     }
-            }
+                },
+                onFailure = { Result.failure(it) },
+            )
         }
 
     /**
@@ -1645,6 +1712,7 @@ object DownloadUtil {
         val directVcodec = if (ext in DIRECT_AUDIO_EXTS) "none" else "h264"
         val baseName =
             title.ifBlank { path }
+                .ifBlank { cleanUrl }
                 .replace(Regex("[\\/:*?\"<>|]"), "_")
                 .take(120)
         val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
