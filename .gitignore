@@ -24,3 +24,5 @@ local.properties
 /agent/
 /design/mascot/candidates/
 /skills-lock.json
+__pycache__/
+*.pyc

@@ -35,6 +35,9 @@ Set four repository secrets (Settings → Secrets and variables → Actions):
 | `SLEEVE_KEY_ALIAS` | `sleeve` |
 | `SLEEVE_KEY_PASSWORD` | key password |
 
-Pushing a tag (`v2.0.0-beta.1`) then builds, signs, and publishes a GitHub
-Release with the APK attached. Without the secrets the release job still
-succeeds and publishes an unsigned APK.
+Pushing a tag (`v2.0.0-beta.1`) builds, signs, verifies and publishes a GitHub
+Release with the APK attached. The release job refuses to run when any of the
+four secrets is missing: an unsigned APK is never published (RELEASE.md
+rule 4). The tag must match `Version.kt`, and the new version code must exceed
+every code already distributed in `release-record.json`; the `preflight` job
+enforces both before the build starts.

@@ -25,6 +25,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unit tests for the release scripts (offline)
+        run: python -m unittest discover -s scripts -p "test_*.py"
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -56,14 +69,54 @@ jobs:
           path: app/build/outputs/apk/generic/debug/*.apk
           if-no-files-found: error
 
+  preflight:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: [python-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Release guard (tag, Version.kt, versionCode, release record)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/release_guard.py --tag "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, preflight]
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require signing secrets (an unsigned APK must never be published)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SLEEVE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SLEEVE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SLEEVE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SLEEVE_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Refusing to release: missing signing secret(s):$missing"
+            echo "RELEASE.md rule 4: preserve the signing identity. An unsigned APK is never published."
+            exit 1
+          fi
 
       - name: Decode signing keystore
         env:
@@ -72,17 +125,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.SLEEVE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SLEEVE_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-            cat > keystore.properties <<PROPS
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+          cat > keystore.properties <<PROPS
           storeFile=keystore.jks
           storePassword=$STORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           PROPS
-          else
-            echo "No signing secrets present - building unsigned"
-          fi
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -96,7 +145,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build release APK (unsigned)
+      - name: Build signed release APK
         run: |
           ./gradlew :app:assembleGenericRelease \
             -PnoSplits \
@@ -110,10 +159,90 @@ jobs:
           path: app/build/outputs/apk/generic/release/*.apk
           if-no-files-found: error
 
+      - name: Verify APK identity and write SHA256SUMS
+        id: apk
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/generic/release -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$apk" || { echo "::error::no release APK was produced"; exit 1; }
+          cp "$apk" Sleeve-generic-release.apk
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+
+          expected_code=$(python scripts/release_guard.py --print-shipped-code --no-split-apks | head -1 | cut -d= -f2)
+          expected_cert=$(python scripts/release_guard.py --print-cert)
+
+          "$bt/aapt2" dump badging Sleeve-generic-release.apk > badging.txt
+          package=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" badging.txt | head -1)
+          actual_code=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" badging.txt | head -1)
+
+          test "$package" = "com.sleeve.app" || { echo "::error::package '$package' != com.sleeve.app"; exit 1; }
+          test "$actual_code" = "$expected_code" || { echo "::error::versionCode $actual_code != expected $expected_code"; exit 1; }
+
+          "$bt/apksigner" verify --print-certs Sleeve-generic-release.apk > certs.txt
+          grep -qi "$expected_cert" certs.txt || { echo "::error::signer certificate does not match the recorded identity"; exit 1; }
+
+          sha=$(sha256sum Sleeve-generic-release.apk | awk '{print $1}')
+          size=$(stat -c%s Sleeve-generic-release.apk)
+          echo "$sha  Sleeve-generic-release.apk" > SHA256SUMS
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          echo "verified package=$package versionCode=$actual_code size=$size sha256=$sha"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apk=$(ls app/build/outputs/apk/generic/release/*.apk | head -1)
-          cp "$apk" Sleeve-generic-release.apk
-          gh release create "$GITHUB_REF_NAME" "Sleeve-generic-release.apk"             --title "Sleeve $GITHUB_REF_NAME"             --generate-notes
+          # Beta tags stay non-prerelease on purpose: /releases/latest serves
+          # the direct APK link printed in the README.
+          gh release create "$GITHUB_REF_NAME" \
+            Sleeve-generic-release.apk \
+            SHA256SUMS \
+            --title "Sleeve $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Download the published asset and compare SHA-256
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCAL_SHA: ${{ steps.apk.outputs.sha256 }}
+          LOCAL_SIZE: ${{ steps.apk.outputs.size }}
+        run: |
+          set -euo pipefail
+          mkdir -p published
+          fetched=no
+          for attempt in $(seq 1 10); do
+            if gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --pattern Sleeve-generic-release.apk --dir published --clobber; then
+              fetched=yes
+              break
+            fi
+            echo "published asset not downloadable yet (attempt $attempt/10); retrying in 6s"
+            sleep 6
+          done
+          if [ "$fetched" != yes ]; then
+            echo "::error::published APK could not be downloaded from the release"
+            exit 1
+          fi
+          published_sha=$(sha256sum published/Sleeve-generic-release.apk | awk '{print $1}')
+          published_size=$(stat -c%s published/Sleeve-generic-release.apk)
+          if [ "$published_sha" != "$LOCAL_SHA" ] || [ "$published_size" != "$LOCAL_SIZE" ]; then
+            echo "::error::published asset differs: sha256=$published_sha size=$published_size (built: $LOCAL_SHA / $LOCAL_SIZE)"
+            exit 1
+          fi
+          echo "published asset is byte-identical to the built APK (sha256:$LOCAL_SHA)"
+
+      - name: Verify the release URL and Orion mirror (read-only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            if python scripts/verify_release.py --channel beta --limit 30 \
+                 --expect-tag "$GITHUB_REF_NAME" --json > verify.json; then
+              cat verify.json
+              exit 0
+            fi
+            echo "verifier not green yet (attempt $attempt/10); retrying in 10s"
+            sleep 10
+          done
+          cat verify.json
+          exit 1
