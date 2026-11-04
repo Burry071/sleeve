@@ -1,0 +1,27 @@
+Sleeve is a free, open-source video, audio and image downloader for Android 7.0 and newer. Paste a link, pick a format, and the file lands in Download/Sleeve/ — with no ads, no tracking, and no account to create.
+
+WHAT SLEEVE DOWNLOADS
+• Video and audio from YouTube, Vimeo, TikTok, Twitter/X, SoundCloud and the 1,800+ sites supported by yt-dlp
+• Images and galleries from Instagram, Reddit, Imgur, Pixiv and 500+ hosts supported by gallery-dl
+• Direct file links (mp4, mp3, zip, …) through a multi-connection engine with 8 parallel connections and resume
+• Live and on-demand HLS/DASH streams (m3u8, mpd), including AES-128, through bundled N_m3u8DL-RE
+• Spotify playlists, albums and tracks, and Audible audiobooks: public metadata is resolved and the best-matching audio is downloaded from YouTube
+
+HOW IT WORKS
+Share a link to Sleeve from any app, or copy it and tap the clipboard card inside the app. Sleeve resolves the link, offers the available formats, and downloads by the fastest path available. Playlists can be downloaded as one batch: pick the songs you want, then stop or resume the whole batch from a single card.
+
+FORMAT CONTROL
+Choose resolution, audio-only output, subtitles, SponsorBlock categories, metadata embedding and filename templates. Cookies and profiles are supported for sites that require a session.
+
+PRIVACY
+Sleeve collects nothing. There is no telemetry, no analytics and no account. Everything runs on your device, and download URLs are validated before any request leaves the app.
+
+OPEN SOURCE
+Sleeve is GPL-3.0 software, a community fork of Seal that keeps every Seal feature and adds the multi-connection engine, HLS/DASH support, gallery-dl coverage, Spotify and Audible matching, and anonymous Reddit resolution.
+
+REQUIREMENTS
+Android 7.0 (API 24) or newer. Downloads are saved to Download/Sleeve/ on shared storage.
+
+CONTENT PROTECTED BY DRM (Netflix, Disney+, Widevine streams) IS NOT SUPPORTED, BY DESIGN.
+
+Only install APKs signed with the release certificate CN=Sleeve, O=Burry071 from this app's GitHub Releases or the Orion Store listing.

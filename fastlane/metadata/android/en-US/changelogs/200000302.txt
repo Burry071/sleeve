@@ -1,0 +1,18 @@
+2.0.0-beta.10
+
+Download flow
+• Instagram links open the preference sheet and download the reel itself instead of saving the poster image.
+• Facebook, X/Twitter, YouTube and Instagram shares open Configure again, and the selected format is honored.
+• One share produces one file and one Downloads row.
+• Closing the sheet without starting anything no longer leaves a "downloading" notification behind.
+• Finished cards show the real file size and duration instead of 0 MB / 00:00.
+• The Downloads page is restored to the beta.2 layout.
+
+Engine
+• Completed direct/CDN downloads are verified against the file actually written.
+• Gallery images are kept as the download instead of being filtered out.
+• Ghost falls back to yt-dlp for CDN 403s, merged formats and manifests.
+• Direct links without codec metadata are classified by container, so audio lands in the Audio folder.
+
+Install
+• Package com.sleeve.app, versionCode 200000302, signed with the existing Sleeve certificate.

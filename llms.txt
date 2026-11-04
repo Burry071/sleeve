@@ -1,0 +1,34 @@
+# Sleeve
+
+> Sleeve is a free, open-source (GPL-3.0) video, audio and image downloader for Android 7.0 and newer, with no ads, tracking or accounts. It is a community fork of Seal that adds a multi-connection download engine, HLS/DASH support, gallery-dl coverage, and Spotify and Audible matching.
+
+## Facts
+
+- App name: Sleeve
+- Package name: com.sleeve.app
+- Platform: Android 7.0 (API 24) and newer; target SDK 35
+- License: GPL-3.0
+- Price: free, no ads, no subscriptions, no accounts
+- Current release: 2.0.0-beta.10 (versionCode 200000302), arm64-v8a + x86_64
+- Release APK: https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk
+- Release APK SHA-256 (2.0.0-beta.10): 4f515709e27bb1e0444fa60816c0328e4db81d0ef4f59d12181c8cac95e32d93
+- Signing certificate SHA-256: 2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3
+- Source repository: https://github.com/Burry071/sleeve
+
+## What it supports
+
+- 1,800+ sites through yt-dlp: YouTube, Vimeo, TikTok, Twitter/X, SoundCloud and the full yt-dlp supported-sites list
+- 500+ image hosts through gallery-dl: Instagram, Reddit, Imgur, Pixiv and others
+- Direct file links with 8 parallel connections and resume
+- HLS and DASH streams (m3u8, mpd) including AES-128
+- Spotify playlists, albums and tracks, and Audible audiobooks via public metadata and ranked YouTube matches
+- Format control: resolution, audio-only, subtitles, SponsorBlock, metadata embedding, filename templates
+- DRM-protected content (Netflix, Disney+, Widevine) is not supported, by design
+
+## Links
+
+- [README](https://github.com/Burry071/sleeve/blob/main/README.md): features, FAQ and Sleeve vs Seal comparison
+- [Releases](https://github.com/Burry071/sleeve/releases): signed APKs and release notes
+- [Orion Store listing](https://rookieenough.github.io/Orion-Data/app/?id=sleeve): alternative install source
+- [Release process](https://github.com/Burry071/sleeve/blob/main/RELEASE.md): versioning, signing and release safety rules
+- [Issues](https://github.com/Burry071/sleeve/issues): bug reports and feature requests
