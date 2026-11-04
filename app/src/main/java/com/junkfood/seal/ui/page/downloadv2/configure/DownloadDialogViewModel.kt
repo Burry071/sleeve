@@ -8,16 +8,14 @@ import com.junkfood.seal.download.Task
 import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
+import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
-import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
-import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.PlaylistEntry
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.PreferenceUtil.getInt
-import com.junkfood.seal.util.splitFusedUrls
 import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
@@ -28,15 +26,10 @@ import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -44,30 +37,15 @@ import android.util.Log
 
 private const val TAG = "DownloadDialogViewModel"
 
-/** RankedCandidate.score is 0–100; below this the fallback search runs. */
-private const val SPOTIFY_MATCH_THRESHOLD = 55.0
-private const val SPOTIFY_RESOLVE_CONCURRENCY = 3
-
-private val trackBracketRegex = Regex("""\([^)]*\)|\[[^]]*]""")
-private val trackDecorationRegex =
-    Regex(
-        """\s+-\s+(?:remaster(?:ed)?(?:\s+\d{4})?|live|single version|radio edit|deluxe(?: edition)?|bonus track)\s*$""",
-        RegexOption.IGNORE_CASE,
-    )
-private val whitespaceRegex = Regex("""\s+""")
-
-private fun String.toSearchQueryPart(): String =
-    trackBracketRegex.replace(this, " ")
-        .replace(trackDecorationRegex, " ")
-        .replace(whitespaceRegex, " ")
-        .trim()
-
 class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Resolve cooldown: shared metadata-source rate limiting (ms since epoch). */
     private val lastResolveAt = mutableMapOf<String, Long>()
+
+    /** Last accepted preset download (ms since epoch); see downloadWithPreset. */
+    private var lastPresetDownloadAt = 0L
 
     private fun resolveThrottled(kind: String): Boolean {
         val now = System.currentTimeMillis()
@@ -94,16 +72,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     sealed interface SheetState {
         data object InputUrl : SheetState
 
-        /**
-         * Seal's DownloadSettingDialog equivalent: type chips + toggles + Download.
-         * [gallery] is set when the URL resolved through the gallery/embed path —
-         * the download then runs through the ghost-aware enqueue with the
-         * resolved direct items instead of yt-dlp extraction.
-         */
-        data class Configure(
-            val urlList: List<String>,
-            val gallery: SleeveQuickDownload.Resolved? = null,
-        ) : SheetState
+        data class Configure(val urlList: List<String>) : SheetState
 
         data class Loading(val taskKey: String, val job: Job) : SheetState
 
@@ -173,12 +142,6 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         get() = sheetStateFlow.value
 
     fun postAction(action: Action) {
-        // An explicit Retry from the error page must not be swallowed by the
-        // 3s resolve throttle (fast failures would otherwise make Retry a
-        // silent no-op).
-        if ((sheetState as? SheetState.Error)?.action == action) {
-            lastResolveAt.clear()
-        }
         with(action) {
             when (this) {
                 is Action.ProceedWithURLs -> proceedWithUrls(this)
@@ -199,7 +162,15 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun proceedWithUrls(action: Action.ProceedWithURLs) {
-        routeUrls(action.urlList)
+        action.urlList.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
+            fetchSpotify(Action.FetchSpotify(spotifyUrl))
+            return
+        }
+        action.urlList.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
+            fetchAudible(Action.FetchAudible(audibleUrl))
+            return
+        }
+        mSheetStateFlow.update { SheetState.Configure(action.urlList) }
     }
 
     private fun fetchPlaylist(action: Action.FetchPlaylist) {
@@ -230,9 +201,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         }
                     }
                     .onFailure { th ->
-                        mSheetStateFlow.update {
-                            SheetState.Error(action = action, throwable = DownloadErrorMessages.asFriendly(th))
-                        }
+                        mSheetStateFlow.update { SheetState.Error(action = action, throwable = th) }
                     }
             }
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchPlaylist_$url", job = job) }
@@ -258,9 +227,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update {
-                                SheetState.Error(action, throwable = DownloadErrorMessages.asFriendly(th))
-                            }
+                            mSheetStateFlow.update { SheetState.Error(action, throwable = th) }
                         }
                     }
             }
@@ -268,112 +235,16 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchFormat_$url", job = job) }
     }
 
-    private var pendingGallery: SleeveQuickDownload.Resolved? = null
-
-    /** Double-tap guard: a laggy recomposition must not enqueue the same
-     * media twice. Keyed on the first URL + audio intent within 1.5s. */
-    private val lastPresetDownloadAt = mutableMapOf<String, Long>()
-
     private fun downloadWithPreset(
         urlList: List<String>,
         preferences: DownloadUtil.DownloadPreferences,
     ) {
-        val dedupeKey = urlList.firstOrNull().orEmpty() + "#" + preferences.extractAudio
+        // The sheet hides on the first tap; a very fast second tap must not
+        // queue the same batch again (two tasks, two files, two history rows).
         val now = System.currentTimeMillis()
-        if (now - (lastPresetDownloadAt[dedupeKey] ?: 0) < 1500) {
-            hideDialog()
-            return
-        }
-        lastPresetDownloadAt[dedupeKey] = now
-
-        val gallery = pendingGallery
-        if (gallery != null && urlList.firstOrNull() == gallery.url) {
-            pendingGallery = null
-            // Close the sheet instantly (Seal mechanics); the transfer
-            // reports through toasts — a lingering sheet invited a second
-            // tap and a duplicate download. Runs in the APP scope: the
-            // overlay finishes right after hideDialog(), destroying the
-            // activity's viewModelScope — an activity-scoped coroutine here
-            // was cancelled mid-resolve and the task never got enqueued.
-            hideDialog()
-            App.applicationScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.enqueueResolved(
-                        downloader,
-                        gallery,
-                        extractAudio = preferences.extractAudio,
-                    )
-                    .onSuccess { (queued, source) ->
-                        withContext(Dispatchers.Main) {
-                            ToastUtil.makeToast(
-                                App.context.getString(
-                                    R.string.gallery_items_queued,
-                                    queued,
-                                    source,
-                                ),
-                            )
-                        }
-                    }
-                    .onFailure { th ->
-                        withContext(Dispatchers.Main) {
-                            ToastUtil.makeToast(
-                                DownloadErrorMessages.friendly(th)
-                                    .ifEmpty { App.context.getString(R.string.download_error_msg) },
-                            )
-                        }
-                    }
-            }
-            return
-        }
-        // Instagram without cookies fails on yt-dlp's login wall, but the
-        // anonymous embed ladder in SleeveQuickDownload.resolve serves most
-        // reels/posts — route through it when no cookie session exists, and
-        // fall back to plain yt-dlp if it comes up empty.
-        val instagramUrl =
-            urlList.firstOrNull {
-                it.contains("instagram.com", true) || it.contains("instagr.am", true)
-            }
-        if (instagramUrl != null && !preferences.cookies) {
-            // Same instant-close as the gallery branch: the resolve and the
-            // transfer run in the background and report through toasts.
-            // APP scope: survives the overlay finish.
-            hideDialog()
-            App.applicationScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.resolve(App.context, instagramUrl)
-                    .mapCatching { resolved ->
-                        SleeveQuickDownload.enqueueResolved(
-                                downloader,
-                                resolved,
-                                extractAudio = preferences.extractAudio,
-                            )
-                            .getOrThrow()
-                    }
-                    .onSuccess { (queued, source) ->
-                        withContext(Dispatchers.Main) {
-                            ToastUtil.makeToast(
-                                App.context.getString(
-                                    R.string.gallery_items_queued,
-                                    queued,
-                                    source,
-                                ),
-                            )
-                        }
-                    }
-                    .onFailure { th ->
-                        Log.e(TAG, "instagram resolve failed, falling back to yt-dlp: ${th.message}")
-                        urlList.forEach {
-                            downloader.enqueue(Task(url = it, preferences = preferences))
-                        }
-                        withContext(Dispatchers.Main) {
-                            ToastUtil.makeToast(
-                                DownloadErrorMessages.friendly(th)
-                                    .ifEmpty { App.context.getString(R.string.download_error_msg) },
-                            )
-                        }
-                    }
-            }
-            return
-        }
-        urlList.forEach { downloader.enqueue(Task(url = it, preferences = preferences)) }
+        if (now - lastPresetDownloadAt < 1000) return
+        lastPresetDownloadAt = now
+        urlList.distinct().forEach { downloader.enqueue(Task(url = it, preferences = preferences)) }
         hideDialog()
     }
 
@@ -393,10 +264,6 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun hideDialog() {
         mSheetValueFlow.update { SheetValue.Hidden }
-        // A dismissed sheet must not leave a resolved gallery behind: a later
-        // DownloadWithPreset whose first URL matches would otherwise take the
-        // direct lane with stale items.
-        pendingGallery = null
         when (sheetState) {
             is SheetState.Loading -> {
                 cancel()
@@ -408,183 +275,97 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun showDialog(action: Action.ShowSheet) {
         val urlList = action.urlList
-        if (urlList.isNullOrEmpty()) {
-            mSheetStateFlow.update { SheetState.InputUrl }
+        urlList?.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
             mSheetValueFlow.update { SheetValue.Expanded }
+            fetchSpotify(Action.FetchSpotify(spotifyUrl))
             return
         }
-        mSheetValueFlow.update { SheetValue.Expanded }
-        routeUrls(urlList)
-    }
-
-    /**
-     * The one routing decision for every entry, share target and in-app paste
-     * alike. Metadata lanes claim exclusive metadata lists. Resolve lanes
-     * (reddit, gallery-dl) only claim a lone URL: a multi-URL share keeps
-     * every link in one configure sheet instead of silently dropping
-     * siblings, and the yt-dlp lane handles each link as its own task.
-     */
-    private fun routeUrls(urlList: List<String>) {
-        // Paste-glitch defense before any lane claims the list: split a fused
-        // pair back apart and drop schemeless debris. One bogus arg fails the
-        // whole extraction; this keeps only the surviving links.
-        val sanitized = urlList.flatMap { splitFusedUrls(it) }
-        if (sanitized.isEmpty()) {
-            ToastUtil.makeToast(R.string.share_fail_msg)
+        urlList?.firstOrNull { isAudibleUrl(it) }?.let { audibleUrl ->
+            mSheetValueFlow.update { SheetValue.Expanded }
+            fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
-        if (sanitized.all { isSpotifyUrl(it) }) {
-            fetchSpotify(Action.FetchSpotify(sanitized.first()))
-            return
-        }
-        if (sanitized.all { isAudibleUrl(it) }) {
-            fetchAudible(Action.FetchAudible(sanitized.first()))
-            return
-        }
-        if (sanitized.size == 1) {
-            val url = sanitized.first()
-            if (redditPreRoute(sanitized)) return
-            if (!isVideoFirstHost(url)) {
-                galleryPreRoute(url)
-                return
-            }
-        }
-        mSheetStateFlow.update { SheetState.Configure(sanitized) }
-    }
-
-    /** gallery-dl claim check on IO; a hit goes to the gallery lane, a miss
-     * (or an unloaded module registry) falls through to the configure sheet. */
-    private fun galleryPreRoute(url: String) {
-        val job =
-            viewModelScope.launch(Dispatchers.IO) {
-                val matched =
-                    runCatching { GhostEngine.galleryMatches(url) }
-                        .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
-                        .getOrDefault(false)
-                Log.i(TAG, "gallery pre-route: candidate=$url matched=$matched")
-                withContext(Dispatchers.Main) {
-                    if (matched) {
-                        fetchGallery(Action.FetchGallery(url))
-                    } else {
-                        mSheetStateFlow.update { SheetState.Configure(listOf(url)) }
+        urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
+            // gallery-dl check runs on IO (first call loads ~300 site modules);
+            // a hit routes to the gallery flow, a miss falls through to Configure.
+            mSheetValueFlow.update { SheetValue.Expanded }
+            val job =
+                viewModelScope.launch(Dispatchers.IO) {
+                    val matched =
+                        runCatching { GhostEngine.galleryMatches(candidate) }
+                            .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
+                            .getOrDefault(false)
+                    Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
+                    withContext(Dispatchers.Main) {
+                        if (matched) {
+                            fetchGallery(Action.FetchGallery(candidate))
+                        } else {
+                            mSheetStateFlow.update { SheetState.Configure(urlList) }
+                        }
                     }
                 }
+            mSheetStateFlow.update {
+                SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
             }
-        mSheetStateFlow.update { SheetState.Loading(taskKey = "Gallery_$url", job = job) }
+            return
+        }
+        if (!urlList.isNullOrEmpty()) {
+            mSheetStateFlow.update { SheetState.Configure(urlList) }
+        } else {
+            mSheetStateFlow.update { SheetState.InputUrl }
+        }
+        mSheetValueFlow.update { SheetValue.Expanded }
     }
 
+// instagram.com belongs here: the anonymous embed resolves reels to their
+// poster JPG, so the gallery pre-route silently downloaded an image, skipped
+// the preference sheet, and never fetched the video. yt-dlp is the lane that
+// returns the actual reel; letting the sheet open also keeps IG consistent
+// with the other video hosts.
 private val VIDEO_FIRST_HOSTS: Regex =
-    Regex(
-        "youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com" +
-            "|reddit\\.com|redd\\.it|instagram\\.com|instagr\\.am",
-    )
+    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it|instagram\\.com")
 
-    /** Hosts whose video flows yt-dlp (with the ghost fallback) serves well
-     * skip the gallery-dl pre-route entirely — instagram above all: the
-     * share dialog stays configure-with-options and the download runs the
-     * same pipeline an in-app paste would.  */
+    /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
     private fun isVideoFirstHost(url: String) =
         VIDEO_FIRST_HOSTS
             .containsMatchIn(url)
 
-    /**
-     * Reddit pre-route: the anonymous JSON resolver fetches the post's media
-     * (video manifest, images, galleries) without any login. Success lands in
-     * the configure sheet on the direct lane — the same pipeline as gallery
-     * items; any failure quietly falls through to the plain yt-dlp configure
-     * sheet, never a dead end.
-     *
-     * @return true when a reddit URL was claimed and resolution is running.
-     */
-    private fun redditPreRoute(urlList: List<String>): Boolean {
-        val candidate = urlList.firstOrNull { RedditResolver.isPostUrl(it) } ?: return false
-        if (resolveThrottled("reddit")) {
-            // Claimed but throttled: still land the user in the configure
-            // sheet instead of silently doing nothing.
-            mSheetStateFlow.update { SheetState.Configure(urlList) }
-            return true
-        }
-        mSheetValueFlow.update { SheetValue.Expanded }
-        val job =
-            viewModelScope.launch(Dispatchers.IO) {
-                RedditResolver.resolve(candidate)
-                    .onSuccess { items ->
-                        val resolved =
-                            SleeveQuickDownload.Resolved(candidate, items, "reddit")
-                        withContext(Dispatchers.Main) {
-                            pendingGallery = resolved
-                            mSheetStateFlow.update {
-                                SheetState.Configure(listOf(candidate), gallery = resolved)
-                            }
-                        }
-                    }
-                    .onFailure { th ->
-                        Log.e(TAG, "reddit resolve failed, degrading: ${th.message}")
-                        withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Configure(urlList) }
-                        }
-                    }
-            }
-        mSheetStateFlow.update {
-            SheetState.Loading(taskKey = "Reddit_$candidate", job = job)
-        }
-        return true
-    }
-
     private fun fetchGallery(action: Action.FetchGallery) {
-        if (resolveThrottled("gallery")) {
-            // The pre-route already showed Loading for this URL: degrading to
-            // the configure sheet beats a spinner that nothing will ever
-            // replace.
-            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
-            return
-        }
+        if (resolveThrottled("gallery")) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
-                SleeveQuickDownload.resolve(App.context, action.url)
-                    .onSuccess { resolved ->
+                SleeveQuickDownload.enqueue(App.context, action.url, downloader)
+                    .onSuccess { (queued, source) ->
                         withContext(Dispatchers.Main) {
-                            pendingGallery = resolved
-                            mSheetStateFlow.update {
-                                SheetState.Configure(listOf(resolved.url), gallery = resolved)
-                            }
+                            resetSelectionState()
+                            ToastUtil.makeToast(
+                                App.context.getString(R.string.gallery_items_queued, queued, source),
+                            )
+                            hideDialog()
                         }
                     }
                     .onFailure { th ->
-                        // Not a dead end: degrade to the plain configure
-                        // sheet so the download runs the same pipeline an
-                        // in-app paste would (yt-dlp + ghost/ladder).
-                        Log.e(TAG, "gallery resolve failed, degrading: ${th.message}")
+                        Log.e(TAG, "gallery resolve failed: ${th.message}")
+                        val message = th.message ?: ""
+                        val friendly =
+                            if (
+                                Regex(
+                                    "401|403|429|login required|login page|redirect to login|rate.?limit",
+                                    RegexOption.IGNORE_CASE,
+                                )
+                                    .containsMatchIn(message)
+                            ) {
+                                App.context.getString(R.string.gallery_auth_required)
+                            } else {
+                                message
+                            }
                         withContext(Dispatchers.Main) {
-                            ToastUtil.makeToast(
-                                App.context.getString(R.string.gallery_resolve_fallback),
-                            )
-                            mSheetStateFlow.update { SheetState.Configure(listOf(action.url)) }
+                            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
                         }
                     }
             }
         mSheetStateFlow.update {
             SheetState.Loading(taskKey = "Gallery_${action.url}", job = job)
-        }
-    }
-
-    private suspend fun galleryError(action: Action.FetchGallery, th: Throwable) {
-        Log.e(TAG, "gallery resolve failed: ${th.message}")
-        val message = th.message ?: ""
-        val friendly =
-            if (
-                Regex(
-                        "401|403|429|login required|login page|redirect to login|rate.?limit",
-                        RegexOption.IGNORE_CASE,
-                    )
-                    .containsMatchIn(message)
-            ) {
-                App.context.getString(R.string.gallery_auth_required)
-            } else {
-                message
-            }
-        withContext(Dispatchers.Main) {
-            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
         }
     }
 
@@ -616,9 +397,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update {
-                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
-                            }
+                            mSheetStateFlow.update { SheetState.Error(action, th) }
                         }
                     }
             }
@@ -627,97 +406,69 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
-    private suspend fun resolveSpotifyTrack(
-        track: SpotifyTrack,
-        preferences: DownloadUtil.DownloadPreferences,
-    ) {
-        fun fetch(pool: String, query: String): List<PlaylistEntry> =
-            DownloadUtil.getPlaylistOrVideoInfo(
-                    playlistURL = "$pool:$query",
-                    downloadPreferences = preferences,
-                )
-                .map { it as? PlaylistResult }
-                .getOrElse { null }
-                ?.entries
-                .orEmpty()
-
-        fun rank(candidates: List<PlaylistEntry>) =
-            GhostEngine.rankCandidates(
-                    track = track,
-                    candidatesJson = json.encodeToString(candidates),
-                    strictness = RANKING_STRICTNESS.getInt(),
-                )
-                .getOrThrow()
-
-        // A floor miss ("no candidate passed") is a normal rejection, not a
-        // fatal error: it must widen the pool instead of dropping the track.
-        fun rankOrNull(candidates: List<PlaylistEntry>) =
-            candidates.takeIf { it.isNotEmpty() }?.let { runCatching { rank(it) }.getOrNull() }
-
-        val fullQuery =
-            listOf(track.artist, track.title)
-                .map { it.toSearchQueryPart() }
-                .filter { it.isNotBlank() }
-                .joinToString(separator = " ")
-        val titleQuery = track.title.toSearchQueryPart()
-
-        var best = rankOrNull(fetch("ytmsearch10", fullQuery))
-        if (best == null || best.score < SPOTIFY_MATCH_THRESHOLD) {
-            val wideBest = rankOrNull(fetch("ytsearch10", fullQuery))
-            best = listOfNotNull(best, wideBest).maxByOrNull { it.score }
-        }
-        if ((best == null || best.score < SPOTIFY_MATCH_THRESHOLD) && titleQuery.isNotBlank()) {
-            val titleBest = rankOrNull(fetch("ytsearch5", titleQuery))
-            best = listOfNotNull(best, titleBest).maxByOrNull { it.score } ?: best
-        }
-
-        val match = best ?: error("no candidate matched")
-        val url = match.url.ifBlank { "https://www.youtube.com/watch?v=" + match.id }
-        downloader.enqueue(Task(url = url, preferences = preferences))
-    }
-
     private fun downloadMetadataTracks(action: Action.DownloadMetadataTracks) {
         // spotDL pattern with quality-ranked matching: for each metadata track,
         // pull the top YouTube candidates (flat search), let the engine score
         // them (name/artist/duration/forbidden-keywords), and enqueue the best
-        // through the normal pipeline, audio-only. Resolution runs with bounded
-        // concurrency; the downloads themselves go through the pipeline's
-        // 3-slot scheduler.
+        // through the normal pipeline, audio-only. One prep lane at a time —
+        // the downloads themselves go through the pipeline's 3-slot scheduler.
         val preferences =
             DownloadUtil.DownloadPreferences.createFromPreferences().copy(extractAudio = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val semaphore = Semaphore(SPOTIFY_RESOLVE_CONCURRENCY)
-            val results =
-                coroutineScope {
-                    action.tracks
-                        .map { track ->
-                            async {
-                                track to
-                                    semaphore.withPermit {
-                                        runCatching { resolveSpotifyTrack(track, preferences) }
-                                    }
-                            }
+            var queued = 0
+            for (track in action.tracks) {
+                runCatching {
+                    val query =
+                        listOf(track.artist, track.title, "audio")
+                            .filter { it.isNotBlank() }
+                            .joinToString(separator = " ")
+                            .let { Regex("\\s+").replace(it, " ").trim() }
+                    // YouTube Music pool first (real artist uploads, better
+                    // audio). When the best match scores low, widen to a plain
+                    // YouTube search and rank both pools together before giving up.
+                    fun fetch(pool: String): List<PlaylistEntry> =
+                        DownloadUtil.getPlaylistOrVideoInfo(
+                                playlistURL = "$pool:$query",
+                                downloadPreferences = preferences,
+                            )
+                            .map { it as? PlaylistResult }
+                            .getOrElse { null }
+                            ?.entries
+                            .orEmpty()
+
+                    fun rank(candidates: List<PlaylistEntry>) =
+                        GhostEngine.rankCandidates(
+                                track = track,
+                                candidatesJson = json.encodeToString(candidates),
+                                strictness = RANKING_STRICTNESS.getInt(),
+                            )
+                            .getOrThrow()
+
+                    val musicPool = fetch("ytmsearch5")
+                    val musicBest = if (musicPool.isNotEmpty()) rank(musicPool) else null
+
+                    val best =
+                        if (musicBest == null || musicBest.score < 0.5) {
+                            val widePool = fetch("ytsearch10")
+                            val wideBest = if (widePool.isNotEmpty()) rank(widePool) else null
+                            listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
+                                ?: throw IllegalStateException("no candidates")
+                        } else {
+                            musicBest
                         }
-                        .awaitAll()
-                }
-            val queued = results.count { it.second.isSuccess }
-            val skippedTitles = results.filter { it.second.isFailure }.map { it.first.title }
+                    val url =
+                        best.url.ifBlank {
+                            "https://www.youtube.com/watch?v=" + best.id
+                        }
+                    downloader.enqueue(Task(url = url, preferences = preferences))
+                    queued++
+                }.onFailure { Log.w(TAG, "track skipped: ${track.title}: ${it.message}") }
+            }
             withContext(Dispatchers.Main) {
                 resetSelectionState()
-                if (skippedTitles.isEmpty()) {
-                    ToastUtil.makeToast(App.context.getString(R.string.tracks_queued, queued))
-                } else {
-                    val preview = skippedTitles.take(3).joinToString(", ")
-                    val suffix = if (skippedTitles.size > 3) "…" else ""
-                    ToastUtil.makeToast(
-                        App.context.getString(
-                            R.string.tracks_queued_partial,
-                            queued,
-                            skippedTitles.size,
-                            preview + suffix,
-                        )
-                    )
-                }
+                ToastUtil.makeToast(
+                    App.context.getString(R.string.tracks_queued, queued),
+                )
             }
         }
         hideDialog()
@@ -742,9 +493,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update {
-                                SheetState.Error(action, DownloadErrorMessages.asFriendly(th))
-                            }
+                            mSheetStateFlow.update { SheetState.Error(action, th) }
                         }
                     }
             }
@@ -753,24 +502,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
-    /** taskKeys of lanes that are plain coroutines, not yt-dlp processes. */
-    private fun isResolveTaskKey(taskKey: String) =
-        taskKey.startsWith("Reddit_") ||
-            taskKey.startsWith("Gallery_") ||
-            taskKey.startsWith("FetchSpotify_") ||
-            taskKey.startsWith("FetchAudible_")
-
     private fun cancel(): Boolean {
         return when (val state = sheetState) {
             is SheetState.Loading -> {
-                if (isResolveTaskKey(state.taskKey)) {
-                    // No yt-dlp process exists under these keys. Cancelling the
-                    // job stops the follow-up state write; blocking HTTP reads
-                    // finish within their timeouts and then die at the next
-                    // suspension point.
-                    state.job.cancel()
-                    return true
-                }
                 val res = YoutubeDL.destroyProcessById(id = state.taskKey)
                 if (res) {
                     state.job.cancel()

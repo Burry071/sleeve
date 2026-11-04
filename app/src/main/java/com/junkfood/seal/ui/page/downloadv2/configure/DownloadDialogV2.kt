@@ -2,6 +2,7 @@ package com.junkfood.seal.ui.page.downloadv2.configure
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -13,6 +14,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,9 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.ModalBottomSheetValue
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.SettingsSuggest
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.outlined.Cancel
@@ -44,15 +44,18 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NewLabel
 import androidx.compose.material.icons.outlined.SettingsSuggest
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -63,6 +66,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -126,7 +130,6 @@ import com.junkfood.seal.util.DownloadType.Command
 import com.junkfood.seal.util.DownloadType.Playlist
 import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadType.entries
-import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.PreferenceStrings
@@ -135,7 +138,6 @@ import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.SUBTITLE
-import com.junkfood.seal.util.SleeveQuickDownload
 import com.junkfood.seal.util.TEMPLATE_ID
 import com.junkfood.seal.util.THUMBNAIL
 import com.junkfood.seal.util.ToastUtil
@@ -193,7 +195,6 @@ fun DownloadDialog(
     preferences: DownloadUtil.DownloadPreferences,
     onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     state: DownloadDialogViewModel.SheetState = InputUrl,
-    onNavigateToCookies: (() -> Unit)? = null,
     onActionPost: (Action) -> Unit = {},
 ) {
     var showVideoPresetDialog by remember { mutableStateOf(false) }
@@ -219,7 +220,6 @@ fun DownloadDialog(
                     else -> {}
                 }
             },
-            onNavigateToCookies = onNavigateToCookies,
             onActionPost = onActionPost,
         )
     }
@@ -278,12 +278,7 @@ fun DownloadDialog(
 }
 
 @Composable
-private fun ErrorPage(
-    modifier: Modifier = Modifier,
-    state: Error,
-    onActionPost: (Action) -> Unit,
-    onNavigateToCookies: (() -> Unit)? = null,
-) {
+private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost: (Action) -> Unit) {
     val view = LocalView.current
     val clipboardManager = LocalClipboardManager.current
     val url =
@@ -298,7 +293,6 @@ private fun ErrorPage(
                 }
             }
         }
-    val loginWalled = state.throwable is DownloadErrorMessages.LoginRequiredError
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(
             imageVector = Icons.Outlined.ErrorOutline,
@@ -323,21 +317,7 @@ private fun ErrorPage(
         )
 
         Row(modifier = Modifier) {
-            if (loginWalled && onNavigateToCookies != null) {
-                // YTDLnis's most-praised pattern: the fix is one tap away,
-                // not a settings hunt. Closing the sheet first puts the
-                // cookie page on top of clean state.
-                Button(onClick = {
-                    onActionPost(Action.HideSheet)
-                    onNavigateToCookies()
-                }) {
-                    Text(stringResource(R.string.add_cookies))
-                }
-                Spacer(Modifier.width(8.dp))
-            }
-            FilledTonalButton(onClick = { onActionPost(state.action) }) {
-                Text(stringResource(R.string.retry))
-            }
+            FilledTonalButton(onClick = { onActionPost(state.action) }) { Text("Retry") }
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = {
@@ -364,7 +344,6 @@ private fun DownloadDialogContent(
     preferences: DownloadUtil.DownloadPreferences,
     onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit,
-    onNavigateToCookies: (() -> Unit)? = null,
     onActionPost: (Action) -> Unit,
 ) {
     AnimatedContent(
@@ -383,10 +362,6 @@ private fun DownloadDialogContent(
                         url = state.urlList.first(),
                         config = config,
                         preferences = preferences,
-                        typeEntries =
-                            if (state.gallery != null) listOf(Video, Audio)
-                            else config.typeEntries,
-                        gallery = state.gallery,
                         onPresetEdit = onPresetEdit,
                         onConfigSave = {
                             Config.updatePreferences(newValue = it, oldValue = config)
@@ -425,11 +400,7 @@ private fun DownloadDialogContent(
             }
 
             is Error -> {
-                ErrorPage(
-                    state = state,
-                    onActionPost = onActionPost,
-                    onNavigateToCookies = onNavigateToCookies,
-                )
+                ErrorPage(state = state, onActionPost = onActionPost)
             }
 
             is Loading -> {
@@ -550,18 +521,15 @@ private fun ConfigurePage(
     url: String = "",
     config: Config,
     preferences: DownloadUtil.DownloadPreferences,
-    typeEntries: List<DownloadType> = config.typeEntries,
-    gallery: SleeveQuickDownload.Resolved? = null,
     settingChips: @Composable () -> Unit,
     onPresetEdit: (DownloadType?) -> Unit = {},
     onConfigSave: (Config) -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var selectedType by remember(config, typeEntries) {
-        mutableStateOf(config.downloadType?.takeIf { it in typeEntries } ?: typeEntries.firstOrNull())
-    }
-    val canProceed = selectedType in typeEntries
+    var selectedType by remember(config) { mutableStateOf(config.downloadType) }
+    var useFormatSelection by remember(config) { mutableStateOf(config.useFormatSelection) }
+    val canProceed = selectedType in config.typeEntries
 
     var showTemplateSelectionDialog by remember { mutableStateOf(false) }
     var showTemplateCreatorDialog by remember { mutableStateOf(false) }
@@ -571,6 +539,12 @@ private fun ConfigurePage(
             mutableStateOf(PreferenceUtil.getTemplate())
         }
 
+    LaunchedEffect(selectedType) {
+        if (selectedType == Playlist) {
+            useFormatSelection = false
+        }
+    }
+
     Column {
         Column(modifier = modifier.padding(horizontal = 20.dp)) {
             Header(
@@ -578,118 +552,94 @@ private fun ConfigurePage(
                 title = stringResource(R.string.settings_before_download),
                 icon = Icons.Outlined.DoneAll,
             )
-            // Upstream Seal's sheetContent keeps a centered one-liner between
-            // the header and the download-type group; Sleeve dropped it.
-            Text(
-                text = stringResource(R.string.settings_before_download_text),
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
-                typeEntries = typeEntries,
+                typeEntries = config.typeEntries,
                 selectedType = selectedType,
                 onSelect = { selectedType = it },
             )
-            // Gallery/embed items are already resolved direct files; format
-            // selection and command templates don't apply to them.
-            if (gallery == null) {
-                Column(modifier = Modifier.animateContentSize()) {
-                    if (selectedType == Command) {
-                        if (showTemplateSelectionDialog) {
-                            TemplatePickerDialog { showTemplateSelectionDialog = false }
-                        }
-                        if (showTemplateCreatorDialog) {
-                            CommandTemplateDialog(
-                                onDismissRequest = { showTemplateCreatorDialog = false },
-                                confirmationCallback = { scope.launch { TEMPLATE_ID.updateInt(it) } },
-                            )
-                        }
-                        if (showTemplateEditorDialog) {
-                            CommandTemplateDialog(
-                                commandTemplate = template,
-                                onDismissRequest = { showTemplateEditorDialog = false },
-                            )
-                        }
-                        DrawerSheetSubtitle(
-                            text = stringResource(id = R.string.template_selection),
-                            modifier = Modifier,
+            Column(modifier = Modifier.animateContentSize()) {
+                if (selectedType != Command) {
+                    DrawerSheetSubtitle(
+                        text = stringResource(id = R.string.format_selection),
+                        modifier = Modifier,
+                    )
+                    Preset(
+                        modifier = Modifier,
+                        preference = preferences,
+                        selected = !useFormatSelection,
+                        downloadType = selectedType,
+                        onClick = { useFormatSelection = false },
+                        showEditIcon = !useFormatSelection && selectedType != Playlist,
+                        onEdit = { onPresetEdit(selectedType) },
+                    )
+                    Custom(
+                        selected = useFormatSelection,
+                        enabled = selectedType != Playlist,
+                        onClick = { useFormatSelection = true },
+                    )
+                } else {
+                    if (showTemplateSelectionDialog) {
+                        TemplatePickerDialog { showTemplateSelectionDialog = false }
+                    }
+                    if (showTemplateCreatorDialog) {
+                        CommandTemplateDialog(
+                            onDismissRequest = { showTemplateCreatorDialog = false },
+                            confirmationCallback = { scope.launch { TEMPLATE_ID.updateInt(it) } },
                         )
-                        LazyRow(modifier = Modifier) {
-                            item {
-                                ButtonChip(
-                                    icon = Icons.Outlined.Code,
-                                    label = template.name,
-                                    onClick = { showTemplateSelectionDialog = true },
-                                )
-                            }
-                            item {
-                                ButtonChip(
-                                    icon = Icons.Outlined.NewLabel,
-                                    label = stringResource(id = R.string.new_template),
-                                    onClick = { showTemplateCreatorDialog = true },
-                                )
-                            }
-                            item {
-                                ButtonChip(
-                                    icon = Icons.Outlined.Edit,
-                                    label = stringResource(id = R.string.edit_template, template.name),
-                                    onClick = { showTemplateEditorDialog = true },
-                                )
-                            }
-                        }
-                    } else {
-                        // Upstream Seal's quick dialog shows an inline
-                        // preference chip row instead of the auto/custom pair:
-                        // video format and resolution, then audio format, each
-                        // opening its quick-settings picker.
-                        DrawerSheetSubtitle(
-                            text = stringResource(id = R.string.format_preference),
-                            modifier = Modifier,
+                    }
+                    if (showTemplateEditorDialog) {
+                        CommandTemplateDialog(
+                            commandTemplate = template,
+                            onDismissRequest = { showTemplateEditorDialog = false },
                         )
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            if (selectedType != Audio) {
-                                ButtonChip(
-                                    icon = Icons.Filled.VideoFile,
-                                    label = PreferenceStrings.getVideoFormatLabel(preferences.videoFormat),
-                                    onClick = { onPresetEdit(Video) },
-                                )
-                                ButtonChip(
-                                    icon = Icons.Filled.HighQuality,
-                                    label =
-                                        PreferenceStrings.getVideoResolutionDesc(
-                                            preferences.videoResolution,
-                                        ),
-                                    onClick = { onPresetEdit(Video) },
-                                )
-                            }
+                    }
+                    DrawerSheetSubtitle(
+                        text = stringResource(id = R.string.template_selection),
+                        modifier = Modifier,
+                    )
+                    LazyRow(modifier = Modifier) {
+                        item {
                             ButtonChip(
-                                icon = Icons.Filled.AudioFile,
-                                label = stringResource(id = R.string.audio_format),
-                                onClick = { onPresetEdit(Audio) },
+                                icon = Icons.Outlined.Code,
+                                label = template.name,
+                                onClick = { showTemplateSelectionDialog = true },
+                            )
+                        }
+                        item {
+                            ButtonChip(
+                                icon = Icons.Outlined.NewLabel,
+                                label = stringResource(id = R.string.new_template),
+                                onClick = { showTemplateCreatorDialog = true },
+                            )
+                        }
+                        item {
+                            ButtonChip(
+                                icon = Icons.Outlined.Edit,
+                                label = stringResource(id = R.string.edit_template, template.name),
+                                onClick = { showTemplateEditorDialog = true },
                             )
                         }
                     }
                 }
             }
         }
-        // Upstream keeps these plainly visible: a subtitle, then the chips row.
-        DrawerSheetSubtitle(text = stringResource(id = R.string.additional_settings))
-        settingChips()
+        var expanded by remember { mutableStateOf(false) }
+        ExpandableTitle(expanded = expanded, onClick = { expanded = true }) { settingChips() }
 
         ActionButtons(
             modifier = Modifier.padding(horizontal = 20.dp),
             canProceed = canProceed,
             selectedType = selectedType,
-            useFormatSelection = false,
+            useFormatSelection = useFormatSelection,
             onCancel = { onActionPost(Action.HideSheet) },
             onDownload = {
-                onConfigSave(config.copy(downloadType = selectedType))
+                onConfigSave(
+                    config.copy(
+                        useFormatSelection = useFormatSelection,
+                        downloadType = selectedType,
+                    )
+                )
                 onActionPost(
                     Action.DownloadWithPreset(
                         urlList = listOf(url),
@@ -698,7 +648,12 @@ private fun ConfigurePage(
                 )
             },
             onFetchInfo = {
-                onConfigSave(config.copy(downloadType = selectedType))
+                onConfigSave(
+                    config.copy(
+                        useFormatSelection = useFormatSelection,
+                        downloadType = selectedType,
+                    )
+                )
                 if (selectedType == Playlist) {
                     onActionPost(Action.FetchPlaylist(url = url, preferences = preferences))
                 } else {
@@ -712,7 +667,12 @@ private fun ConfigurePage(
                 }
             },
             onTaskStart = {
-                onConfigSave(config.copy(downloadType = selectedType))
+                onConfigSave(
+                    config.copy(
+                        useFormatSelection = useFormatSelection,
+                        downloadType = selectedType,
+                    )
+                )
                 onActionPost(
                     Action.RunCommand(url = url, template = template, preferences = preferences)
                 )
@@ -741,13 +701,6 @@ fun ConfigurePagePlaylistVariant(
                 title = stringResource(R.string.settings_before_download),
                 icon = Icons.Outlined.DoneAll,
             )
-            Text(
-                text = stringResource(R.string.settings_before_download_text),
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
                 typeEntries = listOf(Video, Audio),
@@ -768,17 +721,18 @@ fun ConfigurePagePlaylistVariant(
                 onEdit = { onPresetEdit(selectedType) },
             )
         }
-        // Upstream keeps these plainly visible: a subtitle, then the chips row.
-        DrawerSheetSubtitle(text = stringResource(id = R.string.additional_settings))
-        AdditionalSettings(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            isQuickDownload = false,
-            preference = preferences,
-            selectedType = Audio,
-            onPreferenceUpdate = {
-                onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
-            },
-        )
+        var expanded by remember { mutableStateOf(false) }
+        ExpandableTitle(expanded = expanded, onClick = { expanded = true }) {
+            AdditionalSettings(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                isQuickDownload = false,
+                preference = preferences,
+                selectedType = Audio,
+                onPreferenceUpdate = {
+                    onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
+                },
+            )
+        }
 
         ActionButtons(
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -857,6 +811,55 @@ private fun AdditionalSettings(
                     onPreferenceUpdate()
                 },
             )
+        }
+    }
+}
+
+@Composable
+fun ExpandableTitle(
+    modifier: Modifier = Modifier,
+    expanded: Boolean = false,
+    onClick: () -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    Column {
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
+        Column(
+            modifier =
+                modifier
+                    .clickable(
+                        onClick = onClick,
+                        onClickLabel = stringResource(R.string.show_more_actions),
+                        enabled = !expanded,
+                    )
+                    .padding(top = 12.dp, bottom = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(modifier = Modifier.width(24.dp))
+                Text(
+                    text = stringResource(R.string.additional_settings),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (!expanded) {
+                    Icon(
+                        imageVector = Icons.Outlined.ExpandMore,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(32.dp))
+                }
+            }
+            AnimatedVisibility(expanded) {
+                Column {
+                    Spacer(Modifier.height(8.dp))
+                    content()
+                }
+            }
         }
     }
 }
@@ -1038,6 +1041,40 @@ private fun Preset(
                 onClick()
             }
         },
+    )
+}
+
+@Composable
+private fun Custom(
+    modifier: Modifier = Modifier,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    SingleChoiceItem(
+        modifier = modifier,
+        title = stringResource(R.string.custom),
+        desc = stringResource(R.string.custom_format_selection_desc),
+        icon = {
+            Crossfade(selected, animationSpec = spring(stiffness = Spring.StiffnessMedium)) {
+                if (it) {
+                    Icon(
+                        imageVector = Icons.Filled.VideoFile,
+                        null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.VideoFile,
+                        null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        },
+        selected = selected,
+        enabled = enabled,
+        onClick = onClick,
     )
 }
 

@@ -1,6 +1,8 @@
 package com.junkfood.seal
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -29,21 +31,25 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
-import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
-import com.junkfood.seal.util.matchAllUrlsFromSharedText
+import com.junkfood.seal.util.PreferenceUtil.getBoolean
+import com.junkfood.seal.util.matchUrlFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import androidx.lifecycle.lifecycleScope
 import com.junkfood.seal.download.DownloaderV2
+import com.junkfood.seal.download.Task
 import com.junkfood.seal.util.SleeveQuickDownload
 import com.junkfood.seal.util.ToastUtil
 import org.koin.android.ext.android.get
 import org.koin.androidx.viewmodel.ext.android.getViewModel
 
+private const val TAG = "QuickDownloadActivity"
 const val EXTRA_QUICK_DOWNLOAD = "quick"
+private const val NOTIFICATION_PERMISSION_REQUEST = 1001
 
 class QuickDownloadActivity : ComponentActivity() {
     private var sharedUrlCached: String = ""
@@ -67,15 +73,15 @@ class QuickDownloadActivity : ComponentActivity() {
             }
 
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
-                // ACTION_SEND_MULTIPLE senders may put one string, an
-                // ArrayList<String>, or HTML under EXTRA_TEXT.
                 val sharedContent =
-                    (intent.extras?.get(Intent.EXTRA_TEXT) as? String)
+                    intent.getStringExtra(Intent.EXTRA_TEXT)
                         ?: (intent.extras?.get(Intent.EXTRA_TEXT) as? ArrayList<*>)
                             ?.filterIsInstance<String>()
                             ?.joinToString("\n")
-                        ?: (intent.extras?.get(Intent.EXTRA_HTML_TEXT) as? String)
-                sharedContent?.let { matchAllUrlsFromSharedText(it) }
+                sharedContent?.let {
+                    intent.removeExtra(Intent.EXTRA_TEXT)
+                    matchUrlFromSharedText(it)
+                }
             }
 
             else -> {
@@ -84,65 +90,63 @@ class QuickDownloadActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Progress/finish notifications come from DownloadService; Android 13+
+     * hides them until POST_NOTIFICATIONS is granted. The share target never
+     * asked, so a shared download stayed silent even with the pref on.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (!NOTIFICATION.getBoolean()) return
+        if (
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+            return
+        runCatching {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST,
+            )
+        }
+    }
+
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         intent.getSharedURL()?.let { sharedUrlCached = it }
 
-        if (sharedUrlCached.isEmpty()) {
-            ToastUtil.makeToast(R.string.share_fail_msg)
+        val isQuickDownload = intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)
+
+        if (sharedUrlCached.isEmpty() && !isQuickDownload) {
             finish()
             return
         }
 
-        // Start the foreground service NOW, while this activity is still
-        // foreground and startService is legal. Both lanes (quick and sheet)
-        // download in App.applicationScope after this overlay closes — an
-        // app with no visible activity and no running service drops into the
-        // cached bucket and Android's freezer suspends the download mid-flight
-        // (logcat: "freezing com.sleeve.app" 18s after the sheet closed, task
-        // never finished, no notification ever shown). The FGS badge is the
-        // user's visible "Sleeve is downloading" feedback and the freezer
-        // exemption in one; it drains via App.stopService when the queue
-        // empties, so starting it here cannot leave a zombie.
-        App.startService()
+        requestNotificationPermissionIfNeeded()
 
-        // Sharing a link from another app (ACTION_SEND) opens the configure
-        // sheet, like the stock Seal share target — the user picks format,
-        // preset and destination before anything is queued. Only the
-        // dedicated quick-download shortcut (app shortcut / tile with the
-        // quick extra) skips the dialog and downloads immediately.
-        if (
-            intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false) ||
-                intent.getStringExtra("android.intent.extra.shortcut.ID") == "quick-download"
-        ) {
+        if (isQuickDownload && sharedUrlCached.isNotEmpty()) {
             // Share-sheet "Quick download": straight to the queue with the
             // default pipeline, no configure dialog. The gallery route inside
             // handles Instagram and other image sites anonymously first.
-            // The service is already running (started above while foreground).
-            val urls =
-                sharedUrlCached.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+            App.startService()
+            val url = sharedUrlCached
             lifecycleScope.launch {
-                var queued = 0
-                urls.forEach { url ->
-                    SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
-                        .onSuccess { (count, _) -> queued += count }
-                        .onFailure {
-                            ToastUtil.makeToast(
-                                DownloadErrorMessages.friendly(it)
-                                    .ifEmpty { getString(R.string.download_error_msg) },
-                            )
-                        }
-                }
-                if (queued > 0) {
-                    ToastUtil.makeToast(
-                        getString(R.string.gallery_items_queued, queued, "quick"),
-                    )
-                }
+                SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
+                    .onSuccess { (queued, source) ->
+                        ToastUtil.makeToast(
+                            getString(R.string.gallery_items_queued, queued, source),
+                        )
+                    }
+                    .onFailure {
+                        ToastUtil.makeToast(it.message ?: getString(R.string.download_error_msg))
+                    }
                 finish()
             }
             return
         }
+
+        App.startService()
 
         enableEdgeToEdge()
 
@@ -164,22 +168,19 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         val viewModel: DownloadDialogViewModel = getViewModel()
-        val postUrls: (String) -> Unit = { shared ->
-            viewModel.postAction(
-                Action.ShowSheet(
-                    shared.split("\n").map { it.trim() }.filter { it.isNotBlank() },
-                ),
-            )
-        }
-        onNewIntentHandler = { intent ->
-            intent.getSharedURL()?.let { shared ->
-                if (shared.isNotEmpty()) {
-                    sharedUrlCached = shared
-                    postUrls(shared)
-                }
+        // The launcher shortcut starts this activity with no shared text; the
+        // sheet then opens on its URL input instead of finishing straight away.
+        viewModel.postAction(
+            Action.ShowSheet(if (sharedUrlCached.isEmpty()) null else listOf(sharedUrlCached))
+        )
+
+        onNewIntentHandler = { newIntent ->
+            newIntent.getSharedURL()?.takeIf { it.isNotBlank() }?.let { url ->
+                sharedUrlCached = url
+                viewModel.postAction(Action.Reset)
+                viewModel.postAction(Action.ShowSheet(listOf(url)))
             }
         }
-        postUrls(sharedUrlCached)
 
         setContent {
             SettingsProvider(calculateWindowSizeClass(this).widthSizeClass) {
@@ -193,21 +194,6 @@ class QuickDownloadActivity : ComponentActivity() {
 
                     val sheetValue = viewModel.sheetValueFlow.collectAsStateWithLifecycle().value
 
-                    // Seal's quick-download mechanics: the overlay exists only
-                    // while the sheet is on screen. The moment it is gone —
-                    // Download tapped, task enqueued, cancelled — the share
-                    // overlay finishes instead of lingering over the app.
-                    LaunchedEffect(Unit) {
-                        var sheetShown = false
-                        viewModel.sheetValueFlow.collect { value ->
-                            if (value == DownloadDialogViewModel.SheetValue.Expanded) {
-                                sheetShown = true
-                            } else if (sheetShown) {
-                                finish()
-                            }
-                        }
-                    }
-
                     val state = viewModel.sheetStateFlow.collectAsStateWithLifecycle().value
 
                     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -216,22 +202,23 @@ class QuickDownloadActivity : ComponentActivity() {
                         viewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
                     var showDialog by remember { mutableStateOf(false) }
-                    // The flows start at Hidden/Idle, so only auto-close after
-                    // the sheet actually expanded once — otherwise the first
-                    // composition finishes the activity before ShowSheet lands.
-                    var wasExpanded by remember { mutableStateOf(false) }
 
-                    LaunchedEffect(sheetValue, selectionState) {
+                    LaunchedEffect(sheetValue) {
                         if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
-                            wasExpanded = true
                             showDialog = true
-                        } else if (
-                            sheetValue == DownloadDialogViewModel.SheetValue.Hidden && wasExpanded
-                        ) {
+                        } else if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) {
                             launch { sheetState.hide() }
                                 .invokeOnCompletion {
                                     showDialog = false
-                                    if (selectionState == SelectionState.Idle) {
+                                    // Read the flows, not the composed snapshot: a
+                                    // fast fetch sets FormatSelection and hides the
+                                    // sheet in the same frame, and the stale
+                                    // snapshot used to finish the activity before
+                                    // FormatPage could render.
+                                    if (
+                                        viewModel.selectionStateFlow.value ==
+                                            SelectionState.Idle
+                                    ) {
                                         this@QuickDownloadActivity.finish()
                                     }
                                 }
@@ -283,5 +270,27 @@ class QuickDownloadActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        // onCreate starts the foreground service eagerly so a transfer survives
+        // this overlay closing (the process is otherwise frozen mid-download).
+        // When the sheet is closed without queueing anything, that start has no
+        // pairing and the "Sleeve is downloading…" badge outlives the app being
+        // idle. Drop it unless a task still needs the service.
+        runCatching {
+            val pending =
+                get<DownloaderV2>().getTaskStateMap().values.any { state ->
+                    when (state.downloadState) {
+                        Task.DownloadState.Idle,
+                        is Task.DownloadState.FetchingInfo,
+                        Task.DownloadState.ReadyWithInfo,
+                        is Task.DownloadState.Running -> true
+                        else -> false
+                    }
+                }
+            if (!pending) App.stopService()
+        }
+        super.onDestroy()
     }
 }
