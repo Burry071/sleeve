@@ -6,8 +6,11 @@
 
 **Paste a link. Pick a format. Get the file.**
 
-A free, open-source video and audio downloader for Android. No ads, no
-tracking, no accounts.
+**What is Sleeve?** A free, open-source (GPL-3.0) video and audio downloader
+for Android 7.0+ with no ads, tracking, or accounts. It supports YouTube,
+Instagram, TikTok, Twitter/X, Reddit and 1,800+ yt-dlp sites, 500+ gallery-dl
+image hosts, HLS/DASH streams, Spotify playlists and Audible audiobooks, and
+downloads each link by the fastest path available.
 
 [![Release](https://img.shields.io/github/v/release/Burry071/sleeve?label=release)](https://github.com/Burry071/sleeve/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Burry071/sleeve/total?label=downloads&color=3DDC84)](https://github.com/Burry071/sleeve/releases)
@@ -111,17 +114,33 @@ Settings → Cookies & profiles; Sleeve reuses that session for later
 downloads. Most public Reddit posts and Instagram reels work without it.
 
 **How is Sleeve different from Seal?**
-Sleeve adds the embedded multi-connection download engine, HLS/DASH support
-via N_m3u8DL-RE, gallery-dl site coverage, Spotify and Audible playlist
-resolution, anonymous Reddit handling, and a redesigned Material 3 Expressive
-interface. All original Seal features (SponsorBlock, subtitles, cookies,
-playlists, custom commands) remain.
+Sleeve keeps every Seal feature and adds a multi-connection engine, HLS/DASH
+support, gallery-dl coverage, Spotify and Audible matching, and anonymous
+Reddit resolution. See [Sleeve vs Seal](#sleeve-vs-seal) for the full table.
 
 **Which sites are supported?**
 Anything listed by
 [yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) and
 [gallery-dl](https://github.com/mikf/gallery-dl/blob/master/docs/supportedsites.md),
 plus direct file links and most pages containing a video stream.
+
+## Sleeve vs Seal
+
+Sleeve is a [Seal](https://github.com/JunkFood02/Seal) fork (GPL-3.0) that keeps
+every original feature and adds the capabilities below. Comparison is against
+Seal 1.13.1.
+
+| Capability | Sleeve | Seal |
+| --- | --- | --- |
+| yt-dlp extraction, SponsorBlock, subtitles, cookies, custom commands | Yes | Yes |
+| Multi-connection download engine (8 connections, resume) | Yes, Ghost | No |
+| HLS/DASH via N_m3u8DL-RE, including AES-128 | Yes | No |
+| gallery-dl image and gallery coverage (500+ hosts) | Yes | No |
+| Spotify playlist and Audible audiobook matching | Yes | No |
+| Anonymous Reddit resolution | Yes | No |
+| Material 3 Expressive interface | Yes | No |
+
+Both are GPL-3.0 and run entirely on device.
 
 ## Build
 
