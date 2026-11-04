@@ -1,3 +1,20 @@
+# =============================================================================
+# RELEASE SAFETY RULES (mandatory — do not remove)
+# =============================================================================
+# 1. never delete a published GitHub release or its APK asset as part of routine development;
+# 2. never reuse a published version name or version code;
+# 3. every new release's version code must be greater than every previously distributed build, including other channels;
+# 4. preserve application ID and signing identity;
+# 5. verify final APK exists, non-empty, installs, expected package metadata;
+# 6. verify GitHub release asset URL returns success and supports expected download behavior;
+# 7. verify Orion Store can discover and fetch the exact new release asset;
+# 8. never publish before Orion distribution compatibility has been checked;
+# 9. never allow Orion to select a deleted/stale/unavailable release;
+# 10. retain the previous working release as a recovery option;
+# 11. record version, version code, commit, APK SHA-256, signing certificate fingerprint, asset URL;
+# 12. do not claim a release successful until the actual distribution path is verified.
+# =============================================================================
+
 name: ci
 
 on:
