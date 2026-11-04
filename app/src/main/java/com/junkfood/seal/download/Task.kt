@@ -17,6 +17,7 @@ private val TypeInfo.id: String
         when (this) {
             is TypeInfo.CustomCommand -> "${template.id}_${template.name}"
             is TypeInfo.Playlist -> "$index"
+            is TypeInfo.MetadataTrack -> "metadata:$index"
             TypeInfo.URL -> ""
         }
 
@@ -24,14 +25,45 @@ private fun makeId(url: String, type: TypeInfo, preferences: DownloadUtil.Downlo
     "${url}_${type.id}_${preferences.hashCode()}"
 
 @Serializable
+data class BatchInfo(
+    val id: String,
+    val title: String,
+    val provider: String,
+)
+
+@Serializable
 data class Task(
     val url: String,
     val type: TypeInfo = TypeInfo.URL,
     val preferences: DownloadUtil.DownloadPreferences,
+    val batch: BatchInfo? = null,
     val id: String = makeId(url, type, preferences),
 ) : Comparable<Task> {
 
     val timeCreated: Long = System.currentTimeMillis()
+
+    /** Stable Compose list key: ids can repeat across batches of the same playlist. */
+    val uiKey: String
+        get() = "$id#${batch?.id ?: ""}"
+
+    /** Batch songs report progress through one playlist notification instead. */
+    val usesOwnNotification: Boolean
+        get() = batch == null
+
+    /**
+     * True when both tasks would download the same thing, regardless of which
+     * batch queued them. Each playlist submission gets a fresh batch id, so
+     * plain equality cannot spot a second submission of work already in flight.
+     * Catalogue tracks embed the batch id in their synthetic URL, so they are
+     * compared by matched-track identity instead.
+     */
+    fun isSameWork(other: Task): Boolean {
+        if (preferences != other.preferences) return false
+        if (type is TypeInfo.MetadataTrack && other.type is TypeInfo.MetadataTrack) {
+            return type == other.type
+        }
+        return url == other.url && type == other.type
+    }
 
     override fun compareTo(other: Task): Int {
         return timeCreated.compareTo(other.timeCreated)
@@ -43,6 +75,16 @@ data class Task(
         @Serializable data class Playlist(val index: Int = 0) : TypeInfo
 
         @Serializable data class CustomCommand(val template: CommandTemplate) : TypeInfo
+
+        @Serializable
+        data class MetadataTrack(
+            val index: Int = 0,
+            val provider: String = "",
+            val title: String = "",
+            val artist: String = "",
+            val album: String = "",
+            val durationMs: Long = 0L,
+        ) : TypeInfo
 
         @Serializable data object URL : TypeInfo
     }

@@ -54,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.junkfood.seal.R
+import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.TaskFactory
 import com.junkfood.seal.ui.common.HapticFeedback.slightHapticFeedback
@@ -77,6 +78,7 @@ import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.USE_CUSTOM_AUDIO_PRESET
 import com.junkfood.seal.util.VIDEO_FORMAT
 import com.junkfood.seal.util.VIDEO_QUALITY
+import java.util.UUID
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -149,9 +151,19 @@ fun PlaylistSelectionPage(
                 },
                 onDismissRequest = onDismissConfigurationSheet,
                 onDownload = {
-                    val preferences = preferences.copy(extractAudio = it == Audio)
-                    taskList
-                        .map { it.copy(task = it.task.copy(preferences = preferences)) }
+                    val downloadPreferences = preferences.copy(extractAudio = it == Audio)
+                    val batch =
+                        BatchInfo(
+                            id = UUID.randomUUID().toString(),
+                            title =
+                                state.result.title?.takeIf { title -> title.isNotBlank() }
+                                    ?: state.result.originalUrl
+                                    ?: state.result.webpageUrl
+                                    ?: "Playlist",
+                            provider = state.result.extractorKey ?: "Playlist",
+                        )
+                    TaskFactory
+                        .stampBatch(taskList, downloadPreferences, batch)
                         .forEach(downloader::enqueue)
                     onDismissConfigurationSheet()
                     onBack()

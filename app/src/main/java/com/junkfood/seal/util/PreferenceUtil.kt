@@ -187,6 +187,7 @@ const val TEMPLATE_SHORTCUTS = "template_shortcuts"
 
 const val TASK_LIST = "task_list"
 const val SAVED_LINKS = "saved_links"
+const val BATCH_DISMISSED = "batch_dismissed"
 
 val paletteStyles =
     listOf(
@@ -460,6 +461,12 @@ object PreferenceUtil {
     fun getSavedLinks(): Set<String> = kv.decodeStringSet(SAVED_LINKS) ?: emptySet()
 
     fun updateSavedLinks(links: Set<String>) = kv.encode(SAVED_LINKS, links)
+
+    fun getDismissedBatches(): Set<String> = kv.decodeStringSet(BATCH_DISMISSED) ?: emptySet()
+
+    fun addDismissedBatch(batchId: String) {
+        kv.encode(BATCH_DISMISSED, getDismissedBatches() + batchId)
+    }
 
     private const val TAG = "PreferenceUtil"
 }

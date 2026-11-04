@@ -1,0 +1,212 @@
+package com.junkfood.seal.ui.page.downloadv2
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.junkfood.seal.R
+import com.junkfood.seal.download.BatchInfo
+import com.junkfood.seal.download.BatchOps
+import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.Task.DownloadState.Running
+import com.junkfood.seal.ui.common.LocalDarkTheme
+
+/**
+ * One playlist download: a summary header with batch actions and compact song
+ * rows that reuse the single-download card's state pill and action button, so
+ * colours, animations, and typography stay identical.
+ */
+@Composable
+fun PlaylistBatchCard(
+    modifier: Modifier = Modifier,
+    batch: BatchInfo,
+    entries: List<Pair<Task, Task.State>>,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onStop: () -> Unit,
+    onResume: () -> Unit,
+    onDismiss: () -> Unit,
+    onSongClick: (Task) -> Unit,
+    onSongAction: (Task, UiAction) -> Unit,
+) {
+    val summary = remember(entries) { BatchOps.summary(entries) }
+    val containerColor =
+        MaterialTheme.colorScheme.run {
+            if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
+        }
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+    ) {
+        Column {
+            Row(
+                modifier =
+                    Modifier.fillMaxWidth()
+                        .clickable(onClick = onToggleExpanded)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(
+                        text = batch.title.ifBlank { stringResource(R.string.playlist) },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text =
+                            if (summary.failed > 0)
+                                stringResource(
+                                    R.string.playlist_progress_failed,
+                                    summary.completed,
+                                    summary.total,
+                                    summary.failed,
+                                )
+                            else
+                                stringResource(
+                                    R.string.playlist_progress,
+                                    summary.completed,
+                                    summary.total,
+                                ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    imageVector =
+                        if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = stringResource(R.string.show_more_actions),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.dismiss_playlist)) },
+                            onClick = {
+                                menuExpanded = false
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                // Independent conditions: a batch can be partly stopped and
+                // partly failed, so both actions may be visible at once.
+                if (summary.unfinished > 0) {
+                    TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+                }
+                if (summary.canceled + summary.failed > 0) {
+                    TextButton(onClick = onResume) { Text(stringResource(R.string.resume)) }
+                }
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    entries.forEach { (task, state) ->
+                        key(task.uiKey) {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            SongRow(
+                                task = task,
+                                state = state,
+                                onClick = { onSongClick(task) },
+                                onAction = { onSongAction(task, it) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SongRow(
+    task: Task,
+    state: Task.State,
+    onClick: () -> Unit,
+    onAction: (UiAction) -> Unit,
+) {
+    val progress = (state.downloadState as? Running)?.progress?.takeIf { it >= 0f }
+    Row(
+        modifier =
+            Modifier.fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = state.viewState.title.ifBlank { task.url },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                )
+            }
+        }
+        CardStateIndicator(modifier = Modifier, downloadState = state.downloadState)
+        ActionButton(
+            modifier = Modifier,
+            downloadState = state.downloadState,
+            onActionPost = onAction,
+        )
+    }
+}

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskFactory
 import com.junkfood.seal.App
 import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
@@ -13,10 +14,7 @@ import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getCookiesFile
-import com.junkfood.seal.util.PlaylistEntry
 import com.junkfood.seal.util.PlaylistResult
-import com.junkfood.seal.util.PreferenceUtil.getInt
-import com.junkfood.seal.util.RANKING_STRICTNESS
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
 import com.junkfood.seal.util.PreferenceUtil.getString
@@ -31,15 +29,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import java.util.UUID
 import android.util.Log
 
 private const val TAG = "DownloadDialogViewModel"
 
 class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel() {
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     /** Resolve cooldown: shared metadata-source rate limiting (ms since epoch). */
     private val lastResolveAt = mutableMapOf<String, Long>()
@@ -96,8 +91,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class FetchGallery(val url: String) : Action
 
-        data class DownloadMetadataTracks(val provider: String, val tracks: List<SpotifyTrack>) :
-            Action
+        data class DownloadMetadataTracks(
+            val provider: String,
+            val playlistTitle: String,
+            val tracks: List<SpotifyTrack>,
+        ) : Action
 
         data class ProceedWithURLs(val urlList: List<String>) : Action
 
@@ -407,70 +405,32 @@ private val VIDEO_FIRST_HOSTS: Regex =
     }
 
     private fun downloadMetadataTracks(action: Action.DownloadMetadataTracks) {
-        // spotDL pattern with quality-ranked matching: for each metadata track,
-        // pull the top YouTube candidates (flat search), let the engine score
-        // them (name/artist/duration/forbidden-keywords), and enqueue the best
-        // through the normal pipeline, audio-only. One prep lane at a time —
-        // the downloads themselves go through the pipeline's 3-slot scheduler.
-        val preferences =
-            DownloadUtil.DownloadPreferences.createFromPreferences().copy(extractAudio = true)
-        viewModelScope.launch(Dispatchers.IO) {
-            var queued = 0
-            for (track in action.tracks) {
-                runCatching {
-                    val query =
-                        listOf(track.artist, track.title, "audio")
-                            .filter { it.isNotBlank() }
-                            .joinToString(separator = " ")
-                            .let { Regex("\\s+").replace(it, " ").trim() }
-                    // YouTube Music pool first (real artist uploads, better
-                    // audio). When the best match scores low, widen to a plain
-                    // YouTube search and rank both pools together before giving up.
-                    fun fetch(pool: String): List<PlaylistEntry> =
-                        DownloadUtil.getPlaylistOrVideoInfo(
-                                playlistURL = "$pool:$query",
-                                downloadPreferences = preferences,
-                            )
-                            .map { it as? PlaylistResult }
-                            .getOrElse { null }
-                            ?.entries
-                            .orEmpty()
-
-                    fun rank(candidates: List<PlaylistEntry>) =
-                        GhostEngine.rankCandidates(
-                                track = track,
-                                candidatesJson = json.encodeToString(candidates),
-                                strictness = RANKING_STRICTNESS.getInt(),
-                            )
-                            .getOrThrow()
-
-                    val musicPool = fetch("ytmsearch5")
-                    val musicBest = if (musicPool.isNotEmpty()) rank(musicPool) else null
-
-                    val best =
-                        if (musicBest == null || musicBest.score < 0.5) {
-                            val widePool = fetch("ytsearch10")
-                            val wideBest = if (widePool.isNotEmpty()) rank(widePool) else null
-                            listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
-                                ?: throw IllegalStateException("no candidates")
-                        } else {
-                            musicBest
-                        }
-                    val url =
-                        best.url.ifBlank {
-                            "https://www.youtube.com/watch?v=" + best.id
-                        }
-                    downloader.enqueue(Task(url = url, preferences = preferences))
-                    queued++
-                }.onFailure { Log.w(TAG, "track skipped: ${track.title}: ${it.message}") }
-            }
-            withContext(Dispatchers.Main) {
-                resetSelectionState()
-                ToastUtil.makeToast(
-                    App.context.getString(R.string.tracks_queued, queued),
+        // Matching used to run here, one blocking yt-dlp search per song with a toast each
+        // time. Now every selected song becomes a task immediately and the queue matches up to
+        // three at a time, with one batch notification.
+        val preferences = DownloadUtil.DownloadPreferences.createFromPreferences()
+        val tracks =
+            action.tracks.mapIndexed { index, track ->
+                Task.TypeInfo.MetadataTrack(
+                    index = index,
+                    provider = action.provider,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    durationMs = track.durationMs,
                 )
             }
-        }
+        val tasks =
+            TaskFactory.createMetadataTasks(
+                provider = action.provider,
+                playlistTitle = action.playlistTitle,
+                batchId = UUID.randomUUID().toString(),
+                tracks = tracks,
+                preferences = preferences,
+            )
+        tasks.forEach(downloader::enqueue)
+        resetSelectionState()
+        ToastUtil.makeToast(App.context.getString(R.string.tracks_queued, tasks.size))
         hideDialog()
     }
 

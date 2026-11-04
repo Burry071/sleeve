@@ -111,5 +111,55 @@ object TaskFactory {
         return taskList
     }
 
+    /**
+     * One task per selected catalogue track. The synthetic URL carries the batch id so repeat
+     * downloads of the same playlist get distinct task ids; matching to YouTube happens later in
+     * DownloaderV2.prepare().
+     */
+    @CheckResult
+    fun createMetadataTasks(
+        provider: String,
+        playlistTitle: String,
+        batchId: String,
+        tracks: List<Task.TypeInfo.MetadataTrack>,
+        preferences: DownloadPreferences,
+    ): List<TaskWithState> {
+        val batch =
+            BatchInfo(id = batchId, title = playlistTitle.ifBlank { provider }, provider = provider)
+        val audioPreferences = preferences.copy(extractAudio = true)
+        return tracks.mapIndexed { position, track ->
+            val metadata = track.copy(index = position)
+            val task =
+                Task(
+                    url = "metadata://$provider/$batchId/$position",
+                    type = metadata,
+                    preferences = audioPreferences,
+                    batch = batch,
+                )
+            val state =
+                Task.State(
+                    downloadState = Idle,
+                    videoInfo = null,
+                    viewState =
+                        Task.ViewState(
+                            url = "",
+                            title = metadata.title,
+                            uploader = metadata.artist,
+                            duration = (metadata.durationMs / 1000L).toInt(),
+                        ),
+                )
+            TaskWithState(task, state)
+        }
+    }
+
+    /** Tag yt-dlp playlist entries with the batch they were launched as. */
+    @CheckResult
+    fun stampBatch(
+        tasks: List<TaskWithState>,
+        preferences: DownloadPreferences,
+        batch: BatchInfo,
+    ): List<TaskWithState> =
+        tasks.map { it.copy(task = it.task.copy(preferences = preferences, batch = batch)) }
+
     data class TaskWithState(val task: Task, val state: Task.State)
 }

@@ -69,6 +69,29 @@ interface DownloaderV2 {
     }
 
     fun remove(task: Task): Boolean
+
+    /** Stop every unfinished song in the batch. */
+    fun cancelBatch(batchId: String) {
+        BatchOps.stopTargets(getTaskStateMap(), batchId).forEach { cancel(it) }
+    }
+
+    /** Retry every canceled or failed song in the batch. */
+    fun resumeBatch(batchId: String) {
+        BatchOps.resumeTargets(getTaskStateMap(), batchId).forEach { restart(it) }
+    }
+
+    /** Stop unfinished songs, drop them and failed/canceled rows, keep completed files. */
+    fun dismissBatch(batchId: String) {
+        val plan = BatchOps.dismissPlan(getTaskStateMap(), batchId)
+        plan.cancel.forEach { cancel(it) }
+        // A song can finish between planning and this loop; re-read its state
+        // so a just-completed card is re-keyed instead of silently dropped.
+        (plan.remove + plan.completed.map { it.first }).forEach { task ->
+            val state = getTaskStateMap()[task]
+            remove(task)
+            if (state?.downloadState is Completed) enqueue(task.copy(batch = null), state)
+        }
+    }
 }
 
 internal object FakeDownloaderV2 : DownloaderV2 {
@@ -132,6 +155,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         scope.launch(Dispatchers.IO) {
             // don't write before we read
             enqueueFromBackup()
+            // A restored batch is all Canceled/Idle, so no state write will
+            // ever reach the notification hooks below. Without this refresh the
+            // ongoing, non-dismissable notification of the killed process would
+            // survive with stale progress: cancel it when nothing is active,
+            // re-post it when the restore left an active song.
+            taskStateMap.keys
+                .mapNotNull { it.batch }
+                .distinctBy { it.id }
+                .forEach { updateBatchNotification(it) }
 
             snapshotFlow
                 .map { state ->
@@ -191,7 +223,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         // A second share/confirm for a task already in flight must not reset it
         // to Idle: the scheduler would start a duplicate transfer over the
         // same output path while the first job keeps running.
-        when (taskStateMap[task]?.downloadState) {
+        when (
+            taskStateMap.entries
+                .firstOrNull { (queued, _) -> queued.isSameWork(task) }
+                ?.value
+                ?.downloadState
+        ) {
             is FetchingInfo,
             is Running,
             ReadyWithInfo -> return
@@ -219,6 +256,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         if (taskStateMap.contains(task)) {
             taskStateMap.remove(task)
             Snapshot.sendApplyNotifications()
+            task.batch?.let { updateBatchNotification(it) }
             return true
         }
         return false
@@ -250,6 +288,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 val prevState = state
                 taskStateMap[this] = prevState.copy(downloadState = value)
                 Snapshot.sendApplyNotifications()
+                batch?.let { updateBatchNotification(it) }
             }
         }
 
@@ -275,6 +314,30 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
     private val Task.notificationId: Int
         get() = id.hashCode()
+
+    /**
+     * One playlist notification per batch. Shown while any song is matching or
+     * downloading, removed as soon as none is — including on stop and dismiss.
+     */
+    private fun updateBatchNotification(batch: BatchInfo) {
+        val notificationId = batch.id.hashCode()
+        val state = BatchOps.notificationState(BatchOps.summary(taskStateMap, batch.id))
+        if (state == null) {
+            NotificationUtil.cancelNotification(notificationId)
+            return
+        }
+        NotificationUtil.notifyBatch(
+            title = batch.title,
+            text =
+                appContext.getString(
+                    R.string.batch_notification_progress,
+                    state.completed,
+                    state.total,
+                ),
+            progress = state.progress,
+            notificationId = notificationId,
+        )
+    }
 
     /**
      * The direct/CDN lane synthesizes [VideoInfo] before any byte is fetched,
@@ -333,6 +396,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         if (downloadState != Idle) return
         if (type is TypeInfo.CustomCommand) {
             execute()
+            return
+        }
+        (type as? TypeInfo.MetadataTrack)?.let { track ->
+            resolveMetadata(track)
             return
         }
         if (
@@ -418,15 +485,67 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 throwable = DownloadErrorMessages.asFriendly(throwable),
                                 action = FetchInfo,
                             )
-                        NotificationUtil.notifyError(
-                            title = viewState.title,
-                            textId = R.string.fetch_info_error_msg,
-                            notificationId = notificationId,
-                            report = throwable.stackTraceToString(),
-                        )
+                        if (usesOwnNotification) {
+                            NotificationUtil.notifyError(
+                                title = viewState.title,
+                                textId = R.string.fetch_info_error_msg,
+                                notificationId = notificationId,
+                                report = throwable.stackTraceToString(),
+                            )
+                        }
                     }
             }
             .also { job -> downloadState = FetchingInfo(job = job, taskId = id) }
+    }
+
+    /**
+     * Metadata songs resolve their YouTube counterpart here instead of in the
+     * sheet. The lifecycle mirrors fetchInfo(): matching is FetchingInfo, and the
+     * ReadyWithInfo write is what wakes the scheduler to start the download.
+     */
+    private fun Task.resolveMetadata(track: TypeInfo.MetadataTrack) {
+        if (downloadState != Idle) return
+        val task = this
+        val job =
+            scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                DownloadUtil.resolveMetadataTrack(
+                        metadata = track,
+                        taskKey = id,
+                        preferences = preferences,
+                        // A cancel or removal flips this false, so matching stops
+                        // before spawning another yt-dlp process.
+                        isActive = {
+                            taskStateMap[task]?.downloadState is Task.DownloadState.FetchingInfo
+                        },
+                    )
+                    .onSuccess { resolved ->
+                        // A cancel can land while the search is finishing; the
+                        // cancel wins and the late result is dropped.
+                        if (downloadState !is FetchingInfo) return@onSuccess
+                        info = resolved
+                        viewState = Task.ViewState.fromVideoInfo(resolved)
+                        downloadState = ReadyWithInfo
+                    }
+                    .onFailure { throwable ->
+                        if (throwable is YoutubeDL.CanceledException) return@onFailure
+                        if (downloadState !is FetchingInfo) return@onFailure
+                        downloadState =
+                            Error(
+                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                action = FetchInfo,
+                            )
+                        if (usesOwnNotification) {
+                            NotificationUtil.notifyError(
+                                title = track.title,
+                                textId = R.string.fetch_info_error_msg,
+                                notificationId = notificationId,
+                                report = throwable.stackTraceToString(),
+                            )
+                        }
+                    }
+            }
+        downloadState = FetchingInfo(job = job, taskId = id)
+        job.start()
     }
 
     private fun Task.download() {
@@ -451,13 +570,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 is Running -> {
                                     downloadState =
                                         preState.copy(progress = progress, progressText = text)
-                                    NotificationUtil.notifyProgress(
-                                        notificationId = notificationId,
-                                        progress = progressPercentage.toInt(),
-                                        text = text,
-                                        title = viewState.title,
-                                        taskId = id,
-                                    )
+                                    if (usesOwnNotification) {
+                                        NotificationUtil.notifyProgress(
+                                            notificationId = notificationId,
+                                            progress = progressPercentage.toInt(),
+                                            text = text,
+                                            title = viewState.title,
+                                            taskId = id,
+                                        )
+                                    }
                                 }
                                 else -> {}
                             }
@@ -483,13 +604,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                         is Running -> {
                                             downloadState =
                                                 preState.copy(progress = progress, progressText = text)
-                                            NotificationUtil.notifyProgress(
-                                                notificationId = notificationId,
-                                                progress = progressPercentage.toInt(),
-                                                text = text,
-                                                title = viewState.title,
-                                                taskId = id,
-                                            )
+                                            if (usesOwnNotification) {
+                                                NotificationUtil.notifyProgress(
+                                                    notificationId = notificationId,
+                                                    progress = progressPercentage.toInt(),
+                                                    text = text,
+                                                    title = viewState.title,
+                                                    taskId = id,
+                                                )
+                                            }
                                         }
 
                                         else -> {}
@@ -502,26 +625,28 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         downloadState = Completed(pathList.firstOrNull())
                         pathList.firstOrNull()?.let { enrichWithCompletedFile(it) }
 
-                        val text =
-                            appContext.getString(
-                                if (pathList.isEmpty()) R.string.status_completed
-                                else R.string.download_finish_notification
-                            )
-                        FileUtil.createIntentForOpeningFile(pathList.firstOrNull()).run {
-                            NotificationUtil.finishNotification(
-                                notificationId,
-                                title = viewState.title,
-                                text = text,
-                                intent =
-                                    if (this != null)
-                                        PendingIntent.getActivity(
-                                            appContext,
-                                            0,
-                                            this,
-                                            PendingIntent.FLAG_IMMUTABLE,
-                                        )
-                                    else null,
-                            )
+                        if (usesOwnNotification) {
+                            val text =
+                                appContext.getString(
+                                    if (pathList.isEmpty()) R.string.status_completed
+                                    else R.string.download_finish_notification
+                                )
+                            FileUtil.createIntentForOpeningFile(pathList.firstOrNull()).run {
+                                NotificationUtil.finishNotification(
+                                    notificationId,
+                                    title = viewState.title,
+                                    text = text,
+                                    intent =
+                                        if (this != null)
+                                            PendingIntent.getActivity(
+                                                appContext,
+                                                0,
+                                                this,
+                                                PendingIntent.FLAG_IMMUTABLE,
+                                            )
+                                        else null,
+                                )
+                            }
                         }
                     }
                     .onFailure { throwable ->
@@ -533,12 +658,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 throwable = DownloadErrorMessages.asFriendly(throwable),
                                 action = Download,
                             )
-                        NotificationUtil.notifyError(
-                            title = viewState.title,
-                            textId = R.string.download_error_msg,
-                            notificationId = notificationId,
-                            report = throwable.stackTraceToString(),
-                        )
+                        if (usesOwnNotification) {
+                            NotificationUtil.notifyError(
+                                title = viewState.title,
+                                textId = R.string.download_error_msg,
+                                notificationId = notificationId,
+                                report = throwable.stackTraceToString(),
+                            )
+                        }
                     }
             }
             .also { job ->
@@ -558,7 +685,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         DownloadUtil.cancelGhostTask(preState.taskId) ||
                         DownloadUtil.cancelNm3u8DlRe(preState.taskId)
                 preState.job.cancel()
-                NotificationUtil.cancelNotification(notificationId)
+                if (usesOwnNotification) {
+                    NotificationUtil.cancelNotification(notificationId)
+                }
                 // If the worker finished between the snapshot above and now,
                 // keep its terminal state instead of overwriting it with
                 // Canceled.
