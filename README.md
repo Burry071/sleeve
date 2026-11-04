@@ -92,6 +92,42 @@ first. Release notes and older versions are on the
 Also available on the
 [Orion Store](https://rookieenough.github.io/Orion-Data/app/?id=sleeve).
 
+## Verify the APK you downloaded
+
+Releases are signed with the project certificate `CN=Sleeve, O=Burry071`. To
+check that a file is the APK this repository published and not a
+re-packed copy:
+
+```bash
+sha256sum Sleeve-generic-release.apk
+# 2.0.0-beta.10: 4f515709e27bb1e0444fa60816c0328e4db81d0ef4f59d12181c8cac95e32d93
+
+apksigner verify --print-certs Sleeve-generic-release.apk
+# Signer #1 certificate DN: CN=Sleeve, O=Burry071
+# Signer #1 certificate SHA-256 digest:
+# 2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3
+```
+
+On Windows, `Get-FileHash Sleeve-generic-release.apk -Algorithm SHA256`
+produces the same hash. The hash changes with every release, so compare it
+against the `SHA256SUMS` asset attached to that release rather than against
+the example above. The certificate digest must never change.
+
+The repository also carries a read-only verifier that checks the release
+asset, its size and SHA-256, the Orion mirror entry, the package name, the
+version code and the signer, and can download the APK in one step:
+
+```bash
+python scripts/verify_release.py --channel beta --download ./apk-out
+```
+
+See `python scripts/verify_release.py --help` for the pinning options
+(`--expect-tag`, `--expect-sha256`, `--expect-version-code`, `--expect-cert`).
+Package and signer checks use `aapt`/`apksigner` from `ANDROID_HOME` or
+`ANDROID_SDK_ROOT` build-tools, or from `PATH`; when a tool is missing, or
+`apksigner` cannot start because no JDK is configured, the verifier reports a
+warning that says the check was skipped instead of passing it.
+
 ## FAQ
 
 **Is Sleeve free?**
