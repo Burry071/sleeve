@@ -28,9 +28,13 @@
         </intent>
     </queries>
 
+    <!-- Platform backup is off: the Room database holds site session cookies,
+         and a cloud or device-transfer restore would carry those credentials
+         onto another device. The in-app Export/Import backup is the supported
+         way to move data. -->
     <application
         android:name=".App"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
