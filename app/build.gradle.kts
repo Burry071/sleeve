@@ -55,7 +55,7 @@ android {
         applicationId = "com.sleeve.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 200_000_310
+        versionCode = 201_000_210
         check(versionCode == currentVersionCode)
 
         versionName = baseVersionName
