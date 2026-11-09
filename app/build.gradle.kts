@@ -1,6 +1,5 @@
 @file:Suppress("UnstableApiUsage")
 
-import com.android.build.api.variant.FilterConfiguration
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -20,8 +19,6 @@ val keystorePropertiesFile: File = rootProject.file("keystore.properties")
 val splitApks = !project.hasProperty("noSplits")
 
 val abiFilterList = (properties["ABI_FILTERS"] as String).split(';')
-
-val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86" to 3, "x86_64" to 4)
 
 val baseVersionName = currentVersion.name
 val currentVersionCode = currentVersion.code.toInt()
@@ -82,27 +79,7 @@ android {
     room { schemaDirectory("$projectDir/schemas") }
     ksp { arg("room.incremental", "true") }
 
-    androidComponents {
-        onVariants { variant ->
-            variant.outputs.forEach { output ->
-                val name =
-                    if (splitApks) {
-                        output.filters
-                            .find { it.filterType == FilterConfiguration.FilterType.ABI }
-                            ?.identifier
-                    } else {
-                        abiFilterList.firstOrNull()
-                    }
-
-                val baseAbiCode = abiCodes[name]
-
-                if (baseAbiCode != null) {
-                    output.versionCode.set(baseAbiCode + (output.versionCode.get() ?: 0))
-                }
-            }
-        }
-    }
-
+    // One versionCode for every ABI artifact: switching artifacts must never look like a downgrade.
     buildTypes {
         release {
             isMinifyEnabled = true

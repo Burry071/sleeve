@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preflight guard for a Sleeve release tag.
 
-Runs before CI builds anything and proves four things that the old pipeline
+Runs before CI builds anything and proves five things that the old pipeline
 only assumed:
 
 1. the tag matches ``currentVersion.name`` in ``Version.kt``;
@@ -9,11 +9,16 @@ only assumed:
 3. the new shipped version code is strictly greater than every code already
    distributed (recorded in ``release-record.json``);
 4. every live GitHub release is present in the record, so the record cannot
-   silently fall behind.
+   silently fall behind;
+5. the fastlane changelog for the new version code exists and is not empty.
 
-It never publishes, uploads, tags, deletes or edits anything. ``--print-cert``
-and ``--print-shipped-code`` let the release job reuse the same arithmetic
-instead of duplicating it in YAML.
+Every artifact of one release ships the same versionCode (the ABI is not
+encoded in it), so ``--print-shipped-code`` prints one ``abi=code`` line per
+configured ABI with identical codes.
+
+It never publishes, uploads, tags, deletes or edits anything. ``--print-cert``,
+``--print-shipped-code`` and ``--print-previous-code`` let the release job
+reuse the same arithmetic instead of duplicating it in YAML.
 
 Fail-safe by default: a missing or stale record, an unreachable live release
 list, or any disagreement exits non-zero. ``--allow-offline`` downgrades only
@@ -47,8 +52,9 @@ DEFAULT_VERSION_FILE = "buildSrc/src/main/kotlin/Version.kt"
 DEFAULT_GRADLE_FILE = "app/build.gradle.kts"
 DEFAULT_RECORD = "release-record.json"
 DEFAULT_ABI_FILTERS = "arm64-v8a;x86_64"
+DEFAULT_CHANGELOG_DIR = "fastlane/metadata/android/en-US/changelogs"
 
-ABI_CODES = {"armeabi-v7a": 1, "arm64-v8a": 2, "x86": 3, "x86_64": 4}
+KNOWN_ABIS = ("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 MAJOR = 100_000_000
 MINOR = 1_000_000
 PATCH = 10_000
@@ -145,18 +151,36 @@ def parse_gradle_version_code(text: str) -> int:
 def compute_shipped_codes(
     base_code: int, abi_filters: str, split_apks: bool
 ) -> dict[str, int]:
-    """Return the APK versionCode each configured ABI would carry."""
+    """Return the APK versionCode each configured ABI would carry.
+
+    One release, one versionCode: the ABI only selects which artifact is
+    built, it is never added to the code. Staggered per-ABI codes make a
+    user who switches artifacts look like a downgrade to the installer.
+    """
     abis = [part.strip() for part in abi_filters.split(";") if part.strip()]
     if not abis:
         raise GuardError("ABI filter list is empty")
-    unknown = [abi for abi in abis if abi not in ABI_CODES]
+    unknown = [abi for abi in abis if abi not in KNOWN_ABIS]
     if unknown:
         raise GuardError("unknown ABI(s): " + ", ".join(unknown))
-    if split_apks:
-        return {abi: base_code + ABI_CODES[abi] for abi in abis}
-    # A no-splits APK takes the offset of the first ABI in the list.
-    first = abis[0]
-    return {first: base_code + ABI_CODES[first]}
+    # A no-splits build produces one APK for the whole filter list.
+    selected = abis if split_apks else abis[:1]
+    return {abi: base_code for abi in selected}
+
+
+def check_changelog(path: str, code: int) -> list[Issue]:
+    """The fastlane changelog for ``code`` must exist and carry text."""
+    if not os.path.isfile(path):
+        return [
+            Issue(
+                "fail",
+                f"fastlane changelog missing: {path} (required for versionCode {code})",
+            )
+        ]
+    text = _read(path).strip()
+    if not text:
+        return [Issue("fail", f"fastlane changelog is empty: {path}")]
+    return [Issue("ok", f"fastlane changelog present: {path} ({len(text)} chars)")]
 
 
 def empty_record(repo: str = DEFAULT_REPO) -> dict[str, Any]:
@@ -450,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python scripts/release_guard.py --tag v2.0.0-beta.11\n"
             "  python scripts/release_guard.py --tag v2.0.0-beta.11 --allow-offline\n"
             "  python scripts/release_guard.py --print-shipped-code --no-split-apks\n"
+            "  python scripts/release_guard.py --print-previous-code\n"
         ),
     )
     parser.add_argument("--tag", help="tag being released (e.g. v2.0.0-beta.11)")
@@ -458,6 +483,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gradle-file", default=DEFAULT_GRADLE_FILE)
     parser.add_argument("--record", default=DEFAULT_RECORD)
     parser.add_argument("--abi-filters", default=DEFAULT_ABI_FILTERS)
+    parser.add_argument(
+        "--changelog-dir", default=DEFAULT_CHANGELOG_DIR, help="fastlane changelog directory"
+    )
     parser.add_argument(
         "--split-apks",
         action=argparse.BooleanOptionalAction,
@@ -485,6 +513,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the shipped version code(s) for the configured ABIs and exit",
     )
+    parser.add_argument(
+        "--print-previous-code",
+        action="store_true",
+        help="print the highest distributed versionCode in the release record and exit",
+    )
     return parser
 
 
@@ -497,6 +530,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             if cert is None:
                 raise GuardError(f"no signing certificate recorded in {args.record}")
             print(cert)
+            return 0
+
+        if args.print_previous_code:
+            highest, _owner = highest_distributed_code(load_record(args.record))
+            print(highest)
             return 0
 
         version = parse_version_kt(_read(args.version_file))
@@ -527,6 +565,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Sleeve release guard  tag={args.tag}  repo={args.repo}")
         print()
         issues = check_release(args.tag, version, gradle_code, codes, record, live_tags)
+        issues += check_changelog(
+            os.path.join(args.changelog_dir, f"{version.code}.txt"), version.code
+        )
         for issue in issues:
             print(f"{issue.level.upper():4}  {issue.message}")
         failures = [issue for issue in issues if issue.level == "fail"]

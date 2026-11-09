@@ -208,7 +208,7 @@ class DiscoveryTests(unittest.TestCase):
 class AssetTests(unittest.TestCase):
     def test_prefers_generic_name_without_abi(self):
         chosen = verify.pick_asset(
-            [asset("Sleeve-arm64-v8a-release.apk"), asset()], None
+            [asset("Sleeve-arm64-release.apk"), asset()], None
         )
         self.assertEqual(chosen["name"], "Sleeve-generic-release.apk")
 
@@ -218,6 +218,27 @@ class AssetTests(unittest.TestCase):
             "x86_64",
         )
         self.assertEqual(chosen["name"], "Sleeve-x86_64-release.apk")
+
+    def test_arm64_abi_selects_abbreviated_asset_name(self):
+        # The per-ABI artifact is Sleeve-arm64-release.apk, not arm64-v8a.
+        chosen = verify.pick_asset(
+            [
+                asset("Sleeve-generic-release.apk"),
+                asset("Sleeve-arm64-release.apk"),
+                asset("Sleeve-x86_64-release.apk"),
+            ],
+            "arm64-v8a",
+        )
+        self.assertEqual(chosen["name"], "Sleeve-arm64-release.apk")
+
+    def test_arm64_token_does_not_match_x86_64_or_generic(self):
+        chosen = verify.pick_asset(
+            [asset("Sleeve-generic-release.apk"), asset("Sleeve-x86_64-release.apk")],
+            "arm64-v8a",
+        )
+        # No arm64 artifact attached: fall back to the universal one rather
+        # than handing back an artifact the device cannot run.
+        self.assertEqual(chosen["name"], "Sleeve-generic-release.apk")
 
     def test_incomplete_upload_is_skipped(self):
         log, _ = make_log()
@@ -240,20 +261,41 @@ class AssetTests(unittest.TestCase):
         selected, _ = verify.choose_candidate([candidate], None, log)
         self.assertIsNone(selected)
 
+    def test_warns_when_arm64_asset_is_missing(self):
+        # README's default download link points at Sleeve-arm64-release.apk.
+        log, stream = make_log()
+        candidate = verify.Candidate(
+            "v2.0.0-beta.10",
+            verify.parse_version("v2.0.0-beta.10"),
+            release("v2.0.0-beta.10", [asset()]),
+        )
+        verify.choose_candidate([candidate], None, log)
+        self.assertIn("Sleeve-arm64-release.apk", stream.getvalue())
+        self.assertNotIn("no asset name matches ABI", stream.getvalue())
+
+    def test_abi_request_satisfied_by_abbreviated_name_is_not_warned(self):
+        log, stream = make_log()
+        candidate = verify.Candidate(
+            "v2.0.0-beta.10",
+            verify.parse_version("v2.0.0-beta.10"),
+            release(
+                "v2.0.0-beta.10",
+                [asset("Sleeve-generic-release.apk"), asset("Sleeve-arm64-release.apk")],
+            ),
+        )
+        _, chosen = verify.choose_candidate([candidate], "arm64-v8a", log)
+        self.assertEqual(chosen["name"], "Sleeve-arm64-release.apk")
+        self.assertNotIn("no asset name matches ABI", stream.getvalue())
+
 
 class VersionCodeTests(unittest.TestCase):
-    def test_inverts_arm64_offset(self):
-        self.assertEqual(
-            verify.derive_version_code_parts(200000302), (200000300, "arm64-v8a")
-        )
+    def test_shipped_code_is_the_base_code(self):
+        self.assertEqual(verify.derive_version_code_parts(201000210), (201000210, None))
 
-    def test_inverts_x86_64_offset(self):
-        self.assertEqual(
-            verify.derive_version_code_parts(200000304), (200000300, "x86_64")
-        )
-
-    def test_unknown_offset_returns_none(self):
-        self.assertEqual(verify.derive_version_code_parts(200000300), (None, None))
+    def test_old_abi_offset_is_not_reinterpreted(self):
+        # A code that used to be arm64's offset (+2) is now just a stale code,
+        # never silently folded back to a base + ABI pair.
+        self.assertEqual(verify.derive_version_code_parts(201000212), (201000212, None))
 
 
 class DownloadTests(unittest.TestCase):
@@ -479,7 +521,7 @@ class RecordTests(unittest.TestCase):
         with open(path, "r", encoding="utf-8") as handle:
             saved = json.load(handle)
         self.assertEqual(saved["releases"][0]["tag"], "v2.0.0-beta.11")
-        self.assertEqual(saved["releases"][0]["base_version_code"], 200000310)
+        self.assertEqual(saved["releases"][0]["base_version_code"], 200000312)
         self.assertEqual(saved["releases"][0]["shipped_version_code"], 200000312)
         self.assertEqual(saved["releases"][0]["sha256"], "2" * 64)
 
