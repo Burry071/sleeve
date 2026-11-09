@@ -471,17 +471,14 @@ private val VIDEO_FIRST_HOSTS: Regex =
         }
     }
 
-    private fun cancel(): Boolean {
-        return when (val state = sheetState) {
-            is SheetState.Loading -> {
-                val res = YoutubeDL.destroyProcessById(id = state.taskKey)
-                if (res) {
-                    state.job.cancel()
-                }
-                return res
-            }
-            else -> false
+    private fun cancel() {
+        val state = sheetState as? SheetState.Loading ?: return
+        // Gallery, Spotify, and Audible resolve without a process, so killing one
+        // is best-effort; the job cancel is what actually stops every lane.
+        if (ResolveTaskKeys.isProcessBacked(state.taskKey)) {
+            YoutubeDL.destroyProcessById(id = state.taskKey)
         }
+        state.job.cancel()
     }
 
     private fun resetSelectionState() {

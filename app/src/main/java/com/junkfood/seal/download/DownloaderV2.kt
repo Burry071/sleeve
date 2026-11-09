@@ -120,6 +120,13 @@ internal object FakeDownloaderV2 : DownloaderV2 {
  *     - Custom commands
  *     - States for ViewModels
  */
+/**
+ * Deleting a live task must stop its worker first. Dropping the map entry alone
+ * left the job running invisibly and its notification with nothing to clear it.
+ */
+internal fun needsCancelBeforeRemoval(state: Task.State): Boolean =
+    state.downloadState is DownloadState.Cancelable
+
 @OptIn(FlowPreview::class)
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -254,6 +261,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      */
     override fun remove(task: Task): Boolean {
         if (taskStateMap.contains(task)) {
+            if (needsCancelBeforeRemoval(task.state)) task.cancelImpl()
             taskStateMap.remove(task)
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }
