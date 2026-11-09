@@ -28,10 +28,26 @@ automated release.
    - Operational meaning: Orion must never be able to point at a release or asset that no longer resolves.
 10. retain the previous working release as a recovery option;
     - Operational meaning: the last known-good release remains published and downloadable.
-11. record version, version code, commit, APK SHA-256, signing certificate fingerprint, asset URL;
+11. record version, version code, commit, every published artifact's APK SHA-256, signing certificate fingerprint, asset URL;
     - Operational meaning: every release has a durable record sufficient to audit and re-verify it.
 12. do not claim a release successful until the actual distribution path is verified.
     - Operational meaning: success means an end-to-end fetch through the real distribution path.
+
+## Release artifacts
+
+Every tag ships three signed standalone APKs:
+
+| Asset | ABIs | Used by |
+|---|---|---|
+| `Sleeve-arm64-release.apk` | arm64-v8a | most phones; the README default download |
+| `Sleeve-x86_64-release.apk` | x86_64 | x86_64 devices and emulators |
+| `Sleeve-generic-release.apk` | arm64-v8a + x86_64 | one file for either device (larger) |
+
+All three carry the **same versionCode** for the release and the same signing
+certificate. The ABI is never encoded in the versionCode: an installer rejects
+an APK whose code is lower than the installed one, so staggering codes per ABI
+would make switching artifacts look like a downgrade. Each release attaches all
+three APKs plus `SHA256SUMS`.
 
 ## Release asset URL and the Orion mirror
 
@@ -79,28 +95,28 @@ exact tag the mirror selects.
 
 - [ ] Version code is monotonic. Base `versionCode` in `app/build.gradle.kts` equals `currentVersion.code`
       (`check(versionCode == currentVersionCode)`); it must exceed the highest previously distributed code
-      on every channel.
-- [ ] ABI offsets accounted for. Split builds add `armeabi-v7a` +1, `arm64-v8a` +2, `x86` +3, `x86_64` +4.
-      No-splits builds add the offset of the first ABI in `ABI_FILTERS` (CI uses `arm64-v8a;x86_64`, so +2).
-      The new base code plus the lowest offset must still exceed the previous base code plus the highest
-      offset actually distributed.
+      on every channel, including the per-ABI offsets used before the flat scheme.
+- [ ] One versionCode for every artifact. No ABI offset is added anywhere; the arm64, x86_64 and universal
+      APKs must badge the same code. CI enforces this with `scripts/apk_gate.py` on the built bytes.
 - [ ] Git tag matches `currentVersion.name` in `buildSrc/src/main/kotlin/Version.kt`
       (tag `vX.Y.Z[-pre.N]` ↔ version name `X.Y.Z[-pre.N]`).
-- [ ] APK exists and is non-zero: release artifact present under
-      `app/build/outputs/apk/generic/release/*.apk` and the published asset `Sleeve-generic-release.apk`
-      has non-zero size.
+- [ ] Fastlane changelog exists and is not empty:
+      `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`. CI fails the release without it.
+- [ ] Each APK exists and is non-zero: `dist/Sleeve-arm64-release.apk`, `dist/Sleeve-x86_64-release.apk`,
+      `dist/Sleeve-generic-release.apk` all present and non-empty.
 - [ ] Package metadata verified: `applicationId` is `com.sleeve.app`, `versionName`/`versionCode` as intended,
       APK installs on a device or emulator.
-- [ ] APK SHA-256 and signing certificate fingerprint recorded (SHA-256 of the APK file; SHA-256 fingerprint
-      of the signing certificate), together with version, version code, commit and asset URL.
-- [ ] Asset URL verified: the release asset download URL redirects (302) to storage and resolves to 200,
-      supports `Accept-Ranges` and answers a range request with 206.
-- [ ] Orion mirror entry points at an existing asset of this release (correct tag, correct asset name),
-      and the asset URL resolves.
+- [ ] APK SHA-256 and signing certificate fingerprint recorded for every artifact (SHA-256 of each APK file;
+      SHA-256 fingerprint of the signing certificate), together with version, version code, commit and
+      asset URLs.
+- [ ] Asset URL verified for every published asset: each download URL redirects (302) to storage and resolves
+      to 200, supports `Accept-Ranges` and answers a range request with 206.
+- [ ] Orion mirror entry points at an existing asset of this release (correct tag, correct asset name —
+      currently the universal `Sleeve-generic-release.apk`), and the asset URL resolves.
 - [ ] Previous working release retained and still downloadable as the recovery option.
 
-Recorded per release (rule 11): version, version code, commit, APK SHA-256, signing certificate
-fingerprint, asset URL.
+Recorded per release (rule 11): version, version code, commit, the APK SHA-256 of every published artifact,
+signing certificate fingerprint, asset URLs.
 
 ## Signing identity
 

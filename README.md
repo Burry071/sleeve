@@ -83,12 +83,24 @@ third-party mirrors are not checked by anyone.
 
 ## Download
 
-[![Download APK](https://img.shields.io/badge/Download_APK-latest-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk)
+[![Download APK](https://img.shields.io/badge/Download_APK-latest-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-arm64-release.apk)
 
-Direct, signed APK (arm64-v8a + x86_64, Android 7.0+). The button always
+Direct, signed APK for most phones (arm64-v8a, Android 7.0+). The button always
 serves the current release, so there is no need to open the releases page
 first. Release notes and older versions are on the
 [releases page](https://github.com/Burry071/sleeve/releases).
+
+Each release ships three APKs; pick the one that matches your device:
+
+| Device | File |
+| --- | --- |
+| Most phones (arm64-v8a) | [`Sleeve-arm64-release.apk`](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-arm64-release.apk) — the default download |
+| x86_64 devices and emulators | [`Sleeve-x86_64-release.apk`](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-x86_64-release.apk) |
+| Either of the above | [`Sleeve-generic-release.apk`](https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk) (arm64-v8a + x86_64, larger) |
+
+All three carry the same versionCode and the same signing certificate, so
+switching between them or updating from one to another is never treated as a
+downgrade.
 
 Also available on the
 [Orion Store](https://rookieenough.github.io/Orion-Data/app/?id=sleeve).
@@ -100,19 +112,19 @@ check that a file is the APK this repository published and not a
 re-packed copy:
 
 ```bash
-sha256sum Sleeve-generic-release.apk
-# 2.0.0-beta.10: 4f515709e27bb1e0444fa60816c0328e4db81d0ef4f59d12181c8cac95e32d93
+apk=Sleeve-arm64-release.apk
+sha256sum "$apk"
+# compare the digest with the matching line in SHA256SUMS from the same release
 
-apksigner verify --print-certs Sleeve-generic-release.apk
+apksigner verify --print-certs "$apk"
 # Signer #1 certificate DN: CN=Sleeve, O=Burry071
 # Signer #1 certificate SHA-256 digest:
 # 2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3
 ```
 
-On Windows, `Get-FileHash Sleeve-generic-release.apk -Algorithm SHA256`
-produces the same hash. The hash changes with every release, so compare it
-against the `SHA256SUMS` asset attached to that release rather than against
-the example above. The certificate digest must never change.
+On Windows, `Get-FileHash $apk -Algorithm SHA256` produces the same hash. The
+APK hash changes with every release, so compare it against the `SHA256SUMS`
+asset attached to that release. The certificate digest must never change.
 
 The repository also carries a read-only verifier that checks the release
 asset, its size and SHA-256, the Orion mirror entry, the package name, the
@@ -123,7 +135,8 @@ python scripts/verify_release.py --channel beta --download ./apk-out
 ```
 
 See `python scripts/verify_release.py --help` for the pinning options
-(`--expect-tag`, `--expect-sha256`, `--expect-version-code`, `--expect-cert`).
+(`--expect-tag`, `--expect-sha256`, `--expect-version-code`, `--expect-cert`,
+`--abi arm64-v8a` or `--abi x86_64` to pick a specific artifact).
 Package and signer checks use `aapt`/`apksigner` from `ANDROID_HOME` or
 `ANDROID_SDK_ROOT` build-tools, or from `PATH`; when a tool is missing, or
 `apksigner` cannot start because no JDK is configured, the verifier reports a
