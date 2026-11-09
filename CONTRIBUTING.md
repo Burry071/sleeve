@@ -64,6 +64,25 @@ builds are signed only when `keystore.properties` exists at the repository
 root; see [SIGNING.md](SIGNING.md). The debug package installs alongside the
 release package, so you can test without replacing your installed build.
 
+## Translating
+
+Sleeve's source text lives in `app/src/main/res/values/strings.xml`, and each
+translation is a sibling folder such as `values-de` or `values-zh-rCN` with its
+own `strings.xml`. Translations arrive as pull requests; there is no separate
+translation site to sign up for.
+
+1. Find the folder for your language. If there is none, create one and copy
+   `values/strings.xml` into it as `strings.xml`.
+2. Translate the text between the tags. Leave the `name` attributes, the XML
+   structure, and placeholders such as `%1$s` and `%d` as they are, and skip
+   entries marked `translatable="false"`.
+3. Open a pull request that touches only translation files.
+
+Any entry you leave untranslated falls back to English, so a partial
+translation is useful. CI compiles the resources, so a malformed file fails
+before merge. If a string's meaning is unclear, ask in the pull request instead
+of guessing.
+
 ## How changes are accepted
 
 - Work on a feature branch and keep one concern in it. A fix and a refactor
