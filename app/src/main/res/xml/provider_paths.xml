@@ -10,4 +10,7 @@
     <external-path name="downloads" path="Download/Sleeve/" />
     <!-- Private mode writes here; without this root those files cannot be opened or shared. -->
     <external-path name="private_downloads" path="Download/.Seal/" />
+    <!-- Staging copies for custom download folders outside every other root.
+         FileUtil stages on demand and purges old copies. -->
+    <files-path name="share" path="share/" />
 </paths>

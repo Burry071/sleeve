@@ -501,17 +501,17 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 return@onFailure
                             }
                         }
-                        task.downloadState =
-                            Error(
-                                throwable = DownloadErrorMessages.asFriendly(throwable),
-                                action = FetchInfo,
-                            )
+                        val friendly = DownloadErrorMessages.asFriendly(throwable)
+                        task.downloadState = Error(throwable = friendly, action = FetchInfo)
                         if (usesOwnNotification) {
                             NotificationUtil.notifyError(
                                 title = viewState.title,
                                 textId = R.string.fetch_info_error_msg,
                                 notificationId = notificationId,
                                 report = throwable.stackTraceToString(),
+                                url = url,
+                                withCookieRetry =
+                                    friendly is DownloadErrorMessages.LoginRequiredError,
                             )
                         }
                     }
@@ -652,39 +652,38 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                     if (pathList.isEmpty()) R.string.status_completed
                                     else R.string.download_finish_notification
                                 )
-                            FileUtil.createIntentForOpeningFile(pathList.firstOrNull()).run {
-                                NotificationUtil.finishNotification(
-                                    notificationId,
-                                    title = viewState.title,
-                                    text = text,
-                                    intent =
-                                        if (this != null)
-                                            PendingIntent.getActivity(
-                                                appContext,
-                                                0,
-                                                this,
-                                                PendingIntent.FLAG_IMMUTABLE,
-                                            )
-                                        else null,
+                            // Never a dead notification: the tap opens the file
+                            // when possible and the app otherwise.
+                            val tapIntent =
+                                PendingIntent.getActivity(
+                                    appContext,
+                                    0,
+                                    FileUtil.createNotificationTapIntent(pathList.firstOrNull()),
+                                    PendingIntent.FLAG_IMMUTABLE,
                                 )
-                            }
+                            NotificationUtil.finishNotification(
+                                notificationId,
+                                title = viewState.title,
+                                text = text,
+                                intent = tapIntent,
+                            )
                         }
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
-                        downloadState =
-                            Error(
-                                throwable = DownloadErrorMessages.asFriendly(throwable),
-                                action = Download,
-                            )
+                        val friendly = DownloadErrorMessages.asFriendly(throwable)
+                        downloadState = Error(throwable = friendly, action = Download)
                         if (usesOwnNotification) {
                             NotificationUtil.notifyError(
                                 title = viewState.title,
                                 textId = R.string.download_error_msg,
                                 notificationId = notificationId,
                                 report = throwable.stackTraceToString(),
+                                url = url,
+                                withCookieRetry =
+                                    friendly is DownloadErrorMessages.LoginRequiredError,
                             )
                         }
                     }

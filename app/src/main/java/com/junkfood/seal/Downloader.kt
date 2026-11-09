@@ -412,22 +412,19 @@ object Downloader {
                         if (it.isEmpty()) R.string.status_completed
                         else R.string.download_finish_notification
                     )
-                FileUtil.createIntentForOpeningFile(it.firstOrNull()).run {
-                    NotificationUtil.finishNotification(
-                        notificationId,
-                        title = videoInfo.title,
-                        text = text,
-                        intent =
-                            if (this != null)
-                                PendingIntent.getActivity(
-                                    context,
-                                    0,
-                                    this,
-                                    PendingIntent.FLAG_IMMUTABLE,
-                                )
-                            else null,
+                val tapIntent =
+                    PendingIntent.getActivity(
+                        context,
+                        0,
+                        FileUtil.createNotificationTapIntent(it.firstOrNull()),
+                        PendingIntent.FLAG_IMMUTABLE,
                     )
-                }
+                NotificationUtil.finishNotification(
+                    notificationId,
+                    title = videoInfo.title,
+                    text = text,
+                    intent = tapIntent,
+                )
             }
     }
 
@@ -565,7 +562,10 @@ object Downloader {
         applicationScope.launch(Dispatchers.IO) { DownloadUtil.executeCommandInBackground(url) }
 
     fun openDownloadResult() {
-        if (taskState.value.progress == 100f) FileUtil.openFileFromResult(downloadResultTemp)
+        if (taskState.value.progress != 100f) return
+        applicationScope.launch(Dispatchers.Main) {
+            FileUtil.openFileFromResult(downloadResultTemp)
+        }
     }
 
     fun onProcessStarted() = mutableProcessCount.update { it + 1 }

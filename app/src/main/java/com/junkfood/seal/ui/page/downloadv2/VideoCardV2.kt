@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -49,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -647,25 +650,40 @@ fun ListItemStateText(
     }
 }
 
-/** Inline retry action rendered on failed task cards. */
+/**
+ * Inline retry action rendered on failed task cards. A login-walled failure
+ * also offers the cookie route, so recovery does not require re-sharing the
+ * link.
+ */
 @Composable
-fun ErrorFooter(modifier: Modifier = Modifier, onRetry: () -> Unit) {
-    FilledTonalButton(
-        onClick = onRetry,
-        modifier = modifier,
-        colors =
-            ButtonDefaults.filledTonalButtonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.RestartAlt,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(text = stringResource(R.string.retry))
+fun ErrorFooter(
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit,
+    onRetryWithCookies: (() -> Unit)? = null,
+) {
+    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
+        FilledTonalButton(
+            onClick = onRetry,
+            modifier = Modifier,
+            colors =
+                ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.RestartAlt,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(text = stringResource(R.string.retry))
+        }
+        onRetryWithCookies?.let {
+            TextButton(onClick = it, modifier = Modifier) {
+                Text(text = stringResource(R.string.retry_with_cookies))
+            }
+        }
     }
 }
 

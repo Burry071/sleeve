@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -52,6 +53,7 @@ import com.junkfood.seal.ui.component.SealModalBottomSheetM2
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.ToastUtil
+import kotlinx.coroutines.launch
 
 @Composable
 fun VideoDetailDrawer(
@@ -65,6 +67,7 @@ fun VideoDetailDrawer(
     val view = LocalView.current
     val context = LocalContext.current
     val hapticFeedback = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     BackHandler(sheetState.targetValue == ModalBottomSheetValue.Expanded) { onDismissRequest() }
 
     val onReDownload =
@@ -103,8 +106,13 @@ fun VideoDetailDrawer(
             },
             onShareFile = {
                 view.slightHapticFeedback()
-                FileUtil.createIntentForSharingFile(videoPath)?.runCatching {
-                    context.startActivity(Intent.createChooser(this, shareTitle))
+                scope.launch {
+                    val intent = FileUtil.createIntentForSharingFile(videoPath)
+                    if (intent != null) {
+                        context.startActivity(Intent.createChooser(intent, shareTitle))
+                    } else {
+                        ToastUtil.makeToast(R.string.file_unavailable)
+                    }
                 }
             },
         )

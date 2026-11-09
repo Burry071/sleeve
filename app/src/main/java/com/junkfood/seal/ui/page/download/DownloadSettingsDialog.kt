@@ -89,7 +89,7 @@ import com.junkfood.seal.util.EXTRACT_AUDIO
 import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.FORMAT_SORTING
 import com.junkfood.seal.util.FileUtil
-import com.junkfood.seal.util.FileUtil.getCookiesFile
+import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.PLAYLIST
 import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PreferenceUtil
@@ -229,7 +229,7 @@ fun DownloadSettingDialog(
     LaunchedEffect(showCookiesDialog) {
         withContext(Dispatchers.IO) {
             DownloadUtil.getCookiesContentFromDatabase().getOrNull()?.let {
-                FileUtil.writeContentToFile(it, context.getCookiesFile())
+                FileUtil.writeContentToFile(it, context.getCookieFile())
             }
         }
     }

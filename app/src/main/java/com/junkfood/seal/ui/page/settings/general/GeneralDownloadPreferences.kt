@@ -16,6 +16,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.ContentPasteOff
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
@@ -82,6 +84,7 @@ import com.junkfood.seal.ui.component.PreferenceSwitchWithDivider
 import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
+import com.junkfood.seal.util.CLIPBOARD_QUICK_DOWNLOAD
 import com.junkfood.seal.util.CONFIGURE
 import com.junkfood.seal.util.CUSTOM_COMMAND
 import com.junkfood.seal.util.DEBUG
@@ -122,6 +125,9 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
 
     var displayErrorReport by DEBUG.booleanState
     var downloadPlaylist by remember { mutableStateOf(PLAYLIST.getBoolean()) }
+    var clipboardQuickDownload by remember {
+        mutableStateOf(CLIPBOARD_QUICK_DOWNLOAD.getBoolean())
+    }
     var isSponsorBlockEnabled by remember { mutableStateOf(SPONSORBLOCK.getBoolean()) }
     var downloadNotification by remember { mutableStateOf(NOTIFICATION.getBoolean()) }
 
@@ -346,6 +352,28 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                         enabled = !isCustomCommandEnabled,
                         description = stringResource(R.string.download_playlist_desc),
                         isChecked = downloadPlaylist,
+                    )
+
+                    PreferenceSwitch(
+                        title = stringResource(R.string.clipboard_quick_download),
+                        description = stringResource(R.string.clipboard_quick_download_desc),
+                        icon =
+                            if (clipboardQuickDownload) Icons.Outlined.ContentPaste
+                            else Icons.Outlined.ContentPasteOff,
+                        isChecked = clipboardQuickDownload,
+                        onClick = {
+                            val enabled = !clipboardQuickDownload
+                            clipboardQuickDownload = enabled
+                            CLIPBOARD_QUICK_DOWNLOAD.updateBoolean(enabled)
+                            // Keep the current nonce: the other shortcut and any
+                            // pinned copy should only revoke on nonce rotation.
+                            val published =
+                                App.publishQuickDownloadShortcut(context, rotateNonce = false)
+                            if (enabled && !published)
+                                ToastUtil.makeToast(
+                                    R.string.clipboard_quick_download_failed
+                                )
+                        },
                     )
 
                     PreferenceSwitchWithDivider(

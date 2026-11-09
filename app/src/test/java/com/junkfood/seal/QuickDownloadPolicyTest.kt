@@ -1,5 +1,7 @@
 package com.junkfood.seal
 
+import com.junkfood.seal.database.objects.CommandTemplate
+import com.junkfood.seal.download.Task
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.isTrustedQuickIntent
 import com.junkfood.seal.util.withoutCookies
@@ -60,5 +62,30 @@ class QuickDownloadPolicyTest {
     fun `already cookie-less preferences are unchanged`() {
         val prefs = DownloadUtil.DownloadPreferences.EMPTY
         assertEquals(prefs, prefs.withoutCookies())
+    }
+
+    @Test
+    fun `the gate is idempotent`() {
+        val prefs = DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = true)
+        assertEquals(prefs.withoutCookies(), prefs.withoutCookies().withoutCookies())
+    }
+
+    @Test
+    fun `quick tasks are plain URL tasks so no template can reach them`() {
+        val prefs = DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = true)
+        val task = Task(url = "https://example.com/v", preferences = prefs.withoutCookies())
+
+        assertTrue(task.type is Task.TypeInfo.URL)
+        assertFalse(task.type is Task.TypeInfo.CustomCommand)
+        assertFalse(task.preferences.cookies)
+    }
+
+    @Test
+    fun `download preferences cannot carry a command template`() {
+        val templateField =
+            DownloadUtil.DownloadPreferences::class.java.declaredFields.firstOrNull {
+                it.type == CommandTemplate::class.java
+            }
+        assertEquals(null, templateField)
     }
 }
