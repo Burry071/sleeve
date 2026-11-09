@@ -15,6 +15,7 @@ import com.junkfood.seal.ui.common.SettingsProvider
 import com.junkfood.seal.ui.page.AppEntry
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.matchAllUrlsFromSharedText
 import com.junkfood.seal.util.setLanguage
@@ -64,6 +65,11 @@ class MainActivity : AppCompatActivity() {
     // Single-instance launch mode delivers a cold-start share intent to
     // onCreate, so both entry points must route through the same handler.
     private fun handleIntent(intent: Intent) {
+        intent.getStringExtra(NotificationUtil.EXTRA_REVIEW_BATCH_ID)?.let { batchId ->
+            intent.removeExtra(NotificationUtil.EXTRA_REVIEW_BATCH_ID)
+            dialogViewModel.openMatchReview(batchId)
+            return
+        }
         val url = intent.getSharedURL()
         if (url != null) {
             dialogViewModel.postAction(

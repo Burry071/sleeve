@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.junkfood.seal.R
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
+import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.ui.common.LocalDarkTheme
@@ -57,10 +59,12 @@ fun PlaylistBatchCard(
     onStop: () -> Unit,
     onResume: () -> Unit,
     onDismiss: () -> Unit,
+    onReview: () -> Unit,
     onSongClick: (Task) -> Unit,
     onSongAction: (Task, UiAction) -> Unit,
 ) {
     val summary = remember(entries) { BatchOps.summary(entries) }
+    val reviewCount = remember(entries) { MatchOps.reviewCount(entries) }
     val containerColor =
         MaterialTheme.colorScheme.run {
             if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
@@ -149,6 +153,13 @@ fun PlaylistBatchCard(
                 if (summary.canceled + summary.failed > 0) {
                     TextButton(onClick = onResume) { Text(stringResource(R.string.resume)) }
                 }
+                // The single review entry: only after the batch finishes and
+                // only while at least one flagged pick is still unacknowledged.
+                if (MatchOps.reviewVisible(entries)) {
+                    TextButton(onClick = onReview) {
+                        Text(stringResource(R.string.review_matches, reviewCount))
+                    }
+                }
             }
 
             AnimatedVisibility(visible = expanded) {
@@ -195,6 +206,20 @@ private fun SongRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (MatchOps.reviewable(state)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.match_badge, state.match?.percent ?: 0),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
             if (progress != null) {
                 LinearProgressIndicator(
                     progress = { progress },
