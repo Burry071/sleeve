@@ -159,6 +159,21 @@
       "published": true,
       "distributed": true,
       "source": "HANDOFF.md section 10"
+    },
+    {
+      "tag": "v2.0.0-beta.11",
+      "version_name": "2.0.0-beta.11",
+      "base_version_code": 200000310,
+      "shipped_version_code": 200000312,
+      "asset_name": "Sleeve-generic-release.apk",
+      "asset_size": 106880425,
+      "sha256": "93d5d8fcc995b862b858bbf7118046ff3fd6dac47c1b29b58cd986603bc3e190",
+      "cert_sha256": "2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3",
+      "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.0.0-beta.11/Sleeve-generic-release.apk",
+      "published_at": "2026-11-09T17:35:36Z",
+      "published": true,
+      "distributed": true,
+      "verified_at": "2026-11-09T17:39:53Z"
     }
   ]
 }
