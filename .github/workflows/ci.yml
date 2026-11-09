@@ -11,7 +11,7 @@
 # 8. never publish before Orion distribution compatibility has been checked;
 # 9. never allow Orion to select a deleted/stale/unavailable release;
 # 10. retain the previous working release as a recovery option;
-# 11. record version, version code, commit, APK SHA-256, signing certificate fingerprint, asset URL;
+# 11. record version, version code, commit, every published artifact's APK SHA-256, signing certificate fingerprint, asset URL;
 # 12. do not claim a release successful until the actual distribution path is verified.
 # =============================================================================
 
@@ -145,48 +145,65 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build signed release APK
+      - name: Build the three signed release APKs
         run: |
-          ./gradlew :app:assembleGenericRelease \
-            -PnoSplits \
-            -PABI_FILTERS="arm64-v8a;x86_64" \
-            --stacktrace
+          set -euo pipefail
+          rm -rf dist && mkdir -p dist
+          build() {
+            local abi_filters="$1" target="$2"
+            rm -rf app/build/outputs/apk/generic/release
+            ./gradlew :app:assembleGenericRelease \
+              -PnoSplits \
+              -PABI_FILTERS="$abi_filters" \
+              --stacktrace
+            local apk
+            apk=$(find app/build/outputs/apk/generic/release -maxdepth 1 -name '*.apk' -print -quit)
+            test -n "$apk" || { echo "::error::no release APK was produced for $abi_filters"; exit 1; }
+            cp "$apk" "dist/$target"
+          }
+          build "arm64-v8a" Sleeve-arm64-release.apk
+          build "x86_64" Sleeve-x86_64-release.apk
+          build "arm64-v8a;x86_64" Sleeve-generic-release.apk
+          ls -l dist
 
-      - name: Upload release artifact
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Sleeve-release-apk
-          path: app/build/outputs/apk/generic/release/*.apk
+          name: Sleeve-release-apks
+          path: dist/*.apk
           if-no-files-found: error
 
-      - name: Verify APK identity and write SHA256SUMS
+      - name: Verify APK identity, one shared versionCode, and monotonicity
         id: apk
         run: |
           set -euo pipefail
-          apk=$(find app/build/outputs/apk/generic/release -maxdepth 1 -name '*.apk' -print -quit)
-          test -n "$apk" || { echo "::error::no release APK was produced"; exit 1; }
-          cp "$apk" Sleeve-generic-release.apk
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 
-          expected_code=$(python scripts/release_guard.py --print-shipped-code --no-split-apks | head -1 | cut -d= -f2)
+          expected_code=$(python scripts/release_guard.py --print-base-code)
+          previous_code=$(python scripts/release_guard.py --print-previous-code)
           expected_cert=$(python scripts/release_guard.py --print-cert)
+          expected_name="${GITHUB_REF_NAME#v}"
 
-          "$bt/aapt2" dump badging Sleeve-generic-release.apk > badging.txt
-          package=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" badging.txt | head -1)
-          actual_code=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" badging.txt | head -1)
+          python scripts/apk_gate.py \
+            --aapt2 "$bt/aapt2" \
+            --expect-package com.sleeve.app \
+            --expect-version-name "$expected_name" \
+            --expect-code "$expected_code" \
+            --previous-code "$previous_code" \
+            --require-name Sleeve-arm64-release.apk \
+            --require-name Sleeve-x86_64-release.apk \
+            --require-name Sleeve-generic-release.apk \
+            dist/*.apk
 
-          test "$package" = "com.sleeve.app" || { echo "::error::package '$package' != com.sleeve.app"; exit 1; }
-          test "$actual_code" = "$expected_code" || { echo "::error::versionCode $actual_code != expected $expected_code"; exit 1; }
+          for apk in dist/*.apk; do
+            "$bt/apksigner" verify --print-certs "$apk" > certs.txt
+            grep -qi "$expected_cert" certs.txt \
+              || { echo "::error::$apk signer certificate does not match the recorded identity"; exit 1; }
+          done
 
-          "$bt/apksigner" verify --print-certs Sleeve-generic-release.apk > certs.txt
-          grep -qi "$expected_cert" certs.txt || { echo "::error::signer certificate does not match the recorded identity"; exit 1; }
-
-          sha=$(sha256sum Sleeve-generic-release.apk | awk '{print $1}')
-          size=$(stat -c%s Sleeve-generic-release.apk)
-          echo "$sha  Sleeve-generic-release.apk" > SHA256SUMS
-          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
-          echo "size=$size" >> "$GITHUB_OUTPUT"
-          echo "verified package=$package versionCode=$actual_code size=$size sha256=$sha"
+          ( cd dist && sha256sum *.apk > SHA256SUMS )
+          cat dist/SHA256SUMS
+          echo "verified: 3 artifacts, package=com.sleeve.app versionName=$expected_name versionCode=$expected_code (previous $previous_code)"
 
       - name: Publish GitHub release
         env:
@@ -194,55 +211,78 @@ jobs:
         run: |
           # Beta tags stay non-prerelease on purpose: /releases/latest serves
           # the direct APK link printed in the README.
+          cat > release-notes.md <<'NOTES'
+          ## Which APK do I download?
+
+          - **Most phones (arm64-v8a)** — `Sleeve-arm64-release.apk`, the default download.
+          - **x86_64 devices and emulators** — `Sleeve-x86_64-release.apk`.
+          - **Works on both** — `Sleeve-generic-release.apk` (arm64-v8a + x86_64, larger).
+
+          All three carry the same versionCode and the same signing certificate
+          (`CN=Sleeve, O=Burry071`), so switching between them is never an Android
+          "downgrade" and updates keep working. Check any file against `SHA256SUMS`
+          with `sha256sum -c SHA256SUMS`.
+          NOTES
+          cd dist
           gh release create "$GITHUB_REF_NAME" \
+            Sleeve-arm64-release.apk \
+            Sleeve-x86_64-release.apk \
             Sleeve-generic-release.apk \
             SHA256SUMS \
             --title "Sleeve $GITHUB_REF_NAME" \
+            --notes "$(cat ../release-notes.md)" \
             --generate-notes
 
-      - name: Download the published asset and compare SHA-256
+      - name: Download the published assets and compare SHA-256
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCAL_SHA: ${{ steps.apk.outputs.sha256 }}
-          LOCAL_SIZE: ${{ steps.apk.outputs.size }}
         run: |
           set -euo pipefail
           mkdir -p published
           fetched=no
           for attempt in $(seq 1 10); do
             if gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-                 --pattern Sleeve-generic-release.apk --dir published --clobber; then
+                 --pattern 'Sleeve-*-release.apk' --dir published --clobber; then
               fetched=yes
               break
             fi
-            echo "published asset not downloadable yet (attempt $attempt/10); retrying in 6s"
+            echo "published assets not downloadable yet (attempt $attempt/10); retrying in 6s"
             sleep 6
           done
           if [ "$fetched" != yes ]; then
-            echo "::error::published APK could not be downloaded from the release"
+            echo "::error::published APKs could not be downloaded from the release"
             exit 1
           fi
-          published_sha=$(sha256sum published/Sleeve-generic-release.apk | awk '{print $1}')
-          published_size=$(stat -c%s published/Sleeve-generic-release.apk)
-          if [ "$published_sha" != "$LOCAL_SHA" ] || [ "$published_size" != "$LOCAL_SIZE" ]; then
-            echo "::error::published asset differs: sha256=$published_sha size=$published_size (built: $LOCAL_SHA / $LOCAL_SIZE)"
+          count=$(find published -maxdepth 1 -name '*.apk' | wc -l)
+          if [ "$count" != 3 ]; then
+            echo "::error::expected 3 published APKs, found $count"
+            ls -l published
             exit 1
           fi
-          echo "published asset is byte-identical to the built APK (sha256:$LOCAL_SHA)"
+          cp dist/SHA256SUMS published/SHA256SUMS
+          ( cd published && sha256sum -c --strict SHA256SUMS )
+          echo "all 3 published APKs are byte-identical to the built artifacts"
 
-      - name: Verify the release URL and Orion mirror (read-only)
+      - name: Verify each asset URL and the Orion mirror (read-only)
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 10); do
-            if python scripts/verify_release.py --channel beta --limit 30 \
-                 --expect-tag "$GITHUB_REF_NAME" --json > verify.json; then
-              cat verify.json
-              exit 0
-            fi
-            echo "verifier not green yet (attempt $attempt/10); retrying in 10s"
-            sleep 10
+          for abi in "" "arm64-v8a" "x86_64"; do
+            label="${abi:-universal}"
+            args=(--channel beta --limit 30 --expect-tag "$GITHUB_REF_NAME" --json)
+            if [ -n "$abi" ]; then args+=(--abi "$abi"); fi
+            for attempt in $(seq 1 10); do
+              if python scripts/verify_release.py "${args[@]}" > "verify-$label.json"; then
+                cat "verify-$label.json"
+                break
+              fi
+              if [ "$attempt" = 10 ]; then
+                cat "verify-$label.json"
+                echo "::error::$label asset verification did not go green"
+                exit 1
+              fi
+              echo "verifier ($label) not green yet (attempt $attempt/10); retrying in 10s"
+              sleep 10
+            done
           done
-          cat verify.json
-          exit 1
