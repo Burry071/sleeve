@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Bounded FileProvider roots. Do NOT widen. cache-path is intentionally
+     absent: cacheDir holds cookies.txt (session cookies) and must never be
+     shareable. -->
 <paths>
-    <external-path
-        name="external_files"
-        path="." />
-    <cache-path
-        name="cache"
-        path="." />
+    <external-files-path name="updates" path="updates/" />
+    <external-files-path name="apk" path="apk/" />
+    <files-path name="updates_int" path="updates/" />
+    <files-path name="apk_int" path="apk/" />
+    <external-path name="downloads" path="Download/Sleeve/" />
+    <!-- Private mode writes here; without this root those files cannot be opened or shared. -->
+    <external-path name="private_downloads" path="Download/.Seal/" />
 </paths>
