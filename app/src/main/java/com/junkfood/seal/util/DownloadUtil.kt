@@ -21,7 +21,11 @@ import com.junkfood.seal.Downloader.toNotificationId
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.database.objects.DownloadedVideoInfo
+import com.junkfood.seal.download.MatchCandidate
+import com.junkfood.seal.download.MatchOps
+import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskAuditLog
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.TaskState
 import com.junkfood.seal.ui.page.settings.network.Cookie
@@ -55,6 +59,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 
 object DownloadUtil {
 
@@ -208,9 +213,77 @@ object DownloadUtil {
         return if (isActive()) best else null
     }
 
+    /**
+     * Picks the winner between the YouTube Music pool and the plain-YouTube
+     * pool, keeping the top [limit] candidates for the review sheet. A
+     * floor-rejected music pool arrives here as an empty list, so the widening
+     * leg still runs. [isActive] is polled before the second search and after
+     * it, so a cancel never leaves that search running.
+     */
+    internal fun matchBestCandidates(
+        isActive: () -> Boolean,
+        musicSearch: () -> List<GhostEngine.RankedCandidate>,
+        wideSearch: () -> List<GhostEngine.RankedCandidate>,
+        limit: Int = 3,
+    ): List<GhostEngine.RankedCandidate>? {
+        val music = musicSearch().sortedByDescending { it.score }
+        if (!isActive()) return null
+        val pools =
+            if (shouldWidenSearch(music.firstOrNull()?.score)) {
+                val wide = wideSearch().sortedByDescending { it.score }
+                if (!isActive()) return null
+                music + wide
+            } else {
+                music
+            }
+        val merged =
+            pools
+                .sortedByDescending { it.score }
+                .distinctBy { it.url.ifBlank { it.id } }
+                .take(limit)
+        return merged.ifEmpty { null }
+    }
+
     /** Cancellation bail-out for [resolveMetadataTrack]; returned, never thrown. */
-    private fun matchCanceled(): Result<VideoInfo> =
+    private fun <T> matchCanceled(): Result<T> =
         Result.failure(IllegalStateException("match canceled"))
+
+    /** A resolved catalogue track plus the cached candidates the review sheet needs. */
+    data class MetadataResolution(val videoInfo: VideoInfo, val match: MatchResult)
+
+    private fun GhostEngine.RankedCandidate.toMatchCandidate(): MatchCandidate =
+        MatchCandidate(
+            index = index,
+            id = id,
+            url = url.ifBlank { "https://www.youtube.com/watch?v=$id" },
+            title = title,
+            score = score,
+            reasons = reasons,
+        )
+
+    /** Logs every ranker score so the pick is auditable on the device later. */
+    private fun logMatch(taskKey: String, track: GhostEngine.SpotifyTrack, ranked: List<MatchCandidate>, flagged: Boolean) {
+        val header = "match: \"${track.title}\" by \"${track.artist}\" — ${ranked.size} candidate(s)"
+        Log.i(TAG, "$taskKey $header")
+        TaskAuditLog.append(taskKey, header)
+        ranked.forEachIndexed { i, c ->
+            val why = c.reasons.joinToString(", ")
+            val line =
+                "match: #${i + 1} ${c.percent}% \"${c.title}\"" + if (why.isBlank()) "" else " ($why)"
+            Log.i(TAG, "$taskKey $line")
+            TaskAuditLog.append(taskKey, line)
+        }
+        val verdict =
+            if (flagged) {
+                val top = ranked.first()
+                val gap = if (ranked.size > 1) top.score - ranked[1].score else 100.0
+                "match: flagged — top ${top.percent}%, gap ${gap.roundToInt()}% (review after the batch)"
+            } else {
+                "match: confident — top ${ranked.first().percent}%"
+            }
+        Log.i(TAG, "$taskKey $verdict")
+        TaskAuditLog.append(taskKey, verdict)
+    }
 
     /**
      * spotDL-pattern matching for one catalogue track: rank a YouTube Music pool,
@@ -228,7 +301,7 @@ object DownloadUtil {
         taskKey: String,
         preferences: DownloadPreferences,
         isActive: () -> Boolean = { true },
-    ): Result<VideoInfo> =
+    ): Result<MetadataResolution> =
         runCatching {
             val track =
                 GhostEngine.SpotifyTrack(
@@ -257,20 +330,20 @@ object DownloadUtil {
 
             // A floor rejection is a failed ranking, not a fatal error: the
             // plain-YouTube pool still needs its chance before the task fails.
-            fun ranked(pool: String): GhostEngine.RankedCandidate? {
+            fun ranked(pool: String): List<GhostEngine.RankedCandidate> {
                 val candidates = search(pool)
-                if (candidates.isEmpty()) return null
-                return GhostEngine.rankCandidates(
+                if (candidates.isEmpty()) return emptyList()
+                return GhostEngine.rankCandidatesWithAlternatives(
                         track = track,
                         candidatesJson = jsonFormat.encodeToString(candidates),
                         strictness = RANKING_STRICTNESS.getInt(),
                     )
                     .onFailure { rankError = it }
-                    .getOrNull()
+                    .getOrElse { emptyList() }
             }
 
-            val best =
-                matchBestCandidate(
+            val ranked =
+                matchBestCandidates(
                     isActive = isActive,
                     musicSearch = { ranked("ytmsearch5") },
                     wideSearch = { ranked("ytsearch10") },
@@ -280,12 +353,24 @@ object DownloadUtil {
             // extraction spawns a process no later cancel can reach.
             if (!isActive()) return matchCanceled()
 
-            if (best == null) {
+            if (ranked.isNullOrEmpty()) {
                 throw IllegalStateException(
                     "No confident YouTube match for \"${track.title}\" by \"${track.artist}\"" +
                         (rankError?.message?.let { ": $it" } ?: "")
                 )
             }
+
+            val best = ranked.first()
+            val matchCandidates = ranked.map { it.toMatchCandidate() }
+            val flagged = MatchOps.isLowConfidence(matchCandidates)
+            logMatch(taskKey, track, matchCandidates, flagged)
+            val match =
+                MatchResult(
+                    candidates = matchCandidates,
+                    selectedUrl = matchCandidates.first().url,
+                    selectedScore = matchCandidates.first().score,
+                    flagged = flagged,
+                )
 
             val resolvedUrl = best.url.ifBlank { "https://www.youtube.com/watch?v=" + best.id }
             val resolved =
@@ -296,7 +381,7 @@ object DownloadUtil {
                     )
                     .getOrThrow()
             if (!isActive()) return matchCanceled()
-            resolved
+            MetadataResolution(resolved, match)
         }
 
     @CheckResult
