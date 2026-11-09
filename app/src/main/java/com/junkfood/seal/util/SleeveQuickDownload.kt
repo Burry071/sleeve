@@ -5,6 +5,7 @@ import android.util.Log
 import com.junkfood.seal.App
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskOrigin
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,10 @@ object SleeveQuickDownload {
     private fun preferences(anonymous: Boolean): DownloadUtil.DownloadPreferences =
         DownloadUtil.DownloadPreferences.createFromPreferences()
             .let { if (anonymous) it.withoutCookies() else it }
+
+    /** Quick mode is the only fence; every other caller is a user task. */
+    private fun origin(anonymous: Boolean): TaskOrigin =
+        if (anonymous) TaskOrigin.Quick else TaskOrigin.User
 
     private fun directPreferences(
         item: GalleryItem,
@@ -101,6 +106,7 @@ object SleeveQuickDownload {
                         Task(
                             url = url,
                             preferences = preferences(anonymous),
+                            origin = origin(anonymous),
                         )
                     )
                     return@runCatching Outcome(1, "default")
@@ -110,7 +116,11 @@ object SleeveQuickDownload {
                 items.forEach { item ->
                     runCatching {
                         downloader.enqueue(
-                            Task(url = item.url, preferences = directPreferences(item, anonymous))
+                            Task(
+                                url = item.url,
+                                preferences = directPreferences(item, anonymous),
+                                origin = origin(anonymous),
+                            )
                         )
                         queued++
                     }.onFailure { Log.e(TAG, "enqueue failed for ${item.url}: ${it.message}") }
@@ -133,6 +143,7 @@ object SleeveQuickDownload {
                     Task(
                         url = url,
                         preferences = preferences(anonymous),
+                        origin = origin(anonymous),
                     )
                 )
             }

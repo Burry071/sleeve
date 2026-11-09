@@ -2,9 +2,12 @@ package com.junkfood.seal
 
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskFactory
+import com.junkfood.seal.download.TaskOrigin
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.isTrustedQuickIntent
 import com.junkfood.seal.util.withoutCookies
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -70,14 +73,116 @@ class QuickDownloadPolicyTest {
         assertEquals(prefs.withoutCookies(), prefs.withoutCookies().withoutCookies())
     }
 
+    /**
+     * Quick lane: the only sender is the nonce-fenced shortcut. It builds a plain URL task from
+     * cookie-less preferences, so neither `--cookies` nor `--config-locations` can be emitted for
+     * it no matter what the stored preferences say.
+     */
     @Test
-    fun `quick tasks are plain URL tasks so no template can reach them`() {
-        val prefs = DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = true)
-        val task = Task(url = "https://example.com/v", preferences = prefs.withoutCookies())
+    fun `quick lane is a URL task that can emit neither cookies nor template config`() {
+        val task =
+            Task(
+                url = "https://example.com/v",
+                preferences =
+                    DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = true).withoutCookies(),
+                origin = TaskOrigin.Quick,
+            )
 
         assertTrue(task.type is Task.TypeInfo.URL)
         assertFalse(task.type is Task.TypeInfo.CustomCommand)
         assertFalse(task.preferences.cookies)
+        assertEquals("cookies: none (quick mode)", task.cookieAudit)
+    }
+
+    /**
+     * Metadata lane: catalogue matches become MetadataTrack tasks. Option B of the fence review
+     * accepts that this lane keeps the user's cookie preference — it is an authenticated, in-app
+     * lane, not the fenced one. The pinned truth is therefore: cookies only when the user asked
+     * for them, and never a command template (the sole `--config-locations` path).
+     */
+    @Test
+    fun `metadata lane tracks the user cookie preference but never carries a template`() {
+        val withCookies =
+            TaskFactory.createMetadataTasks(
+                    provider = "Spotify",
+                    playlistTitle = "P",
+                    batchId = "b1",
+                    tracks = listOf(Task.TypeInfo.MetadataTrack(title = "T", artist = "A")),
+                    preferences = DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = true),
+                )
+                .single()
+                .task
+        assertTrue(withCookies.type is Task.TypeInfo.MetadataTrack)
+        assertFalse(withCookies.type is Task.TypeInfo.CustomCommand)
+        assertTrue(
+            "user asked for cookies, so the lane keeps them",
+            withCookies.preferences.cookies,
+        )
+        assertEquals(TaskOrigin.User, withCookies.origin)
+        assertEquals("cookies: on (user pref)", withCookies.cookieAudit)
+
+        val withoutCookies =
+            TaskFactory.createMetadataTasks(
+                    provider = "Audible",
+                    playlistTitle = "P",
+                    batchId = "b2",
+                    tracks = listOf(Task.TypeInfo.MetadataTrack(title = "T", artist = "A")),
+                    preferences = DownloadUtil.DownloadPreferences.EMPTY.copy(cookies = false),
+                )
+                .single()
+                .task
+        assertFalse(withoutCookies.preferences.cookies)
+        assertEquals("cookies: none (user pref)", withoutCookies.cookieAudit)
+    }
+
+    /**
+     * Source tripwire for `--cookies`: one literal, inside the single helper that every lane
+     * funnels through. A second literal anywhere else means a lane bypassed the gate — the
+     * behavior pins above cannot see that, this can.
+     */
+    @Test
+    fun `the cookies flag has exactly one producer`() {
+        val text = downloadUtilSource()
+        val needle = "addOption(\"--cookies\""
+
+        assertEquals("--cookies must be emitted from exactly one place", 1, occurrences(text, needle))
+        assertEquals("enableCookies", enclosingFunction(text, text.indexOf(needle)))
+    }
+
+    /**
+     * Source tripwire for `--config-locations`: exactly the two template builders, and nothing
+     * else. Quick and metadata lanes never reach them because they never build a CustomCommand.
+     */
+    @Test
+    fun `template config flags live only in the two command builders`() {
+        val text = downloadUtilSource()
+        val needle = "\"--config-locations\""
+
+        assertEquals(
+            "--config-locations must have exactly two producers",
+            2,
+            occurrences(text, needle),
+        )
+
+        val builders =
+            Regex(Regex.escape(needle))
+                .findAll(text)
+                .map { enclosingFunction(text, it.range.first) }
+                .toList()
+        assertEquals(listOf("executeCustomCommandTask", "executeCommandInBackground"), builders)
+    }
+
+    /** The only place a CustomCommand task can be born is the confirm sheet's runCommand. */
+    @Test
+    fun `custom command tasks have exactly one producer`() {
+        val text =
+            sourceFile(
+                "src/main/java/com/junkfood/seal/ui/page/downloadv2/configure/DownloadDialogViewModel.kt"
+            )
+        val needle = "TypeInfo.CustomCommand("
+
+        assertEquals(1, occurrences(text, needle))
+        assertEquals("runCommand", enclosingFunction(text, text.indexOf(needle)))
     }
 
     @Test
@@ -87,5 +192,31 @@ class QuickDownloadPolicyTest {
                 it.type == CommandTemplate::class.java
             }
         assertEquals(null, templateField)
+    }
+
+    private fun downloadUtilSource() =
+        sourceFile("src/main/java/com/junkfood/seal/util/DownloadUtil.kt")
+
+    private fun sourceFile(relativePath: String): String {
+        val candidates = listOf(File(relativePath), File("app/$relativePath"))
+        val file =
+            candidates.firstOrNull { it.isFile }
+                ?: throw AssertionError(
+                    "cannot locate $relativePath; tried ${candidates.joinToString { it.absolutePath }}"
+                )
+        return file.readText()
+    }
+
+    private fun occurrences(text: String, needle: String) =
+        Regex(Regex.escape(needle)).findAll(text).count()
+
+    private fun enclosingFunction(text: String, index: Int): String? =
+        FUN_DECL.findAll(text).lastOrNull { it.range.first < index }?.groupValues?.get(1)
+
+    private companion object {
+        private val FUN_DECL =
+            Regex(
+                """(?m)^[ \t]*(?:(?:private|internal|public|protected|override|suspend|inline|operator|open|abstract|external|tailrec)\s+)*fun\s+(?:[A-Za-z0-9_.<>?, \[\]]+\.)?([A-Za-z_][A-Za-z0-9_]*)"""
+            )
     }
 }

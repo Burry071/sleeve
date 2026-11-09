@@ -31,16 +31,36 @@ data class BatchInfo(
     val provider: String,
 )
 
+/** Which lane produced the task. Runtime audit lines name it explicitly. */
+@Serializable
+enum class TaskOrigin {
+    User,
+    Quick,
+}
+
 @Serializable
 data class Task(
     val url: String,
     val type: TypeInfo = TypeInfo.URL,
     val preferences: DownloadUtil.DownloadPreferences,
     val batch: BatchInfo? = null,
+    val origin: TaskOrigin = TaskOrigin.User,
     val id: String = makeId(url, type, preferences),
 ) : Comparable<Task> {
 
     val timeCreated: Long = System.currentTimeMillis()
+
+    /**
+     * Cookie state as it will actually reach yt-dlp. Quick mode is a fence, so
+     * it always reports none regardless of the stored preference.
+     */
+    val cookieAudit: String
+        get() =
+            when {
+                origin == TaskOrigin.Quick -> "cookies: none (quick mode)"
+                preferences.cookies -> "cookies: on (user pref)"
+                else -> "cookies: none (user pref)"
+            }
 
     /** Stable Compose list key: ids can repeat across batches of the same playlist. */
     val uiKey: String
