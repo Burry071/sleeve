@@ -46,7 +46,6 @@ import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.PreferenceUtil.updateString
 import com.junkfood.seal.util.QUICK_NONCE_KEY
 import com.junkfood.seal.util.SDCARD_URI
-import com.junkfood.seal.util.UpdateUtil
 import com.junkfood.seal.util.VIDEO_DIRECTORY
 import com.junkfood.seal.util.YT_DLP_VERSION
 import com.tencent.mmkv.MMKV
@@ -111,7 +110,6 @@ class App : Application() {
                 DownloadUtil.getCookiesContentFromDatabase().getOrNull()?.let {
                     FileUtil.writeContentToFile(it, getCookieFile())
                 }
-                UpdateUtil.deleteOutdatedApk()
             } catch (th: Throwable) {
                 withContext(Dispatchers.Main) { startCrashReportActivity(th) }
             }
