@@ -33,6 +33,48 @@ automated release.
 12. do not claim a release successful until the actual distribution path is verified.
     - Operational meaning: success means an end-to-end fetch through the real distribution path.
 
+## Release asset URL and the Orion mirror
+
+A published asset URL is a public interface. Third parties cache it and fetch it
+long after publication, and one of them is the Orion Store mirror
+(`github::github.com::burry071/sleeve`) behind the store listing. Deleting or
+replacing an asset breaks every cached consumer, and the failure surfaces as a
+download that sits at 0% rather than as an error. That is why rules 1, 2 and 9
+exist, and why remediation is forward-only.
+
+The repository's read-only verifier is the check:
+
+```bash
+python scripts/verify_release.py --channel beta --limit 30 --expect-tag vX.Y.Z
+```
+
+`--channel auto` checks the stable channel once one exists. `--json` is the form CI
+gates on: the release job verifies the universal, arm64 and x86_64 asset this way,
+retries ten times, and fails the release if any run is not green.
+
+`mirror status` in the output means:
+
+| Status | Meaning | Action |
+| --- | --- | --- |
+| `OK (tag)` | Mirror's newest entry is the verified live release and serves bytes | none |
+| `BEHIND (tag)` | Mirror still lists an older release | normal for up to about a day after publishing; escalate if longer |
+| `AHEAD (tag)` | Mirror lists a release the API does not return | re-run with `--limit 100`; usually a draft or a deleted release |
+| `STALE_MIRROR (tag -> HTTP nnn)` | Mirror's URL does not serve APK bytes; this is the incident shape | release-blocking; fix forward |
+| `UNREACHABLE` | Mirror JSON could not be fetched | retry; external outage, publish nothing |
+| `KEY_MISSING` / `NO_URL` | Entry missing or carrying no URL | escalate to the Orion maintainer |
+
+Escalation, and anything that touches Orion-Data, is an approval-gated action
+rather than routine maintenance. If the mirror is still behind 24 hours after a
+live, verified release, send the maintainer both URLs and both status codes so the
+stale entry can be identified without ambiguity.
+
+A remediation is complete only when the mirror's newest tag equals a live release,
+that asset returns `200` (`302` allowed) and answers a range request with `206`,
+the verifier exits `0` with `mirror status: OK`, the APK's SHA-256 and signer match
+`release-record.json`, and the previous working release is still downloadable. A
+mirror refresh alone is not evidence: the asset URL has to serve bytes for the
+exact tag the mirror selects.
+
 ## Pre-publish checklist
 
 - [ ] Version code is monotonic. Base `versionCode` in `app/build.gradle.kts` equals `currentVersion.code`
