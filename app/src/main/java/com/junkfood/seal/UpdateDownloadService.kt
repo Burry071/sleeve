@@ -25,6 +25,7 @@ class UpdateDownloadService : Service() {
     companion object {
         const val EXTRA_VERSION = "com.junkfood.seal.update.version"
         const val EXTRA_APK_URL = "com.junkfood.seal.update.apkUrl"
+        const val EXTRA_APK_DIGEST = "com.junkfood.seal.update.apkDigest"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -35,6 +36,7 @@ class UpdateDownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val version = intent?.getStringExtra(EXTRA_VERSION)
         val apkUrl = intent?.getStringExtra(EXTRA_APK_URL)
+        val digest = intent?.getStringExtra(EXTRA_APK_DIGEST)
         if (version.isNullOrEmpty() || apkUrl.isNullOrEmpty()) {
             stopSelf(startId)
             return START_NOT_STICKY
@@ -73,7 +75,12 @@ class UpdateDownloadService : Service() {
                         }
                     }
                 try {
-                    AppUpdateManager.download(this@UpdateDownloadService, version, apkUrl)
+                    AppUpdateManager.download(
+                        this@UpdateDownloadService,
+                        version,
+                        apkUrl,
+                        digest,
+                    )
                 } finally {
                     progress.cancel()
                     // Leave the foreground before posting the terminal state:
@@ -86,7 +93,12 @@ class UpdateDownloadService : Service() {
                                 state.file.absolutePath,
                             )
                         is AppUpdateManager.State.Failed ->
-                            NotificationUtil.notifyUpdateFailed(version, state.message, apkUrl)
+                            NotificationUtil.notifyUpdateFailed(
+                                version,
+                                state.message,
+                                apkUrl,
+                                digest,
+                            )
                         else -> NotificationUtil.cancelUpdateNotifications()
                     }
                     stopSelf(startId)

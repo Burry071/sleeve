@@ -84,7 +84,7 @@ object NotificationUtil {
 
     /** Update found on GitHub Releases: actionable so the APK can be fetched
      * straight from the shade, one nudge per version. */
-    fun notifyUpdateAvailable(version: String, apkUrl: String) {
+    fun notifyUpdateAvailable(version: String, apkUrl: String, digest: String? = null) {
         val notification =
             NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_seal)
@@ -95,7 +95,7 @@ object NotificationUtil {
                 .addAction(
                     0,
                     context.getString(R.string.download),
-                    updateDownloadPendingIntent(version, apkUrl),
+                    updateDownloadPendingIntent(version, apkUrl, digest),
                 )
                 .build()
         notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
@@ -151,8 +151,13 @@ object NotificationUtil {
         notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
     }
 
-    /** Download failed: keep the version and URL so Retry can restart it. */
-    fun notifyUpdateFailed(version: String, message: String, apkUrl: String) {
+    /** Download failed: keep the version, URL, and digest so Retry can restart it. */
+    fun notifyUpdateFailed(
+        version: String,
+        message: String,
+        apkUrl: String,
+        digest: String? = null,
+    ) {
         val notification =
             NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_seal)
@@ -163,7 +168,7 @@ object NotificationUtil {
                 .addAction(
                     0,
                     context.getString(R.string.retry),
-                    updateDownloadPendingIntent(version, apkUrl),
+                    updateDownloadPendingIntent(version, apkUrl, digest),
                 )
                 .build()
         notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
@@ -179,11 +184,16 @@ object NotificationUtil {
             )
         }
 
-    private fun updateDownloadPendingIntent(version: String, apkUrl: String): PendingIntent {
+    private fun updateDownloadPendingIntent(
+        version: String,
+        apkUrl: String,
+        digest: String?,
+    ): PendingIntent {
         val intent =
             Intent(context.applicationContext, UpdateDownloadService::class.java)
                 .putExtra(UpdateDownloadService.EXTRA_VERSION, version)
                 .putExtra(UpdateDownloadService.EXTRA_APK_URL, apkUrl)
+                .putExtra(UpdateDownloadService.EXTRA_APK_DIGEST, digest)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             PendingIntent.getForegroundService(

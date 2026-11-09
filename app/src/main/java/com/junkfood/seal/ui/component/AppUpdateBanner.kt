@@ -128,6 +128,7 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                                         context,
                                         s.version,
                                         s.apkUrl,
+                                        s.digest,
                                     )
                                 },
                                 interactionSource = interaction,

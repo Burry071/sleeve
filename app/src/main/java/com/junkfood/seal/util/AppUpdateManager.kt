@@ -40,12 +40,24 @@ object AppUpdateManager {
     sealed interface State {
         data object Idle : State
         data object Checking : State
-        data class Available(val version: String, val apkUrl: String) : State
+        data class Available(
+            val version: String,
+            val apkUrl: String,
+            /** Published SHA-256 of the APK, null when the release has none. */
+            val digest: String? = null,
+        ) : State
         data class Downloading(val version: String, val progress: Int) : State
         data class Ready(val version: String, val file: File) : State
         data object UpToDate : State
         data class Failed(val message: String) : State
     }
+
+    private data class Candidate(
+        val tag: String,
+        val version: VersionTuple,
+        val apkUrl: String,
+        val digest: String?,
+    )
 
     private val mutableState = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = mutableState.asStateFlow()
@@ -201,29 +213,52 @@ object AppUpdateManager {
                                     ?.removePrefix("v")
                                     ?: return@mapNotNull null
                             val version = parseVersionOrNull(tag) ?: return@mapNotNull null
-                            val apkUrl =
+                            val asset =
                                 release["assets"]
                                     ?.jsonArray
                                     ?.map { it.jsonObject }
                                     ?.firstOrNull {
                                         it["name"]?.jsonPrimitive?.content == APK_ASSET
                                     }
-                                    ?.get("browser_download_url")
+                                    ?: return@mapNotNull null
+                            val apkUrl =
+                                asset["browser_download_url"]
                                     ?.jsonPrimitive
                                     ?.content
                                     ?: return@mapNotNull null
-                            Triple(tag, version, apkUrl)
+                            val digest =
+                                when (
+                                    val published =
+                                        parsePublishedDigest(
+                                            runCatching {
+                                                    asset["digest"]?.jsonPrimitive?.content
+                                                }
+                                                .getOrNull()
+                                        )
+                                ) {
+                                    PublishedDigest.Absent -> null
+                                    is PublishedDigest.Sha256 -> published.hex
+                                    // Fail closed: the release advertises integrity
+                                    // data this build cannot check.
+                                    PublishedDigest.Unsupported ->
+                                        error("Unsupported update digest")
+                                }
+                            Candidate(tag, version, apkUrl, digest)
                         }
-                        .maxWithOrNull { a, b -> compare(a.second, b.second) }
+                        .maxWithOrNull { a, b -> compare(a.version, b.version) }
 
                 val next =
-                    if (best != null && compare(best.second, installed) > 0) {
+                    if (best != null && compare(best.version, installed) > 0) {
                         // One notification per version, even across repeated checks.
-                        if (lastNotifiedVersion != best.first) {
-                            lastNotifiedVersion = best.first
-                            NotificationUtil.notifyUpdateAvailable(best.first, best.third)
+                        if (lastNotifiedVersion != best.tag) {
+                            lastNotifiedVersion = best.tag
+                            NotificationUtil.notifyUpdateAvailable(
+                                best.tag,
+                                best.apkUrl,
+                                best.digest,
+                            )
                         }
-                        State.Available(best.first, best.third)
+                        State.Available(best.tag, best.apkUrl, best.digest)
                     } else {
                         // Up to date: any lingering update notifications are
                         // for builds this one already covers.
@@ -260,16 +295,17 @@ object AppUpdateManager {
     /** Starts the transfer in a foreground service so leaving the app (or the
      * shade) does not cancel it; the service reports progress and the final
      * install notification. */
-    fun startDownload(context: Context, version: String, apkUrl: String) {
+    fun startDownload(context: Context, version: String, apkUrl: String, digest: String? = null) {
         if (mutableState.value is State.Downloading) return
         val intent =
             Intent(context, UpdateDownloadService::class.java)
                 .putExtra(UpdateDownloadService.EXTRA_VERSION, version)
                 .putExtra(UpdateDownloadService.EXTRA_APK_URL, apkUrl)
+                .putExtra(UpdateDownloadService.EXTRA_APK_DIGEST, digest)
         ContextCompat.startForegroundService(context, intent)
     }
 
-    suspend fun download(context: Context, version: String, apkUrl: String) {
+    suspend fun download(context: Context, version: String, apkUrl: String, digest: String? = null) {
         downloadCancelled = false
         mutableState.value = State.Downloading(version, 0)
         withContext(Dispatchers.IO) {
@@ -304,6 +340,10 @@ object AppUpdateManager {
                     }
                 }
                 part.renameTo(target)
+                // Gate the install: a tampered or corrupted APK must never reach
+                // the installer, and must not be left on disk for the next
+                // cold-start scan to resurrect as a finished update.
+                UpdateVerifier.verify(context, target, digest)?.let { error(it) }
                 // Older finished APKs are superseded once a new one is complete.
                 dir.listFiles { f -> f.name.startsWith("Sleeve-") && f.name.endsWith("-release.apk") }
                     ?.filter { it != target }
@@ -314,6 +354,7 @@ object AppUpdateManager {
                 // wiped by stopForeground(STOP_FOREGROUND_REMOVE).
             }.onFailure {
                 part.delete()
+                target.delete()
                 mutableState.value =
                     if (downloadCancelled) State.Idle
                     else State.Failed(it.message ?: "download failed")
