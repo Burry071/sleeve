@@ -29,15 +29,18 @@ import com.junkfood.seal.util.AUDIO_DIRECTORY
 import com.junkfood.seal.util.COMMAND_DIRECTORY
 import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.EXTRA_QUICK_NONCE
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.createEmptyFile
 import com.junkfood.seal.util.FileUtil.getCookiesFile
 import com.junkfood.seal.util.FileUtil.getExternalDownloadDirectory
 import com.junkfood.seal.util.FileUtil.getExternalPrivateDownloadDirectory
+import com.junkfood.seal.util.INTERNAL_PREFS
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.PreferenceUtil.updateString
+import com.junkfood.seal.util.QUICK_NONCE_KEY
 import com.junkfood.seal.util.SDCARD_URI
 import com.junkfood.seal.util.UpdateUtil
 import com.junkfood.seal.util.VIDEO_DIRECTORY
@@ -47,6 +50,7 @@ import com.yausername.aria2c.Aria2c
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -175,6 +179,13 @@ class App : Application() {
         }
 
         private fun publishQuickDownloadShortcut(context: Context) {
+            // Silent quick mode is nonce-gated: only Sleeve knows the value it
+            // hands its own shortcut, so other apps cannot mint a trusted launch.
+            val nonce = UUID.randomUUID().toString()
+            context.getSharedPreferences(INTERNAL_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(QUICK_NONCE_KEY, nonce)
+                .apply()
             val shortcut =
                 ShortcutInfoCompat.Builder(context, "quick-download")
                     .setShortLabel(context.getString(R.string.quick_download_label))
@@ -184,7 +195,8 @@ class App : Application() {
                         Intent(Intent.ACTION_SEND)
                             .setClass(context, QuickDownloadActivity::class.java)
                             .setType("text/plain")
-                            .putExtra(EXTRA_QUICK_DOWNLOAD, true),
+                            .putExtra(EXTRA_QUICK_DOWNLOAD, true)
+                            .putExtra(EXTRA_QUICK_NONCE, nonce),
                     )
                     .setLongLived(true)
                     .build()
