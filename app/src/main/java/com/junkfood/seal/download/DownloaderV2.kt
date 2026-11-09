@@ -251,6 +251,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         }
         taskStateMap +=
             task to Task.State(Idle, null, Task.ViewState(url = task.url, title = task.url))
+        auditCookieState(task)
         // snapshotFlow only re-checks after an apply notification, and the
         // frame loop that sends them does not run when no UI is attached —
         // e.g. a share quick-download that starts with the app closed.
@@ -259,6 +260,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
     override fun enqueue(task: Task, state: Task.State) {
         taskStateMap += task to state
+        auditCookieState(task)
         Snapshot.sendApplyNotifications()
     }
 
@@ -276,6 +278,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 NotificationUtil.cancelNotification(task.notificationId)
             }
             taskStateMap.remove(task)
+            TaskAuditLog.clear(task.id)
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }
             return true
@@ -332,6 +335,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 Snapshot.sendApplyNotifications()
             }
         }
+
+    /** Runtime evidence that the quick fence held (or that a user task uses cookies). */
+    private fun auditCookieState(task: Task) {
+        val line = task.cookieAudit
+        Log.i(TAG, "${task.id} $line")
+        if (TaskAuditLog.read(task.id).none { it.startsWith("cookies:") }) {
+            TaskAuditLog.append(task.id, line)
+        }
+    }
 
     private val Task.notificationId: Int
         get() = id.hashCode()
@@ -415,6 +427,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     private fun Task.prepare() {
         // A cancel/remove can race the scheduler pick; a stale pick no-ops.
         if (downloadState != Idle) return
+        auditCookieState(this)
         if (type is TypeInfo.CustomCommand) {
             execute()
             return
