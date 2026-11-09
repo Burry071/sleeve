@@ -147,6 +147,18 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     val sheetStateFlow = mSheetStateFlow.asStateFlow()
     val sheetValueFlow = mSheetValueFlow.asStateFlow()
 
+    /** Batch whose match review should be on screen; set by the card and the notification. */
+    private val mMatchReviewBatchFlow = MutableStateFlow<String?>(null)
+    val matchReviewBatchFlow = mMatchReviewBatchFlow.asStateFlow()
+
+    fun openMatchReview(batchId: String) {
+        mMatchReviewBatchFlow.value = batchId
+    }
+
+    fun closeMatchReview() {
+        mMatchReviewBatchFlow.value = null
+    }
+
     private val sheetState
         get() = sheetStateFlow.value
 

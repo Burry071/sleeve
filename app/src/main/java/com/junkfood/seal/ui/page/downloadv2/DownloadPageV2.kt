@@ -111,6 +111,8 @@ import com.junkfood.seal.R
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.DownloaderV2
+import com.junkfood.seal.download.MatchCandidate
+import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.download.Task.DownloadState.Canceled
@@ -253,6 +255,7 @@ fun DownloadPageV2(
     // Nothing in the V2 flow ever asked for it, so the queue stayed silent.
     var showNotificationDialog by remember { mutableStateOf(false) }
     var logTask by remember { mutableStateOf<Task?>(null) }
+    val reviewBatchId by dialogViewModel.matchReviewBatchFlow.collectAsStateWithLifecycle()
     val notificationPermission =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             rememberPermissionState(permission = Manifest.permission.POST_NOTIFICATIONS) {
@@ -284,6 +287,22 @@ fun DownloadPageV2(
         onBatchStop = { batchId -> downloader.cancelBatch(batchId) },
         onBatchResume = { batchId -> downloader.resumeBatch(batchId) },
         onBatchDismiss = { batchId -> downloader.dismissBatch(batchId) },
+        reviewBatchId = reviewBatchId,
+        onReviewOpen = { batchId -> dialogViewModel.openMatchReview(batchId) },
+        onReviewDismiss = { dialogViewModel.closeMatchReview() },
+        onReviewAcceptAll = { batchId ->
+            downloader.acknowledgeMatches(batchId)
+            dialogViewModel.closeMatchReview()
+        },
+        onReviewSwap = { selections ->
+            dialogViewModel.closeMatchReview()
+            scope.launch {
+                val queued = downloader.swapMatches(selections)
+                if (queued == 0 && selections.isNotEmpty()) {
+                    context.makeToast(R.string.match_swap_failed)
+                }
+            }
+        },
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -421,6 +440,11 @@ fun DownloadPageImplV2(
     onBatchStop: (String) -> Unit = {},
     onBatchResume: (String) -> Unit = {},
     onBatchDismiss: (String) -> Unit = {},
+    reviewBatchId: String? = null,
+    onReviewOpen: (String) -> Unit = {},
+    onReviewDismiss: () -> Unit = {},
+    onReviewAcceptAll: (String) -> Unit = {},
+    onReviewSwap: (List<Pair<Task, MatchCandidate>>) -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
@@ -577,6 +601,7 @@ fun DownloadPageImplV2(
                                 onStop = { onBatchStop(group.batch.id) },
                                 onResume = { onBatchResume(group.batch.id) },
                                 onDismiss = { dismissTarget = group.batch },
+                                onReview = { onReviewOpen(group.batch.id) },
                                 onSongClick = { showActionSheet(it) },
                                 onSongAction = { task, action -> onActionPost(task, action) },
                             )
@@ -730,6 +755,22 @@ fun DownloadPageImplV2(
                 }
             },
         )
+    }
+    reviewBatchId?.let { batchId ->
+        val group = playlists.firstOrNull { it.batch.id == batchId }
+        val flagged = group?.let { MatchOps.flaggedEntries(it.entries) }.orEmpty()
+        if (group == null || flagged.isEmpty()) {
+            // Nothing left to review (acknowledged, dismissed, or swapped).
+            LaunchedEffect(batchId) { onReviewDismiss() }
+        } else {
+            MatchReviewSheet(
+                batch = group.batch,
+                entries = group.entries,
+                onDismissRequest = onReviewDismiss,
+                onSwap = onReviewSwap,
+                onAcceptAll = { onReviewAcceptAll(batchId) },
+            )
+        }
     }
 }
 

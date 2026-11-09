@@ -29,6 +29,7 @@ import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.core.component.KoinComponent
 
 private const val TAG = "DownloaderV2"
@@ -92,6 +94,25 @@ interface DownloaderV2 {
             if (state?.downloadState is Completed) enqueue(task.copy(batch = null), state)
         }
     }
+
+    /** Mark every flagged pick in the batch as seen, clearing the review entry. */
+    fun acknowledgeMatches(batchId: String) {
+        val map = getTaskStateMap()
+        BatchOps.entries(map, batchId).forEach { (task, state) ->
+            val match = state.match ?: return@forEach
+            if (match.flagged && !match.acknowledged) {
+                map[task] = state.copy(match = match.copy(acknowledged = true))
+            }
+        }
+        Snapshot.sendApplyNotifications()
+    }
+
+    /**
+     * Re-download the songs whose picks the user swapped. Only the chosen
+     * candidate is fetched — never a new search — and only that song's file is
+     * produced. Returns how many songs were queued.
+     */
+    suspend fun swapMatches(selections: List<Pair<Task, MatchCandidate>>): Int = 0
 }
 
 internal object FakeDownloaderV2 : DownloaderV2 {
@@ -279,6 +300,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
             taskStateMap.remove(task)
             TaskAuditLog.clear(task.id)
+            pendingSwapCleanup.remove(task.id)
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }
             return true
@@ -290,6 +312,59 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
     override fun restart(task: Task) {
         task.restartImpl()
+    }
+
+    /**
+     * Re-fetches only the candidate metadata, never the search. The scheduler
+     * then re-runs exactly the swapped songs; the old file is deleted only once
+     * its replacement finishes.
+     */
+    override suspend fun swapMatches(selections: List<Pair<Task, MatchCandidate>>): Int =
+        withContext(Dispatchers.IO) {
+            var queued = 0
+            selections
+                .distinctBy { it.first.id }
+                .forEach { (task, candidate) ->
+                    val current = taskStateMap[task] ?: return@forEach
+                    // A matching or downloading song must not have its state
+                    // torn out from under the worker.
+                    if (current.downloadState is FetchingInfo || current.downloadState is Running) {
+                        return@forEach
+                    }
+                    val match = current.match ?: return@forEach
+                    val fetched =
+                        DownloadUtil.fetchVideoInfoFromUrl(
+                            url = candidate.url,
+                            preferences = task.preferences,
+                            taskKey = task.id,
+                        )
+                    if (fetched.isFailure) {
+                        Log.w(
+                            TAG,
+                            "${task.id} swap fetch failed: ${fetched.exceptionOrNull()?.message}",
+                        )
+                        return@forEach
+                    }
+                    val info = fetched.getOrThrow()
+                    val oldPath = (current.downloadState as? Completed)?.filePath
+                    if (!oldPath.isNullOrBlank()) pendingSwapCleanup[task.id] = oldPath
+                    task.match = match.withSelection(candidate)
+                    task.info = info
+                    task.viewState = Task.ViewState.fromVideoInfo(info)
+                    task.downloadState = ReadyWithInfo
+                    queued++
+                }
+            Snapshot.sendApplyNotifications()
+            queued
+        }
+
+    override fun acknowledgeMatches(batchId: String) {
+        super.acknowledgeMatches(batchId)
+        taskStateMap.keys
+            .mapNotNull { it.batch }
+            .distinctBy { it.id }
+            .firstOrNull { it.id == batchId }
+            ?.let { updateBatchNotification(it) }
     }
 
     // All state accessors tolerate removal: a cancel/remove racing a running
@@ -355,6 +430,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         }
     }
 
+    /** Deletes the file a swapped pick replaced, but only after the new file is complete. */
+    private val pendingSwapCleanup = ConcurrentHashMap<String, String>()
+
     private val Task.notificationId: Int
         get() = id.hashCode()
 
@@ -364,7 +442,19 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      */
     private fun updateBatchNotification(batch: BatchInfo) {
         val notificationId = batch.id.hashCode()
-        val state = BatchOps.notificationState(BatchOps.summary(taskStateMap, batch.id))
+        val entries = BatchOps.entries(taskStateMap, batch.id)
+        // Once the batch is done, a flagged pick replaces the progress
+        // notification with the single review entry.
+        if (MatchOps.reviewVisible(entries)) {
+            NotificationUtil.notifyBatchReview(
+                title = batch.title,
+                text = appContext.getString(R.string.batch_notification_review, MatchOps.reviewCount(entries)),
+                notificationId = notificationId,
+                batchId = batch.id,
+            )
+            return
+        }
+        val state = BatchOps.notificationState(BatchOps.summary(entries))
         if (state == null) {
             NotificationUtil.cancelNotification(notificationId)
             return
@@ -380,6 +470,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             progress = state.progress,
             notificationId = notificationId,
         )
+    }
+
+    /** Called after a song completes: drop the file its swapped pick replaced. */
+    private fun cleanupSwappedFile(taskId: String, newPath: String?) {
+        val oldPath = pendingSwapCleanup.remove(taskId) ?: return
+        if (oldPath == newPath) return
+        runCatching { File(oldPath).takeIf { it.isFile }?.delete() }
+            .onFailure { Log.w(TAG, "could not delete replaced file: ${it.message}") }
     }
 
     /**
@@ -667,8 +765,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             .getOrThrow()
                     }
                     .onSuccess { pathList ->
-                        downloadState = Completed(pathList.firstOrNull())
-                        pathList.firstOrNull()?.let { enrichWithCompletedFile(it) }
+                        val newPath = pathList.firstOrNull()
+                        downloadState = Completed(newPath)
+                        newPath?.let { enrichWithCompletedFile(it) }
+                        cleanupSwappedFile(id, newPath)
 
                         if (usesOwnNotification) {
                             val text =
