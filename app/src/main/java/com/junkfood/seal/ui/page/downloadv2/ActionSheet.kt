@@ -384,6 +384,13 @@ fun LazyListScope.ActionButtons(
             }
         }
     }
+    // Runtime audit: cookie state and every ranker score for this task.
+    item(key = "ShowLogsButton") {
+        DownloadLogButton(modifier = Modifier.animateItem()) {
+            onActionPost(task, UiAction.ShowLogs)
+            onDismissRequest()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

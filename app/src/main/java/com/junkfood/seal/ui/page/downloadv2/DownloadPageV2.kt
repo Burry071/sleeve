@@ -229,6 +229,9 @@ sealed interface UiAction {
 
     /** Re-opens the confirm sheet for a login-walled failure. */
     data class RetryWithCookies(val url: String) : UiAction
+
+    /** Opens the runtime audit log (cookie state and every match score). */
+    data object ShowLogs : UiAction
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
@@ -249,6 +252,7 @@ fun DownloadPageV2(
     // only shows those notifications after POST_NOTIFICATIONS is granted.
     // Nothing in the V2 flow ever asked for it, so the queue stayed silent.
     var showNotificationDialog by remember { mutableStateOf(false) }
+    var logTask by remember { mutableStateOf<Task?>(null) }
     val notificationPermission =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             rememberPermissionState(permission = Manifest.permission.POST_NOTIFICATIONS) {
@@ -322,8 +326,11 @@ fun DownloadPageV2(
                     } ?: context.makeToast(R.string.file_unavailable)
                 }
             }
+            UiAction.ShowLogs -> logTask = task
         }
     }
+
+    logTask?.let { TaskLogDialog(task = it, onDismissRequest = { logTask = null }) }
 
     var preferences by remember {
         mutableStateOf(DownloadUtil.DownloadPreferences.createFromPreferences())
