@@ -3,6 +3,7 @@ package com.junkfood.seal.util
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.junkfood.seal.UpdateDownloadService
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -28,7 +30,9 @@ object AppUpdateManager {
 
     private const val TAG = "AppUpdateManager"
     private const val REPO = "Burry071/sleeve"
-    private const val APK_ASSET = "Sleeve-generic-release.apk"
+    private const val APK_ARM64 = "Sleeve-arm64-release.apk"
+    private const val APK_X86_64 = "Sleeve-x86_64-release.apk"
+    private const val APK_GENERIC = "Sleeve-generic-release.apk"
     private const val API_URL = "https://api.github.com/repos/$REPO/releases?per_page=30"
 
     // Anchored at the start but not the end: debug builds append "-debug"
@@ -105,6 +109,30 @@ object AppUpdateManager {
         compareValuesBy(a, b, { it.major }, { it.minor }, { it.patch }, { it.channelRank }, { it.build })
 
     /**
+     * Chooses the release asset this device can install. A release missing the
+     * preferred artifact falls back to the universal one, so a missing split
+     * never hides an update. The digest travels with the chosen asset, so a
+     * device can never verify against another ABI's file.
+     */
+    internal fun releaseAsset(release: JsonObject, supportedAbis: List<String>): JsonObject? {
+        val assets = release["assets"]?.jsonArray?.map { it.jsonObject }.orEmpty()
+        val preferred = assetNameFor(supportedAbis)
+        return assets.firstOrNull { it.assetName() == preferred }
+            ?: assets.firstOrNull { it.assetName() == APK_GENERIC }
+    }
+
+    internal fun assetNameFor(supportedAbis: List<String>): String =
+        supportedAbis.firstNotNullOfOrNull { abi ->
+            when (abi) {
+                "arm64-v8a" -> APK_ARM64
+                "x86_64" -> APK_X86_64
+                else -> null
+            }
+        } ?: APK_GENERIC
+
+    private fun JsonObject.assetName(): String? = this["name"]?.jsonPrimitive?.content
+
+    /**
      * Foreground check, throttled so returning to the app picks up a release
      * published while it was open without polling GitHub on every resume.
      * First re-arms a finished download that survived process death.
@@ -176,6 +204,7 @@ object AppUpdateManager {
                             .versionName
                             .orEmpty(),
                     ) ?: VersionTuple(0, 0, 0, 4, 0)
+                val supportedAbis = Build.SUPPORTED_ABIS.toList()
 
                 // A finished download the installed build already covers is
                 // stale: delete it and clear the install notifications it
@@ -199,8 +228,9 @@ object AppUpdateManager {
                 val releases = Json.parseToJsonElement(body).jsonArray.map { it.jsonObject }
 
                 // /releases/latest is a single pointer: a tag that is not a
-                // version (or a release without the APK) silently hides newer
-                // builds. Scan the list and keep the newest real release APK.
+                // version (or a release without an installable APK) silently
+                // hides newer builds. Scan the list and keep the newest real
+                // release carrying an APK for this device.
                 val best =
                     releases
                         .asSequence()
@@ -214,12 +244,7 @@ object AppUpdateManager {
                                     ?: return@mapNotNull null
                             val version = parseVersionOrNull(tag) ?: return@mapNotNull null
                             val asset =
-                                release["assets"]
-                                    ?.jsonArray
-                                    ?.map { it.jsonObject }
-                                    ?.firstOrNull {
-                                        it["name"]?.jsonPrimitive?.content == APK_ASSET
-                                    }
+                                releaseAsset(release, supportedAbis)
                                     ?: return@mapNotNull null
                             val apkUrl =
                                 asset["browser_download_url"]
