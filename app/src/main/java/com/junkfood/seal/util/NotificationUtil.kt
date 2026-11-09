@@ -45,6 +45,9 @@ object NotificationUtil {
     private const val DEFAULT_NOTIFICATION_ID = 100
     const val SERVICE_NOTIFICATION_ID = 123
     const val UPDATE_NOTIFICATION_ID = 200
+
+    /** Deep-link payload: the batch whose match review should open. */
+    const val EXTRA_REVIEW_BATCH_ID = "extra_review_batch_id"
     private lateinit var serviceNotification: Notification
 
     //    private var builder =
@@ -293,6 +296,39 @@ object NotificationUtil {
             .setContentText(text)
             .setProgress(PROGRESS_MAX, progress, false)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(pendingIntent)
+            .build()
+            .also { notificationManager.notify(notificationId, it) }
+    }
+
+    /**
+     * The single review entry after a batch finishes with flagged picks. Tapping
+     * it opens the downloads page with that batch's match review sheet.
+     */
+    fun notifyBatchReview(
+        title: String,
+        text: String,
+        notificationId: Int,
+        batchId: String,
+    ) {
+        if (!NOTIFICATION.getBoolean()) return
+        val intent =
+            Intent(context, MainActivity::class.java)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(EXTRA_REVIEW_BATCH_ID, batchId)
+        val pendingIntent =
+            PendingIntent.getActivity(
+                context,
+                notificationId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_seal)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
             .build()
