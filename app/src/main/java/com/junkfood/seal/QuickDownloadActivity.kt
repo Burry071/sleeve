@@ -32,9 +32,13 @@ import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.EXTRA_QUICK_NONCE
+import com.junkfood.seal.util.INTERNAL_PREFS
 import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
+import com.junkfood.seal.util.QUICK_NONCE_KEY
+import com.junkfood.seal.util.isTrustedQuickIntent
 import com.junkfood.seal.util.matchUrlFromSharedText
 import com.junkfood.seal.util.setLanguage
 import kotlinx.coroutines.launch
@@ -111,7 +115,6 @@ class QuickDownloadActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         intent.getSharedURL()?.let { sharedUrlCached = it }
@@ -124,12 +127,12 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         requestNotificationPermissionIfNeeded()
+        App.startService()
 
-        if (isQuickDownload && sharedUrlCached.isNotEmpty()) {
-            // Share-sheet "Quick download": straight to the queue with the
-            // default pipeline, no configure dialog. The gallery route inside
-            // handles Instagram and other image sites anonymously first.
-            App.startService()
+        if (intent.isTrustedQuick() && sharedUrlCached.isNotEmpty()) {
+            // Silent quick mode needs a nonce-carrying, non-share launch; the
+            // launcher shortcut is a share, so it opens the sheet instead. The
+            // pipeline below never uses the cookie session.
             val url = sharedUrlCached
             lifecycleScope.launch {
                 SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
@@ -137,17 +140,35 @@ class QuickDownloadActivity : ComponentActivity() {
                         ToastUtil.makeToast(
                             getString(R.string.gallery_items_queued, queued, source),
                         )
+                        finish()
                     }
                     .onFailure {
-                        ToastUtil.makeToast(it.message ?: getString(R.string.download_error_msg))
+                        // Nothing was queued: gallery resolution failed and the
+                        // default lane could not enqueue either. Retrying from
+                        // the sheet runs the full pipeline with the session.
+                        ToastUtil.makeToast(getString(R.string.quick_download_needs_confirm))
+                        showConfigureSheet(listOf(url))
                     }
-                finish()
             }
             return
         }
 
-        App.startService()
+        showConfigureSheet(if (sharedUrlCached.isEmpty()) null else listOf(sharedUrlCached))
+    }
 
+    /** Nonce-gated: a forged extra from another app opens the sheet instead. */
+    private fun Intent.isTrustedQuick(): Boolean =
+        isTrustedQuickIntent(
+            hasQuickExtra = getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false),
+            isShareAction = action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE,
+            providedNonce = getStringExtra(EXTRA_QUICK_NONCE),
+            expectedNonce =
+                getSharedPreferences(INTERNAL_PREFS, MODE_PRIVATE)
+                    .getString(QUICK_NONCE_KEY, null),
+        )
+
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalMaterial3Api::class)
+    private fun showConfigureSheet(urlList: List<String>?) {
         enableEdgeToEdge()
 
         window.run {
@@ -170,9 +191,7 @@ class QuickDownloadActivity : ComponentActivity() {
         val viewModel: DownloadDialogViewModel = getViewModel()
         // The launcher shortcut starts this activity with no shared text; the
         // sheet then opens on its URL input instead of finishing straight away.
-        viewModel.postAction(
-            Action.ShowSheet(if (sharedUrlCached.isEmpty()) null else listOf(sharedUrlCached))
-        )
+        viewModel.postAction(Action.ShowSheet(urlList))
 
         onNewIntentHandler = { newIntent ->
             newIntent.getSharedURL()?.takeIf { it.isNotBlank() }?.let { url ->

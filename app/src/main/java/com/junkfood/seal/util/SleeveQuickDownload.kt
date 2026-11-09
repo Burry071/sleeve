@@ -37,8 +37,15 @@ object SleeveQuickDownload {
             file.absolutePath
         }.getOrDefault("")
 
-    private fun directPreferences(item: GalleryItem): DownloadUtil.DownloadPreferences =
-        DownloadUtil.DownloadPreferences.createFromPreferences().copy(
+    private fun preferences(anonymous: Boolean): DownloadUtil.DownloadPreferences =
+        DownloadUtil.DownloadPreferences.createFromPreferences()
+            .let { if (anonymous) it.withoutCookies() else it }
+
+    private fun directPreferences(
+        item: GalleryItem,
+        anonymous: Boolean,
+    ): DownloadUtil.DownloadPreferences =
+        preferences(anonymous).copy(
             galleryDirect = true,
             newTitle = item.filename.substringBeforeLast('.').ifBlank {
                 item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
@@ -47,10 +54,16 @@ object SleeveQuickDownload {
         )
 
     /** Resolve via gallery → instagram embed → sniff, then enqueue each item. */
-    suspend fun enqueue(context: Context, url: String, downloader: DownloaderV2): Result<Outcome> =
+    suspend fun enqueue(
+        context: Context,
+        url: String,
+        downloader: DownloaderV2,
+        anonymous: Boolean = false,
+    ): Result<Outcome> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val cookiesFile = cookiesFile()
+                // Quick mode is a fence, not a login: no captured session.
+                val cookiesFile = if (anonymous) "" else cookiesFile()
 
                 val (source, items) =
                     runCatching {
@@ -87,7 +100,7 @@ object SleeveQuickDownload {
                     downloader.enqueue(
                         Task(
                             url = url,
-                            preferences = DownloadUtil.DownloadPreferences.createFromPreferences(),
+                            preferences = preferences(anonymous),
                         )
                     )
                     return@runCatching Outcome(1, "default")
@@ -97,7 +110,7 @@ object SleeveQuickDownload {
                 items.forEach { item ->
                     runCatching {
                         downloader.enqueue(
-                            Task(url = item.url, preferences = directPreferences(item))
+                            Task(url = item.url, preferences = directPreferences(item, anonymous))
                         )
                         queued++
                     }.onFailure { Log.e(TAG, "enqueue failed for ${item.url}: ${it.message}") }
@@ -108,13 +121,18 @@ object SleeveQuickDownload {
         }
 
     /** Plain default-preferences enqueue for URLs no extractor claims. */
-    suspend fun enqueueDefault(context: Context, url: String, downloader: DownloaderV2): Result<Unit> =
+    suspend fun enqueueDefault(
+        context: Context,
+        url: String,
+        downloader: DownloaderV2,
+        anonymous: Boolean = false,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 downloader.enqueue(
                     Task(
                         url = url,
-                        preferences = DownloadUtil.DownloadPreferences.createFromPreferences(),
+                        preferences = preferences(anonymous),
                     )
                 )
             }
@@ -126,8 +144,8 @@ object SleeveQuickDownload {
         url: String,
         downloader: DownloaderV2,
     ): Result<Outcome> =
-        enqueue(context, url, downloader).recoverCatching {
-            enqueueDefault(context, url, downloader).getOrThrow()
+        enqueue(context, url, downloader, anonymous = true).recoverCatching {
+            enqueueDefault(context, url, downloader, anonymous = true).getOrThrow()
             Outcome(1, "default")
         }
 }
