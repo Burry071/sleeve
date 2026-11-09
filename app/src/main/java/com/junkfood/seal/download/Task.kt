@@ -114,6 +114,7 @@ data class Task(
         val downloadState: DownloadState,
         val videoInfo: VideoInfo?,
         val viewState: ViewState,
+        val match: MatchResult? = null,
     )
 
     @Serializable

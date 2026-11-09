@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -197,6 +199,7 @@ object GhostEngine {
         val url: String,
         val title: String,
         val score: Double,
+        val reasons: List<String> = emptyList(),
     )
 
     data class GalleryItem(
@@ -317,25 +320,53 @@ object GhostEngine {
         candidatesJson: String,
         strictness: Int = 1,
     ): Result<RankedCandidate> =
+        rankCandidatesWithAlternatives(track, candidatesJson, strictness)
+            .map { it.first() }
+
+    /**
+     * Same ranker, but keeps the top [topN] candidates with their reason
+     * components so the task can cache them for the review sheet. Fails when
+     * no candidate passes the floor, exactly like [rankCandidates].
+     */
+    fun rankCandidatesWithAlternatives(
+        track: SpotifyTrack,
+        candidatesJson: String,
+        strictness: Int = 1,
+        topN: Int = 3,
+    ): Result<List<RankedCandidate>> =
         runCatching {
             ensureStarted()
             val trackJson = json.encodeToString(track)
             val reply =
                 Python.getInstance()
                     .getModule("sleeve_spotify")
-                    .callAttr("rank_candidates", trackJson, candidatesJson, strictness)
+                    .callAttr("rank_candidates", trackJson, candidatesJson, strictness, topN)
                     .toString()
             val obj = json.parseToJsonElement(reply).jsonObject
             if (obj["ok"]?.jsonPrimitive?.content != "true") {
                 error(obj["error"]?.jsonPrimitive?.content ?: "no candidate passed")
             }
-            RankedCandidate(
-                index = obj["index"]!!.jsonPrimitive.content.toInt(),
-                id = obj["id"]?.jsonPrimitive?.content ?: "",
-                url = obj["url"]?.jsonPrimitive?.content ?: "",
-                title = obj["title"]?.jsonPrimitive?.content ?: "",
-                score = obj["score"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
-            )
+            val ranked =
+                (obj["candidates"]?.jsonArray ?: JsonArray(emptyList())).mapNotNull { el ->
+                    runCatching {
+                        val c = el.jsonObject
+                        RankedCandidate(
+                            index = c["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                            id = c["id"]?.jsonPrimitive?.content ?: "",
+                            url = c["url"]?.jsonPrimitive?.content ?: "",
+                            title = c["title"]?.jsonPrimitive?.content ?: "",
+                            score = c["score"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+                            reasons =
+                                c["reasons"]?.jsonArray?.mapNotNull {
+                                    it.jsonPrimitive.contentOrNull
+                                } ?: emptyList(),
+                        )
+                    }.getOrNull()
+                }
+            if (ranked.isEmpty()) {
+                error(obj["error"]?.jsonPrimitive?.content ?: "no candidate passed")
+            }
+            ranked
         }
 
     /** Audible catalog metadata (public API, Libation-derived — no account). */
