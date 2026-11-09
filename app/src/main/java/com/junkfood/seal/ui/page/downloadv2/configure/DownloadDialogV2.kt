@@ -281,18 +281,9 @@ fun DownloadDialog(
 private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost: (Action) -> Unit) {
     val view = LocalView.current
     val clipboardManager = LocalClipboardManager.current
-    val url =
-        state.action.run {
-            when (this) {
-                is Action.FetchFormats -> url
-                is Action.FetchPlaylist -> url
-                is Action.FetchSpotify -> url
-                is Action.FetchGallery -> url
-                else -> {
-                    throw IllegalArgumentException()
-                }
-            }
-        }
+    // Actions carry their link when they have one, so an error for a source
+    // this page never enumerated (Audible, a future action) still renders.
+    val url = state.action.url
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(
             imageVector = Icons.Outlined.ErrorOutline,
@@ -324,7 +315,11 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
                     view.longPressHapticFeedback()
                     clipboardManager.setText(
                         AnnotatedString(
-                            App.getVersionReport() + "\nURL: ${url}\n${state.throwable.message}"
+                            buildString {
+                                append(App.getVersionReport())
+                                url?.let { append("\nURL: ").append(it) }
+                                append('\n').append(state.throwable.message)
+                            }
                         )
                     )
                     ToastUtil.makeToast(R.string.error_copied)

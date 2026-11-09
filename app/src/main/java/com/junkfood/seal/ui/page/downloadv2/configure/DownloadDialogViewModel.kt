@@ -33,21 +33,27 @@ import java.util.UUID
 import android.util.Log
 
 private const val TAG = "DownloadDialogViewModel"
+private const val RESOLVE_COOLDOWN_MS = 3000L
 
 class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel() {
 
-    /** Resolve cooldown: shared metadata-source rate limiting (ms since epoch). */
-    private val lastResolveAt = mutableMapOf<String, Long>()
+    /** Cooldown for repeated resolves of the same source and link. */
+    private val resolveGate = ResolveGate(RESOLVE_COOLDOWN_MS)
 
     /** Last accepted preset download (ms since epoch); see downloadWithPreset. */
     private var lastPresetDownloadAt = 0L
 
-    private fun resolveThrottled(kind: String): Boolean {
-        val now = System.currentTimeMillis()
-        val last = lastResolveAt[kind] ?: 0L
-        if (now - last < 3000) return true
-        lastResolveAt[kind] = now
-        return false
+    /**
+     * True when [url] was already resolved for [kind] within the cooldown.
+     * The caller must return immediately. Parking the sheet on the URL input is
+     * required: the duplicate arrives after the sheet was already put into
+     * Loading by showDialog(), and silently returning would leave that Loading
+     * attached to a job that has finished — a spinner that never resolves.
+     */
+    private fun resolveThrottled(kind: String, url: String): Boolean {
+        if (resolveGate.accept(kind, url)) return false
+        mSheetStateFlow.update { SheetState.InputUrl }
+        return true
     }
 
     sealed interface SelectionState {
@@ -81,15 +87,21 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     sealed interface Action {
+        /** Link this action fetches, when it has one. The error page reads it
+         * through this property, so adding an action can never leave it with an
+         * unhandled branch to throw on. */
+        val url: String?
+            get() = null
+
         data object HideSheet : Action
 
         data class ShowSheet(val urlList: List<String>? = null) : Action
 
-        data class FetchSpotify(val url: String) : Action
+        data class FetchSpotify(override val url: String) : Action
 
-        data class FetchAudible(val url: String) : Action
+        data class FetchAudible(override val url: String) : Action
 
-        data class FetchGallery(val url: String) : Action
+        data class FetchGallery(override val url: String) : Action
 
         data class DownloadMetadataTracks(
             val provider: String,
@@ -102,12 +114,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         data object Reset : Action
 
         data class FetchPlaylist(
-            val url: String,
+            override val url: String,
             val preferences: DownloadUtil.DownloadPreferences,
         ) : Action
 
         data class FetchFormats(
-            val url: String,
+            override val url: String,
             val audioOnly: Boolean,
             val preferences: DownloadUtil.DownloadPreferences,
         ) : Action
@@ -118,7 +130,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         ) : Action
 
         data class RunCommand(
-            val url: String,
+            override val url: String,
             val template: CommandTemplate,
             val preferences: DownloadUtil.DownloadPreferences,
         ) : Action
@@ -262,13 +274,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun hideDialog() {
         mSheetValueFlow.update { SheetValue.Hidden }
-        when (sheetState) {
-            is SheetState.Loading -> {
-                cancel()
-            }
-
-            else -> {}
-        }
+        // Success paths only hide the sheet; they never park the state. Without
+        // this the next open resurrects a Loading whose job is already gone.
+        if (sheetState is SheetState.Loading) cancel()
+        mSheetStateFlow.update { SheetState.InputUrl }
     }
 
     private fun showDialog(action: Action.ShowSheet) {
@@ -329,7 +338,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
             .containsMatchIn(url)
 
     private fun fetchGallery(action: Action.FetchGallery) {
-        if (resolveThrottled("gallery")) return
+        if (resolveThrottled("gallery", action.url)) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 SleeveQuickDownload.enqueue(App.context, action.url, downloader)
@@ -373,7 +382,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
     private fun isAudibleUrl(url: String) = Regex("audible\\.[a-z.]+/").containsMatchIn(url)
 
     private fun fetchSpotify(action: Action.FetchSpotify) {
-        if (resolveThrottled("spotify")) return
+        if (resolveThrottled("spotify", action.url)) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 GhostEngine.spotifyResolve(
@@ -435,7 +444,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
     }
 
     private fun fetchAudible(action: Action.FetchAudible) {
-        if (resolveThrottled("audible")) return
+        if (resolveThrottled("audible", action.url)) return
         val job =
             viewModelScope.launch(Dispatchers.IO) {
                 GhostEngine.audibleResolve(url = action.url)
