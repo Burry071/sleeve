@@ -434,13 +434,16 @@ def _duration_score(track_ms, cand_s):
     return 25.0
 
 
-def rank_candidates(track_json, candidates_json, strictness=1):
+def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
     """Pick the best YouTube candidate for a metadata track.
 
     track_json: {"title","artist","album","durationMs"}
     candidates_json: [{"id","url","title","uploader","channel","duration"}]
     strictness: 0=loose, 1=normal, 2=strict
-    returns {"ok","index","id","url","title","score"} of the winner.
+    top_n: how many ranked candidates to keep for the review sheet.
+
+    returns {"ok","index","id","url","title","score","candidates":[...]}
+    where candidates is the top_n list with per-component reasons.
     """
     try:
         track = json.loads(track_json) if isinstance(track_json, str) else dict(track_json or {})
@@ -448,9 +451,13 @@ def rank_candidates(track_json, candidates_json, strictness=1):
         title = track.get("title", "")
         artist = track.get("artist", "")
         duration_ms = track.get("durationMs", 0)
+        try:
+            keep = max(1, int(top_n))
+        except (TypeError, ValueError):
+            keep = 3
 
         long_form = (duration_ms or 0) > 1800_000
-        best = None
+        ranked = []
         for i, cand in enumerate(candidates):
             cand_title = cand.get("title", "") or ""
             name = _name_score(title, artist, cand_title)
@@ -478,17 +485,34 @@ def rank_candidates(track_json, candidates_json, strictness=1):
                 final = 0.35 * name + 0.45 * artist_s + 0.20 * dur
             else:
                 final = 0.4 * name + 0.35 * artist_s + 0.25 * dur
-            if best is None or final > best["score"]:
-                best = {
-                    "ok": True,
+            reasons = [
+                "title %d" % round(name),
+                "artist %d" % round(artist_s),
+                "duration %d" % round(dur),
+            ]
+            if dur_pct is None:
+                reasons.append("duration unknown")
+            elif dur_pct > 5.0:
+                reasons.append("duration differs %d%%" % round(dur_pct))
+            if long_form:
+                reasons.append("long form")
+            ranked.append(
+                {
                     "index": i,
                     "id": cand.get("id") or "",
                     "url": cand.get("url") or "",
                     "title": cand_title,
                     "score": round(final, 1),
+                    "reasons": reasons,
                 }
-        if best is None:
+            )
+        if not ranked:
             return json.dumps({"ok": False, "error": "no candidate passed the floor"})
+        ranked.sort(key=lambda item: item["score"], reverse=True)
+        top = ranked[:keep]
+        best = dict(top[0])
+        best["ok"] = True
+        best["candidates"] = top
         return json.dumps(best)
     except Exception as e:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(e)})

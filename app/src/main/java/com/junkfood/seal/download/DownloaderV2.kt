@@ -336,6 +336,16 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
         }
 
+    private var Task.match: MatchResult?
+        get() = state.match
+        set(value) {
+            if (taskStateMap.containsKey(this)) {
+                val prevState = state
+                taskStateMap[this] = prevState.copy(match = value)
+                Snapshot.sendApplyNotifications()
+            }
+        }
+
     /** Runtime evidence that the quick fence held (or that a user task uses cookies). */
     private fun auditCookieState(task: Task) {
         val line = task.cookieAudit
@@ -556,8 +566,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         // A cancel can land while the search is finishing; the
                         // cancel wins and the late result is dropped.
                         if (downloadState !is FetchingInfo) return@onSuccess
-                        info = resolved
-                        viewState = Task.ViewState.fromVideoInfo(resolved)
+                        info = resolved.videoInfo
+                        viewState = Task.ViewState.fromVideoInfo(resolved.videoInfo)
+                        match = resolved.match
                         downloadState = ReadyWithInfo
                     }
                     .onFailure { throwable ->
