@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repo": "Burry071/sleeve",
-  "notes": "Durable release audit record (RELEASE.md rule 11). Backfilled from HANDOFF.md and RELEASE-INCIDENT-2026-11-03.md on 2026-11-05. shipped_version_code is the code of the APK that was actually distributed. distributed:true means the build reached a device or a published release; deleted releases stay in the record so their codes are never reused.",
+  "notes": "Durable release audit record (RELEASE.md rule 11). Backfilled from HANDOFF.md and RELEASE-INCIDENT-2026-11-03.md on 2026-11-05. shipped_version_code is the code of the APK that was actually distributed. distributed:true means the build reached a device or a published release; deleted releases stay in the record so their codes are never reused. artifacts lists every published APK when a release ships more than one; the top-level asset_* fields name the universal APK the Orion mirror serves.",
   "releases": [
     {
       "tag": "v2.0.0-beta.1",
@@ -189,6 +189,42 @@
       "published": true,
       "distributed": true,
       "verified_at": "2026-11-09T18:57:37Z"
+    },
+    {
+      "tag": "v2.1.0-beta.2",
+      "version_name": "2.1.0-beta.2",
+      "commit": "6c93f78045e44f8e8d4b5fe7da9482d369ef8f2a",
+      "base_version_code": 201000220,
+      "shipped_version_code": 201000220,
+      "asset_name": "Sleeve-generic-release.apk",
+      "asset_size": 112978394,
+      "sha256": "1616718dac49b8fed31e09f5186f44610f6833ae9dd7e6b224e55bcc849f38ef",
+      "cert_sha256": "2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3",
+      "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0-beta.2/Sleeve-generic-release.apk",
+      "artifacts": [
+        {
+          "name": "Sleeve-arm64-release.apk",
+          "size": 64298067,
+          "sha256": "5ff85a3a32c757b6b42636cdf79c184184aa90ec9345a3e2c4637f5c22ca4eee",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0-beta.2/Sleeve-arm64-release.apk"
+        },
+        {
+          "name": "Sleeve-x86_64-release.apk",
+          "size": 64589405,
+          "sha256": "e58f8ccc4491ffab1cf6831a8774f8118d7e4aa1eb9ca3fe230ab51d78d96864",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0-beta.2/Sleeve-x86_64-release.apk"
+        },
+        {
+          "name": "Sleeve-generic-release.apk",
+          "size": 112978394,
+          "sha256": "1616718dac49b8fed31e09f5186f44610f6833ae9dd7e6b224e55bcc849f38ef",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0-beta.2/Sleeve-generic-release.apk"
+        }
+      ],
+      "published_at": "2026-11-09T23:54:06Z",
+      "published": true,
+      "distributed": true,
+      "verified_at": "2026-11-09T23:57:47Z"
     }
   ]
 }
