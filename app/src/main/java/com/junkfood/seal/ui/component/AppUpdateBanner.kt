@@ -124,9 +124,11 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                             }
                             FilledTonalButton(
                                 onClick = {
-                                    scope.launch {
-                                        AppUpdateManager.download(context, s.version, s.apkUrl)
-                                    }
+                                    AppUpdateManager.startDownload(
+                                        context,
+                                        s.version,
+                                        s.apkUrl,
+                                    )
                                 },
                                 interactionSource = interaction,
                                 modifier = Modifier.pressScale(interaction),

@@ -16,12 +16,16 @@ import androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE
 import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.NotificationActionReceiver
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_CANCEL_TASK
+import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_CANCEL_UPDATE
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_ERROR_REPORT
+import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_INSTALL_UPDATE
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_KEY
+import com.junkfood.seal.NotificationActionReceiver.Companion.APK_PATH_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.ERROR_REPORT_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.NOTIFICATION_ID_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.TASK_ID_KEY
 import com.junkfood.seal.R
+import com.junkfood.seal.UpdateDownloadService
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 
 private const val TAG = "NotificationUtil"
@@ -38,7 +42,7 @@ object NotificationUtil {
     private const val NOTIFICATION_GROUP_ID = "seal.download.notification"
     private const val DEFAULT_NOTIFICATION_ID = 100
     const val SERVICE_NOTIFICATION_ID = 123
-    private const val UPDATE_NOTIFICATION_ID = 200
+    const val UPDATE_NOTIFICATION_ID = 200
     private lateinit var serviceNotification: Notification
 
     //    private var builder =
@@ -78,37 +82,61 @@ object NotificationUtil {
         notificationManager.createNotificationChannel(updateChannel)
     }
 
-    /** Update found on GitHub Releases: one nudge per version, tap opens the app. */
-    fun notifyUpdateAvailable(version: String) {
-        val intent =
-            context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
-        val pendingIntent =
-            PendingIntent.getActivity(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+    /** Update found on GitHub Releases: actionable so the APK can be fetched
+     * straight from the shade, one nudge per version. */
+    fun notifyUpdateAvailable(version: String, apkUrl: String) {
         val notification =
             NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_seal)
                 .setContentTitle(context.getString(R.string.app_update_notif_available_title))
                 .setContentText(context.getString(R.string.app_update_notif_available_text, version))
-                .setContentIntent(pendingIntent)
+                .setContentIntent(openAppPendingIntent(UPDATE_NOTIFICATION_ID))
                 .setAutoCancel(true)
+                .addAction(
+                    0,
+                    context.getString(R.string.download),
+                    updateDownloadPendingIntent(version, apkUrl),
+                )
                 .build()
         notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
     }
 
-    /** APK finished downloading in the background: tap opens the app to install. */
-    fun notifyUpdateReady(version: String) {
-        val intent =
-            context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
-        val pendingIntent =
-            PendingIntent.getActivity(
-                context,
-                1,
-                intent,
+    /** Foreground notification while the update APK downloads. Ongoing: the
+     * service is the only thing keeping the transfer alive. */
+    fun notifyUpdateDownloading(version: String, percent: Int): Notification {
+        val notification =
+            NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_seal)
+                .setContentTitle(
+                    context.getString(R.string.app_update_notif_downloading_title, version)
+                )
+                .setContentText("$percent%")
+                .setProgress(PROGRESS_MAX, percent, false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setForegroundServiceBehavior(FOREGROUND_SERVICE_IMMEDIATE)
+                .setContentIntent(openAppPendingIntent(UPDATE_NOTIFICATION_ID))
+                .addAction(
+                    R.drawable.outline_cancel_24,
+                    context.getString(R.string.cancel),
+                    cancelUpdatePendingIntent(),
+                )
+                .build()
+        notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
+        return notification
+    }
+
+    /** APK downloaded: one tap hands it to the system installer. */
+    fun notifyUpdateReady(version: String, apkPath: String) {
+        val install =
+            PendingIntent.getBroadcast(
+                context.applicationContext,
+                // Distinct request code: PendingIntent identity ignores extras,
+                // so Install and Cancel would otherwise overwrite each other.
+                UPDATE_NOTIFICATION_ID + 1,
+                Intent(context.applicationContext, NotificationActionReceiver::class.java)
+                    .putExtra(ACTION_KEY, ACTION_INSTALL_UPDATE)
+                    .putExtra(APK_PATH_KEY, apkPath),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
         val notification =
@@ -116,11 +144,73 @@ object NotificationUtil {
                 .setSmallIcon(R.drawable.ic_stat_seal)
                 .setContentTitle(context.getString(R.string.app_update_notif_ready_title, version))
                 .setContentText(context.getString(R.string.app_update_notif_ready_text))
-                .setContentIntent(pendingIntent)
+                .setContentIntent(openAppPendingIntent(UPDATE_NOTIFICATION_ID))
                 .setAutoCancel(true)
+                .addAction(0, context.getString(R.string.install), install)
                 .build()
-        notificationManager.notify(UPDATE_NOTIFICATION_ID + 1, notification)
+        notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
     }
+
+    /** Download failed: keep the version and URL so Retry can restart it. */
+    fun notifyUpdateFailed(version: String, message: String, apkUrl: String) {
+        val notification =
+            NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_seal)
+                .setContentTitle(context.getString(R.string.app_update_notif_failed_title, version))
+                .setContentText(message)
+                .setContentIntent(openAppPendingIntent(UPDATE_NOTIFICATION_ID))
+                .setAutoCancel(true)
+                .addAction(
+                    0,
+                    context.getString(R.string.retry),
+                    updateDownloadPendingIntent(version, apkUrl),
+                )
+                .build()
+        notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
+    }
+
+    private fun openAppPendingIntent(requestCode: Int): PendingIntent? =
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+            PendingIntent.getActivity(
+                context,
+                requestCode,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+    private fun updateDownloadPendingIntent(version: String, apkUrl: String): PendingIntent {
+        val intent =
+            Intent(context.applicationContext, UpdateDownloadService::class.java)
+                .putExtra(UpdateDownloadService.EXTRA_VERSION, version)
+                .putExtra(UpdateDownloadService.EXTRA_APK_URL, apkUrl)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(
+                context.applicationContext,
+                UPDATE_NOTIFICATION_ID,
+                intent,
+                flags,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            PendingIntent.getService(
+                context.applicationContext,
+                UPDATE_NOTIFICATION_ID,
+                intent,
+                flags,
+            )
+        }
+    }
+
+    private fun cancelUpdatePendingIntent(): PendingIntent =
+        PendingIntent.getBroadcast(
+            context.applicationContext,
+            UPDATE_NOTIFICATION_ID,
+            Intent(context.applicationContext, NotificationActionReceiver::class.java)
+                .putExtra(ACTION_KEY, ACTION_CANCEL_UPDATE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     /** Update notifications outlive the process and the install they advertise;
      * cleared whenever the installed build covers them. */

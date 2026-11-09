@@ -3,7 +3,9 @@ package com.junkfood.seal.util
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.junkfood.seal.UpdateDownloadService
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -219,7 +221,7 @@ object AppUpdateManager {
                         // One notification per version, even across repeated checks.
                         if (lastNotifiedVersion != best.first) {
                             lastNotifiedVersion = best.first
-                            NotificationUtil.notifyUpdateAvailable(best.first)
+                            NotificationUtil.notifyUpdateAvailable(best.first, best.third)
                         }
                         State.Available(best.first, best.third)
                     } else {
@@ -253,6 +255,18 @@ object AppUpdateManager {
                     }
                 }
         }
+    }
+
+    /** Starts the transfer in a foreground service so leaving the app (or the
+     * shade) does not cancel it; the service reports progress and the final
+     * install notification. */
+    fun startDownload(context: Context, version: String, apkUrl: String) {
+        if (mutableState.value is State.Downloading) return
+        val intent =
+            Intent(context, UpdateDownloadService::class.java)
+                .putExtra(UpdateDownloadService.EXTRA_VERSION, version)
+                .putExtra(UpdateDownloadService.EXTRA_APK_URL, apkUrl)
+        ContextCompat.startForegroundService(context, intent)
     }
 
     suspend fun download(context: Context, version: String, apkUrl: String) {
@@ -295,9 +309,9 @@ object AppUpdateManager {
                     ?.filter { it != target }
                     ?.forEach { it.delete() }
                 mutableState.value = State.Ready(version, target)
-                // The download can finish while the app is backgrounded;
-                // surface the install step outside the banner too.
-                NotificationUtil.notifyUpdateReady(version)
+                // The service owning this call posts the install notification
+                // after it leaves the foreground; posting it here would be
+                // wiped by stopForeground(STOP_FOREGROUND_REMOVE).
             }.onFailure {
                 part.delete()
                 mutableState.value =

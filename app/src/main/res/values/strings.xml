@@ -214,6 +214,8 @@
     <string name="app_update_notif_available_text">Sleeve %1$s is out. Tap to update in the app.</string>
     <string name="app_update_notif_ready_title">Sleeve %1$s downloaded</string>
     <string name="app_update_notif_ready_text">Tap to install the update.</string>
+    <string name="app_update_notif_downloading_title">Downloading Sleeve %1$s</string>
+    <string name="app_update_notif_failed_title">Sleeve %1$s download failed</string>
     <string name="clipboard_link_detected">Link detected in clipboard</string>
     <string name="add_cookies">Add cookies</string>
     <string name="download_all_count">Download all (%1$d)</string>

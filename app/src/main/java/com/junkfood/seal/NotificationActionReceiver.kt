@@ -7,9 +7,11 @@ import android.content.Intent
 import android.util.Log
 import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.download.DownloaderV2
+import com.junkfood.seal.util.AppUpdateManager
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.ToastUtil
 import com.yausername.youtubedl_android.YoutubeDL
+import java.io.File
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 
@@ -22,9 +24,12 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
 
         const val ACTION_CANCEL_TASK = 0
         const val ACTION_ERROR_REPORT = 1
+        const val ACTION_INSTALL_UPDATE = 2
+        const val ACTION_CANCEL_UPDATE = 3
 
         const val ACTION_KEY = PACKAGE_NAME_PREFIX + "action"
         const val TASK_ID_KEY = PACKAGE_NAME_PREFIX + "taskId"
+        const val APK_PATH_KEY = PACKAGE_NAME_PREFIX + "apkPath"
 
         const val NOTIFICATION_ID_KEY = PACKAGE_NAME_PREFIX + "notificationId"
         const val ERROR_REPORT_KEY = PACKAGE_NAME_PREFIX + "error_report"
@@ -45,6 +50,14 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
                 val errorReport = intent.getStringExtra(ERROR_REPORT_KEY)
                 if (!errorReport.isNullOrEmpty()) copyErrorReport(errorReport, notificationId)
             }
+
+            ACTION_INSTALL_UPDATE -> {
+                val apkPath = intent.getStringExtra(APK_PATH_KEY)
+                val ctx = context ?: return
+                if (!apkPath.isNullOrEmpty()) AppUpdateManager.install(ctx, File(apkPath))
+            }
+
+            ACTION_CANCEL_UPDATE -> AppUpdateManager.cancelDownload()
         }
     }
 
