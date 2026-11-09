@@ -15,7 +15,7 @@ import androidx.documentfile.provider.DocumentFile
 import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.R
 import java.io.File
-import okhttp3.internal.closeQuietly
+import java.io.IOException
 
 const val AUDIO_REGEX = "(mp3|aac|opus|m4a)$"
 const val THUMBNAIL_REGEX = "\\.(jpg|png)$"
@@ -162,41 +162,62 @@ object FileUtil {
 
     @CheckResult
     fun moveFilesToSdcard(tempPath: File, sdcardUri: String): Result<List<String>> {
-        val uriList = mutableListOf<String>()
+        val copied = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        var cause: Throwable? = null
         val destDir =
-            Uri.parse(sdcardUri).run {
-                DocumentsContract.buildDocumentUriUsingTree(
-                    this,
-                    DocumentsContract.getTreeDocumentId(this),
-                )
-            }
-        val res =
-            tempPath.runCatching {
-                walkTopDown().forEach {
-                    if (it.isDirectory) return@forEach
-                    val mimeType =
-                        MimeTypeMap.getSingleton().getMimeTypeFromExtension(it.extension) ?: "*/*"
+            runCatching {
+                    Uri.parse(sdcardUri).run {
+                        DocumentsContract.buildDocumentUriUsingTree(
+                            this,
+                            DocumentsContract.getTreeDocumentId(this),
+                        )
+                    }
+                }
+                .getOrElse { return Result.failure(it) }
 
+        try {
+            tempPath.walkTopDown().forEach { file ->
+                if (file.isDirectory) return@forEach
+                try {
+                    val mimeType =
+                        MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "*/*"
                     val destUri =
                         DocumentsContract.createDocument(
                             context.contentResolver,
                             destDir,
                             mimeType,
-                            it.name,
-                        ) ?: return@forEach
-
-                    val inputStream = it.inputStream()
+                            file.name,
+                        )
+                            ?: run {
+                                failed += file.name
+                                return@forEach
+                            }
                     val outputStream =
-                        context.contentResolver.openOutputStream(destUri) ?: return@forEach
-                    inputStream.copyTo(outputStream)
-                    inputStream.closeQuietly()
-                    outputStream.closeQuietly()
-                    uriList.add(destUri.toString())
+                        context.contentResolver.openOutputStream(destUri)
+                            ?: run {
+                                failed += file.name
+                                return@forEach
+                            }
+                    file.inputStream().use { input ->
+                        outputStream.use { output -> input.copyTo(output) }
+                    }
+                    copied.add(destUri.toString())
+                } catch (e: Exception) {
+                    failed += file.name
+                    cause = cause ?: e
                 }
-                uriList
             }
-        tempPath.deleteRecursively()
-        return res
+        } catch (e: Exception) {
+            failed += tempPath.name
+            cause = cause ?: e
+        }
+
+        val result = sdcardCopyResult(copied = copied, failed = failed, cause = cause)
+        // The temp copy is the only intact copy when any file failed; deleting
+        // it here is what turned a revoked tree URI into lost media.
+        if (result.isSuccess) tempPath.deleteRecursively()
+        return result
     }
 
     fun clearTempFiles(downloadDir: File): Int {
@@ -260,3 +281,25 @@ object FileUtil {
 
     private const val TAG = "FileUtil"
 }
+
+/**
+ * A partially copied batch is a failure: the task must not report "Downloaded"
+ * when some files never reached the SD card. [copied] stays out of the success
+ * value so callers cannot mistake a partial move for a complete one.
+ */
+internal fun sdcardCopyResult(
+    copied: List<String>,
+    failed: List<String>,
+    cause: Throwable? = null,
+): Result<List<String>> =
+    if (failed.isEmpty()) {
+        Result.success(copied)
+    } else {
+        Result.failure(
+            IOException(
+                "SD card copy failed for ${failed.size} of ${copied.size + failed.size} file(s): " +
+                    failed.joinToString(", "),
+                cause,
+            )
+        )
+    }
