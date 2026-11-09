@@ -11,7 +11,7 @@ is published as "Sleeve" and is not endorsed by any upstream project.
 | yt-dlp | github.com/yt-dlp/yt-dlp | Unlicense | Site extraction |
 | youtubedl-android | github.com/JunkFood02/youtubedl-android | Apache-2.0 / LGPL-2.1 | yt-dlp runtime on Android |
 | gallery-dl | github.com/mikf/gallery-dl | GPL-2.0 | Image/media site extraction |
-| N_m3u8DL-RE | github.com/nilaoda/N_m3u8DL-RE | MIT | HLS/DASH engine (`libnm3u8dlre.so`) |
+| N_m3u8DL-RE | github.com/nilaoda/N_m3u8DL-RE | MIT | HLS/DASH engine (`libnm3u8dlre.so`), upstream v0.6.0-beta android-bionic builds, unmodified |
 | FFmpeg | ffmpeg.org | LGPL-2.1+ | Merge and metadata (`libffmpeg.so`) |
 | Chaquopy | github.com/chaquo/chaquopy | MIT | Embedded Python 3.13 runtime |
 | requests | github.com/psf/requests | Apache-2.0 | HTTP for gallery-dl (vendored) |
@@ -22,3 +22,18 @@ is published as "Sleeve" and is not endorsed by any upstream project.
 | Jetpack Compose / Kotlin | androidx, jetbrains | Apache-2.0 | Android app stack |
 | monet | github.com/Kyant0/monet | Apache-2.0 | Dynamic color |
 | Space Grotesk | Florian Karsten | SIL OFL 1.1 | Typography |
+
+## Bundled N_m3u8DL-RE binaries
+
+Sleeve ships the upstream executables unmodified, renamed to
+`libnm3u8dlre.so` so Android extracts them as executable native payloads.
+Both files come from the same upstream release and build pipeline:
+
+| ABI | Upstream asset | SHA-256 |
+|---|---|---|
+| arm64-v8a | `N_m3u8DL-RE_v0.6.0-beta_android-bionic-arm64_20260629.tar.gz` | `ea473427fcee215223815eaab607e31e8f114557d0ef13f311af3e408dbe729d` |
+| x86_64 | `N_m3u8DL-RE_v0.6.0-beta_android-bionic-x64_20260629.tar.gz` | `b47f72547e75b0fdd86fb379d06d18a30d79b5d1f8e26998fa0b9a86fb535c43` |
+
+Download URL pattern:
+`https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.6.0-beta/<asset>`.
+Update this table whenever either binary is replaced.
