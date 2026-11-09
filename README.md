@@ -19,6 +19,7 @@ downloads each link by the fastest path available.
 [![Platform](https://img.shields.io/badge/platform-Android%207.0%2B-3DDC84)](https://developer.android.com)
 
 [![Get it on Orion Store](https://raw.githubusercontent.com/RookieEnough/Orion-Store/refs/heads/main/assets/orion-badge.png)](https://rookieenough.github.io/Orion-Data/app/?id=sleeve)
+[![Get it on Obtainium](https://img.shields.io/badge/Get%20it%20on-Obtainium-3DDC84)](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.sleeve.app%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FBurry071%2Fsleeve%22%2C%22author%22%3A%22Burry071%22%2C%22name%22%3A%22Sleeve%22%7D)
 
 <img width="280" alt="Sleeve home screen" src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png">&nbsp;<img width="280" alt="Sleeve download options" src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png">&nbsp;<img width="280" alt="Sleeve download queue" src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png">
 
