@@ -93,13 +93,19 @@ class ParseGradleTest(unittest.TestCase):
 
 
 class ShippedCodesTest(unittest.TestCase):
-    def test_no_splits_uses_first_abi(self):
+    def test_no_splits_reports_the_single_code(self):
         codes = guard.compute_shipped_codes(200_000_300, "arm64-v8a;x86_64", False)
-        self.assertEqual(codes, {"arm64-v8a": 200_000_302})
+        self.assertEqual(codes, {"arm64-v8a": 200_000_300})
 
-    def test_split_builds_apply_each_offset(self):
+    def test_split_builds_share_one_code(self):
         codes = guard.compute_shipped_codes(200_000_300, "arm64-v8a;x86_64", True)
-        self.assertEqual(codes, {"arm64-v8a": 200_000_302, "x86_64": 200_000_304})
+        self.assertEqual(codes, {"arm64-v8a": 200_000_300, "x86_64": 200_000_300})
+
+    def test_abi_offsets_are_never_added(self):
+        codes = guard.compute_shipped_codes(
+            201_000_220, "arm64-v8a;x86_64;armeabi-v7a;x86", True
+        )
+        self.assertEqual(set(codes.values()), {201_000_220})
 
     def test_unknown_abi_fails(self):
         with self.assertRaises(guard.GuardError):
@@ -108,6 +114,27 @@ class ShippedCodesTest(unittest.TestCase):
     def test_empty_filters_fail(self):
         with self.assertRaises(guard.GuardError):
             guard.compute_shipped_codes(1, " ; ", False)
+
+
+class ChangelogTest(unittest.TestCase):
+    def check(self, text=None):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "201000220.txt")
+            if text is not None:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            return guard.check_changelog(path, 201_000_220)
+
+    def test_missing_changelog_fails(self):
+        self.assertEqual([issue.level for issue in self.check()], ["fail"])
+
+    def test_blank_changelog_fails(self):
+        self.assertEqual([issue.level for issue in self.check(" \n\t\n")], ["fail"])
+
+    def test_written_changelog_passes(self):
+        self.assertEqual(
+            [issue.level for issue in self.check("Per-ABI release artifacts.\n")], ["ok"]
+        )
 
 
 class RecordTest(unittest.TestCase):

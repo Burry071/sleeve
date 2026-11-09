@@ -57,6 +57,11 @@ except ImportError:  # run directly: python scripts/verify_release.py
 DEFAULT_REPO = "Burry071/sleeve"
 DEFAULT_LIMIT = 30
 GENERIC_APK_NAME = "Sleeve-generic-release.apk"
+ARM64_APK_NAME = "Sleeve-arm64-release.apk"
+ABI_NAME_TOKENS = {
+    "arm64-v8a": ("arm64-v8a", "arm64"),
+    "armeabi-v7a": ("armeabi-v7a", "armeabi"),
+}
 EXPECTED_PACKAGE = "com.sleeve.app"
 MIRROR_URL = (
     "https://raw.githubusercontent.com/RookieEnough/Orion-Data/data/mirror.json"
@@ -585,6 +590,12 @@ def select_release(
 # ---------------------------------------------------------------------------
 
 
+def _abi_matches(name: str, abi: str) -> bool:
+    """Asset names abbreviate ABIs: arm64-v8a ships as Sleeve-arm64-*.apk."""
+    tokens = ABI_NAME_TOKENS.get(abi.lower(), (abi.lower(),))
+    return any(token in name for token in tokens)
+
+
 def pick_asset(assets: list, abi: Optional[str]) -> Optional[dict]:
     apks = [
         asset
@@ -596,9 +607,8 @@ def pick_asset(assets: list, abi: Optional[str]) -> Optional[dict]:
         return None
     apks.sort(key=lambda a: str(a.get("name") or "").lower())
     if abi:
-        wanted = abi.lower()
         for asset in apks:
-            if wanted in str(asset.get("name") or "").lower():
+            if _abi_matches(str(asset.get("name") or "").lower(), abi):
                 return asset
     for asset in apks:
         if str(asset.get("name") or "").lower() == GENERIC_APK_NAME.lower():
@@ -633,10 +643,10 @@ def choose_candidate(
                 f"{candidate.tag}: {name} state={state!r}; upload incomplete, skipping",
             )
             continue
-        if abi and abi.lower() not in name.lower():
+        if abi and not _abi_matches(name.lower(), abi):
             log.warn(
                 "asset",
-                f"{candidate.tag}: no asset name contains ABI {abi}; using {name}",
+                f"{candidate.tag}: no asset name matches ABI {abi}; using {name}",
             )
         digest = str(asset.get("digest") or "").strip().lower()
         digest_value = digest.split(":", 1)[1] if digest.startswith("sha256:") else ""
@@ -648,15 +658,22 @@ def choose_candidate(
                 f"{candidate.tag}: GitHub reports no usable sha256 digest for {name}; "
                 "pin the APK with --expect-sha256 after downloading it once",
             )
-        if name.lower() != GENERIC_APK_NAME.lower() and not any(
-            str(item.get("name") or "").lower() == GENERIC_APK_NAME.lower()
+        names = {
+            str(item.get("name") or "").lower()
             for item in assets
             if isinstance(item, dict)
-        ):
+        }
+        if GENERIC_APK_NAME.lower() not in names:
             log.warn(
                 "asset",
                 f"{candidate.tag}: no asset named {GENERIC_APK_NAME}; "
-                "the README /releases/latest/download link would 404",
+                "the README universal download link would 404",
+            )
+        if ARM64_APK_NAME.lower() not in names:
+            log.warn(
+                "asset",
+                f"{candidate.tag}: no asset named {ARM64_APK_NAME}; "
+                "the README default download link would 404",
             )
         return candidate, asset
     log.fail("asset", "no eligible release carries a non-empty .apk asset")
@@ -1526,12 +1543,8 @@ def emit_summary(summary: dict[str, Any], as_json: bool, stream) -> None:
 
 
 def derive_version_code_parts(shipped: int) -> tuple[Optional[int], Optional[str]]:
-    """Invert the ABI offset: base codes always end in 0, offsets are 1..4."""
-    remainder = shipped % 10
-    abi = {code: name for name, code in release_guard.ABI_CODES.items()}.get(remainder)
-    if abi is None:
-        return None, None
-    return shipped - remainder, abi
+    """One release ships one versionCode: the base code is the shipped code."""
+    return shipped, None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1557,7 +1570,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="auto: newest stable if any, else newest beta; beta: newest incl. prereleases",
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="releases to fetch (default 30, max 100)")
-    parser.add_argument("--abi", default=None, help="prefer an asset whose name contains this ABI (e.g. arm64-v8a)")
+    parser.add_argument(
+        "--abi",
+        default=None,
+        help="prefer an asset built for this ABI, e.g. arm64-v8a selects "
+        "Sleeve-arm64-release.apk (default: the universal Sleeve-generic-release.apk)",
+    )
     parser.add_argument(
         "--validate-url",
         action=argparse.BooleanOptionalAction,
