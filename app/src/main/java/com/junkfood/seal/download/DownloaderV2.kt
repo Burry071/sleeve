@@ -127,6 +127,14 @@ internal object FakeDownloaderV2 : DownloaderV2 {
 internal fun needsCancelBeforeRemoval(state: Task.State): Boolean =
     state.downloadState is DownloadState.Cancelable
 
+/**
+ * A cancelable task clears its notification inside [cancelImpl]. Every other
+ * state keeps a finished/failed notification whose actions would point at a
+ * task that no longer exists after removal.
+ */
+internal fun clearsOwnNotificationOnRemoval(state: Task.State, usesOwnNotification: Boolean): Boolean =
+    usesOwnNotification && state.downloadState !is DownloadState.Cancelable
+
 @OptIn(FlowPreview::class)
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -261,7 +269,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      */
     override fun remove(task: Task): Boolean {
         if (taskStateMap.contains(task)) {
-            if (needsCancelBeforeRemoval(task.state)) task.cancelImpl()
+            if (needsCancelBeforeRemoval(task.state)) {
+                // cancelImpl stops the worker and clears the task's notification.
+                task.cancelImpl()
+            } else if (clearsOwnNotificationOnRemoval(task.state, task.usesOwnNotification)) {
+                NotificationUtil.cancelNotification(task.notificationId)
+            }
             taskStateMap.remove(task)
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }

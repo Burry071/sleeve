@@ -2,6 +2,7 @@ package com.junkfood.seal
 
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState
+import com.junkfood.seal.download.clearsOwnNotificationOnRemoval
 import com.junkfood.seal.download.needsCancelBeforeRemoval
 import kotlinx.coroutines.Job
 import org.junit.Assert.assertFalse
@@ -35,6 +36,46 @@ class TaskRemovalTest {
         assertFalse(
             needsCancelBeforeRemoval(
                 state(DownloadState.Canceled(action = Task.RestartableAction.Download))
+            )
+        )
+    }
+
+    @Test
+    fun deletingATerminalTaskTakesItsOwnNotificationWithIt() {
+        // Failed/completed tasks keep a notification with Retry/Open actions;
+        // after removal nothing could answer those actions.
+        assertTrue(
+            clearsOwnNotificationOnRemoval(
+                state(DownloadState.Error(action = Task.RestartableAction.Download)),
+                usesOwnNotification = true,
+            )
+        )
+        assertTrue(
+            clearsOwnNotificationOnRemoval(
+                state(DownloadState.Completed(filePath = "/tmp/a.mp4")),
+                usesOwnNotification = true,
+            )
+        )
+        assertTrue(
+            clearsOwnNotificationOnRemoval(
+                state(DownloadState.Canceled(action = Task.RestartableAction.Download)),
+                usesOwnNotification = true,
+            )
+        )
+    }
+
+    @Test
+    fun cancelableAndBatchTasksDoNotNeedTheExtraClear() {
+        assertFalse(
+            clearsOwnNotificationOnRemoval(
+                state(DownloadState.Running(job = Job(), taskId = "t")),
+                usesOwnNotification = true,
+            )
+        )
+        assertFalse(
+            clearsOwnNotificationOnRemoval(
+                state(DownloadState.Error(action = Task.RestartableAction.Download)),
+                usesOwnNotification = false,
             )
         )
     }
