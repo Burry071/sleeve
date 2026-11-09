@@ -1,7 +1,7 @@
-# Playlist batch downloads — design
+# Playlist batch downloads
 
 Date: 2026-11-04
-Status: design approved in chat; this document is awaiting owner review
+Status: Implemented in 2.0.0-beta.11
 Scope: Spotify/Audible metadata playlists and yt-dlp playlists in Sleeve 2.0
 
 ## 1. Problem
