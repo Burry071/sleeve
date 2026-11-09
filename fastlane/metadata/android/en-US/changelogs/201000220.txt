@@ -1,0 +1,13 @@
+2.1.0-beta.2
+
+Install
+• Releases now ship three APKs: Sleeve-arm64-release.apk for most phones, Sleeve-x86_64-release.apk for x86_64 devices and emulators, and Sleeve-generic-release.apk that runs on both.
+• The arm64 APK is smaller than the universal one and is the default download.
+• All three carry versionCode 201000220 and the same signing certificate, so switching between them keeps updates working.
+
+Updates
+• The in-app updater downloads the APK that matches the device's CPU instead of always taking the universal file.
+• The download is checked against the chosen file's published SHA-256 before the installer opens.
+
+Engine
+• x86_64 builds now include the N_m3u8DL-RE binary for HLS downloads.
