@@ -48,7 +48,7 @@ import com.junkfood.seal.util.ToastUtil
 
 private const val repoUrl = "https://github.com/JunkFood02/Seal"
 private const val engineUrl = "https://github.com/XiaoYouChR/Ghost-Downloader-3"
-const val weblate = "https://hosted.weblate.org/engage/seal/"
+const val weblate = "https://github.com/Burry071/sleeve/blob/main/CONTRIBUTING.md#translating"
 const val YtdlpRepository = "https://github.com/yt-dlp/yt-dlp"
 private const val TAG = "AboutPage"
 
