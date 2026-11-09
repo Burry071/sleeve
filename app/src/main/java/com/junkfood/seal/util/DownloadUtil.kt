@@ -158,9 +158,33 @@ object DownloadUtil {
             .joinToString(separator = " ")
             .let { Regex("\\s+").replace(it, " ").trim() }
 
+    /**
+     * The ranker scores candidates 0-100. Anything under 60 is not a confident
+     * match, so the plain-YouTube pool is searched as well.
+     */
+    private const val WIDEN_BELOW_SCORE = 60.0
+
     /** A missing or weak YouTube Music match widens to a plain YouTube search. */
     internal fun shouldWidenSearch(bestScore: Double?): Boolean =
-        bestScore == null || bestScore < 0.5
+        bestScore == null || bestScore < WIDEN_BELOW_SCORE
+
+    /**
+     * Picks the winner between the YouTube Music pool and the plain-YouTube
+     * pool. A floor-rejected music pool arrives here as null instead of as an
+     * error, so the widening leg still runs. [isActive] is polled before the
+     * second search and after it, so a cancel never leaves that search running.
+     */
+    internal fun matchBestCandidate(
+        isActive: () -> Boolean,
+        musicSearch: () -> GhostEngine.RankedCandidate?,
+        wideSearch: () -> GhostEngine.RankedCandidate?,
+    ): GhostEngine.RankedCandidate? {
+        val musicBest = musicSearch()
+        if (!isActive()) return null
+        if (!shouldWidenSearch(musicBest?.score)) return musicBest
+        val best = listOfNotNull(musicBest, wideSearch()).maxByOrNull { it.score }
+        return if (isActive()) best else null
+    }
 
     /** Cancellation bail-out for [resolveMetadataTrack]; returned, never thrown. */
     private fun matchCanceled(): Result<VideoInfo> =
@@ -205,31 +229,39 @@ object DownloadUtil {
                     ?.entries
                     .orEmpty()
 
-            fun rank(candidates: List<PlaylistEntry>) =
-                GhostEngine.rankCandidates(
+            var rankError: Throwable? = null
+
+            // A floor rejection is a failed ranking, not a fatal error: the
+            // plain-YouTube pool still needs its chance before the task fails.
+            fun ranked(pool: String): GhostEngine.RankedCandidate? {
+                val candidates = search(pool)
+                if (candidates.isEmpty()) return null
+                return GhostEngine.rankCandidates(
                         track = track,
                         candidatesJson = jsonFormat.encodeToString(candidates),
                         strictness = RANKING_STRICTNESS.getInt(),
                     )
-                    .getOrThrow()
-
-            val musicPool = search("ytmsearch5")
-            val musicBest = musicPool.takeIf { it.isNotEmpty() }?.let(::rank)
-
-            // A canceled first leg degrades to an empty pool, so widen only
-            // while the task is still matching.
-            if (!isActive()) return matchCanceled()
+                    .onFailure { rankError = it }
+                    .getOrNull()
+            }
 
             val best =
-                if (shouldWidenSearch(musicBest?.score)) {
-                    val wideBest = search("ytsearch10").takeIf { it.isNotEmpty() }?.let(::rank)
-                    listOfNotNull(musicBest, wideBest).maxByOrNull { it.score }
-                        ?: throw IllegalStateException("no candidates")
-                } else {
-                    musicBest!!
-                }
+                matchBestCandidate(
+                    isActive = isActive,
+                    musicSearch = { ranked("ytmsearch5") },
+                    wideSearch = { ranked("ytsearch10") },
+                )
 
+            // A canceled first leg degrades to an empty pool, so stop before
+            // extraction spawns a process no later cancel can reach.
             if (!isActive()) return matchCanceled()
+
+            if (best == null) {
+                throw IllegalStateException(
+                    "No confident YouTube match for \"${track.title}\" by \"${track.artist}\"" +
+                        (rankError?.message?.let { ": $it" } ?: "")
+                )
+            }
 
             val resolvedUrl = best.url.ifBlank { "https://www.youtube.com/watch?v=" + best.id }
             val resolved =
