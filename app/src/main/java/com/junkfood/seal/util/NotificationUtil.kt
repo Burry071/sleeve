@@ -8,12 +8,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE
 import com.junkfood.seal.App.Companion.context
+import com.junkfood.seal.MainActivity
 import com.junkfood.seal.NotificationActionReceiver
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_CANCEL_TASK
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_CANCEL_UPDATE
@@ -362,11 +364,18 @@ object NotificationUtil {
         notificationManager.cancel(notificationId)
     }
 
+    /**
+     * A login-walled extraction is recoverable once the user signs in, so the
+     * failure notification offers a one-tap route back into the confirm sheet
+     * with the same URL instead of forcing them to re-share the link.
+     */
     fun notifyError(
         title: String,
         textId: Int = R.string.download_error_msg,
         notificationId: Int,
         report: String,
+        url: String? = null,
+        withCookieRetry: Boolean = false,
     ) {
         if (!NOTIFICATION.getBoolean()) return
 
@@ -386,10 +395,31 @@ object NotificationUtil {
                     PendingIntent.FLAG_IMMUTABLE or
                     PendingIntent.FLAG_UPDATE_CURRENT,
             )
+
+        val retryIntent =
+            url
+                ?.takeIf { withCookieRetry }
+                ?.let {
+                    PendingIntent.getActivity(
+                        context,
+                        notificationId,
+                        Intent(context, MainActivity::class.java)
+                            .setAction(Intent.ACTION_VIEW)
+                            .setData(Uri.parse(it))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                }
+
+        val text =
+            context.getString(textId) +
+                if (retryIntent != null) " → " + context.getString(R.string.retry_with_cookies)
+                else ""
+
         NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_seal)
             .setContentTitle(title)
-            .setContentText(context.getString(textId))
+            .setContentText(text)
             .setOngoing(false)
             .addAction(
                 R.drawable.outline_content_copy_24,
@@ -397,6 +427,13 @@ object NotificationUtil {
                 pendingIntent,
             )
             .run {
+                retryIntent?.let {
+                    addAction(
+                        R.drawable.outline_restart_alt_24,
+                        context.getString(R.string.retry_with_cookies),
+                        it,
+                    )
+                }
                 notificationManager.cancel(notificationId)
                 notificationManager.notify(notificationId, build())
             }

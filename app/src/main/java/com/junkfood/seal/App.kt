@@ -17,6 +17,7 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.content.getSystemService
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.DownloaderV2Impl
@@ -25,19 +26,22 @@ import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.page.settings.directory.Directory
 import com.junkfood.seal.ui.page.settings.network.CookiesViewModel
 import com.junkfood.seal.ui.page.videolist.VideoListViewModel
+import com.junkfood.seal.util.ACTION_QUICK_CLIPBOARD
 import com.junkfood.seal.util.AUDIO_DIRECTORY
+import com.junkfood.seal.util.CLIPBOARD_QUICK_DOWNLOAD
 import com.junkfood.seal.util.COMMAND_DIRECTORY
 import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.EXTRA_QUICK_NONCE
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.createEmptyFile
-import com.junkfood.seal.util.FileUtil.getCookiesFile
+import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.FileUtil.getExternalDownloadDirectory
 import com.junkfood.seal.util.FileUtil.getExternalPrivateDownloadDirectory
 import com.junkfood.seal.util.INTERNAL_PREFS
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
+import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.PreferenceUtil.updateString
 import com.junkfood.seal.util.QUICK_NONCE_KEY
@@ -61,6 +65,8 @@ import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
+
+private const val TAG = "App"
 
 class App : Application() {
     override fun onCreate() {
@@ -97,12 +103,13 @@ class App : Application() {
         publishQuickDownloadShortcut(this@App)
 
         applicationScope.launch((Dispatchers.IO)) {
+            FileUtil.purgeStagedShareFiles()
             try {
                 YoutubeDL.init(this@App)
                 FFmpeg.init(this@App)
                 Aria2c.init(this@App)
                 DownloadUtil.getCookiesContentFromDatabase().getOrNull()?.let {
-                    FileUtil.writeContentToFile(it, getCookiesFile())
+                    FileUtil.writeContentToFile(it, getCookieFile())
                 }
                 UpdateUtil.deleteOutdatedApk()
             } catch (th: Throwable) {
@@ -178,30 +185,86 @@ class App : Application() {
             }
         }
 
-        private fun publishQuickDownloadShortcut(context: Context) {
-            // Silent quick mode is nonce-gated: only Sleeve knows the value it
-            // hands its own shortcut, so other apps cannot mint a trusted launch.
-            val nonce = UUID.randomUUID().toString()
-            context.getSharedPreferences(INTERNAL_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(QUICK_NONCE_KEY, nonce)
-                .apply()
-            val shortcut =
-                ShortcutInfoCompat.Builder(context, "quick-download")
-                    .setShortLabel(context.getString(R.string.quick_download_label))
-                    .setLongLabel(context.getString(R.string.quick_download_label))
-                    .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
-                    .setIntent(
-                        Intent(Intent.ACTION_SEND)
-                            .setClass(context, QuickDownloadActivity::class.java)
-                            .setType("text/plain")
-                            .putExtra(EXTRA_QUICK_DOWNLOAD, true)
-                            .putExtra(EXTRA_QUICK_NONCE, nonce),
-                    )
-                    .setLongLived(true)
-                    .build()
-            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
-        }
+        private const val QUICK_SHORTCUT_ID = "quick-download"
+        private const val CLIPBOARD_SHORTCUT_ID = "quick-clipboard"
+
+        /**
+         * Silent quick mode is nonce-gated: only Sleeve knows the value it hands
+         * its own shortcuts, so other apps cannot mint a trusted launch. The
+         * clipboard shortcut exists only while the preference is on. Re-publishing
+         * on a nonce rotation revokes every intent handed out before it; pinned
+         * copies then land on the confirm sheet instead of enqueuing.
+         */
+        fun publishQuickDownloadShortcut(context: Context, rotateNonce: Boolean = true): Boolean =
+            runCatching {
+                    val prefs =
+                        context.getSharedPreferences(INTERNAL_PREFS, Context.MODE_PRIVATE)
+                    val storedNonce = prefs.getString(QUICK_NONCE_KEY, null)
+                    val nonce =
+                        if (rotateNonce || storedNonce == null) UUID.randomUUID().toString()
+                        else storedNonce
+                    if (nonce != storedNonce)
+                        prefs.edit().putString(QUICK_NONCE_KEY, nonce).apply()
+
+                    val quickPushed =
+                        ShortcutManagerCompat.pushDynamicShortcut(
+                            context,
+                            shortcutFor(
+                                context = context,
+                                id = QUICK_SHORTCUT_ID,
+                                labelRes = R.string.quick_download_label,
+                                intent =
+                                    Intent(Intent.ACTION_SEND)
+                                        .setClass(context, QuickDownloadActivity::class.java)
+                                        .setType("text/plain")
+                                        .putExtra(EXTRA_QUICK_DOWNLOAD, true)
+                                        .putExtra(EXTRA_QUICK_NONCE, nonce),
+                            ),
+                        )
+
+                    val clipboardOk =
+                        if (CLIPBOARD_QUICK_DOWNLOAD.getBoolean()) {
+                            ShortcutManagerCompat.pushDynamicShortcut(
+                                context,
+                                shortcutFor(
+                                    context = context,
+                                    id = CLIPBOARD_SHORTCUT_ID,
+                                    labelRes = R.string.quick_clipboard_label,
+                                    intent =
+                                        Intent(ACTION_QUICK_CLIPBOARD)
+                                            .setClass(
+                                                context,
+                                                QuickDownloadActivity::class.java,
+                                            )
+                                            .putExtra(EXTRA_QUICK_DOWNLOAD, true)
+                                            .putExtra(EXTRA_QUICK_NONCE, nonce),
+                                ),
+                            )
+                        } else {
+                            ShortcutManagerCompat.removeDynamicShortcuts(
+                                context,
+                                listOf(CLIPBOARD_SHORTCUT_ID),
+                            )
+                            true
+                        }
+                    quickPushed && clipboardOk
+                }
+                .onFailure { Log.w(TAG, "shortcut publish failed: ${it.message}") }
+                .getOrDefault(false)
+
+        private fun shortcutFor(
+            context: Context,
+            id: String,
+            labelRes: Int,
+            intent: Intent,
+        ): ShortcutInfoCompat =
+            ShortcutInfoCompat.Builder(context, id)
+                .setShortLabel(context.getString(labelRes))
+                .setLongLabel(context.getString(labelRes))
+                .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+                .setIntent(intent)
+                .setLongLived(true)
+                .build()
 
         fun stopService() {
             if (isServiceStarted) {

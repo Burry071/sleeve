@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Login
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -68,6 +69,7 @@ import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
 import com.junkfood.seal.ui.theme.ErrorTonalPalettes
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.toBitrateText
 import com.junkfood.seal.util.toDurationText
@@ -108,6 +110,18 @@ private fun ResumeButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
         contentColor = LocalFixedColorRoles.current.onTertiaryFixedVariant,
         imageVector = Icons.Outlined.RestartAlt,
         text = stringResource(R.string.resume),
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun RetryWithCookiesButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    ActionSheetPrimaryButton(
+        modifier = modifier,
+        containerColor = LocalFixedColorRoles.current.secondaryFixed,
+        contentColor = LocalFixedColorRoles.current.onSecondaryFixedVariant,
+        imageVector = Icons.Outlined.Login,
+        text = stringResource(R.string.retry_with_cookies),
         onClick = onClick,
     )
 }
@@ -306,6 +320,18 @@ fun LazyListScope.ActionButtons(
                 ResumeButton(modifier = Modifier.animateItem()) {
                     onActionPost(task, UiAction.Resume)
                     onDismissRequest()
+                }
+            }
+            if (downloadState.throwable is DownloadErrorMessages.LoginRequiredError) {
+                val retryUrl =
+                    viewState.url.ifBlank { task.url }.takeIf { !it.startsWith("metadata://") }
+                if (retryUrl != null) {
+                    item(key = "RetryWithCookiesButton") {
+                        RetryWithCookiesButton(modifier = Modifier.animateItem()) {
+                            onActionPost(task, UiAction.RetryWithCookies(retryUrl))
+                            onDismissRequest()
+                        }
+                    }
                 }
             }
             item(key = "ErrorReportButton") {

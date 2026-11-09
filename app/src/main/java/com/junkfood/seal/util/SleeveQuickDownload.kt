@@ -32,7 +32,7 @@ object SleeveQuickDownload {
         runCatching {
             val content = DownloadUtil.getCookiesContentFromDatabase().getOrDefault("")
             if (content.isEmpty()) return@runCatching ""
-            val file = with(FileUtil) { App.context.getCookiesFile() }
+            val file = with(FileUtil) { App.context.getCookieFile() }
             FileUtil.writeContentToFile(content, file)
             file.absolutePath
         }.getOrDefault("")

@@ -92,7 +92,7 @@ import com.junkfood.seal.util.COOKIES
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.DownloadUtil.toCookiesFileContent
 import com.junkfood.seal.util.FileUtil
-import com.junkfood.seal.util.FileUtil.getCookiesFile
+import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.USER_AGENT
@@ -136,7 +136,7 @@ fun CookieProfilePage(
         scope.launch(Dispatchers.IO) {
             DownloadUtil.getCookieListFromDatabase().getOrNull()?.let {
                 cookieList = it
-                FileUtil.writeContentToFile(it.toCookiesFileContent(), context.getCookiesFile())
+                FileUtil.writeContentToFile(it.toCookiesFileContent(), context.getCookieFile())
             }
         }
         onDispose { shouldUpdateCookies = false }

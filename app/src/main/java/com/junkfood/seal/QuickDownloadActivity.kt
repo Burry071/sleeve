@@ -31,6 +31,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.ACTION_QUICK_CLIPBOARD
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.EXTRA_QUICK_NONCE
 import com.junkfood.seal.util.INTERNAL_PREFS
@@ -62,10 +63,30 @@ class QuickDownloadActivity : ComponentActivity() {
      * later shares here instead of a fresh activity, so they must re-route. */
     private var onNewIntentHandler: ((Intent) -> Unit)? = null
 
+    /** Android 10+ refuses clipboard reads until this window has focus, and the
+     * shortcut tap starts us before focus arrives. */
+    private var awaitingClipboardQuickDownload = false
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == ACTION_QUICK_CLIPBOARD) {
+            when {
+                !intent.isTrustedQuick() -> showConfigureSheet(null)
+                hasWindowFocus() -> handleClipboardQuickDownload()
+                else -> awaitingClipboardQuickDownload = true
+            }
+            return
+        }
         onNewIntentHandler?.invoke(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && awaitingClipboardQuickDownload) {
+            awaitingClipboardQuickDownload = false
+            handleClipboardQuickDownload()
+        }
     }
 
     private fun Intent.getSharedURL(): String? {
@@ -117,6 +138,15 @@ class QuickDownloadActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (intent.action == ACTION_QUICK_CLIPBOARD) {
+            requestNotificationPermissionIfNeeded()
+            App.startService()
+            if (intent.isTrustedQuick()) awaitingClipboardQuickDownload = true
+            else showConfigureSheet(null)
+            return
+        }
+
         intent.getSharedURL()?.let { sharedUrlCached = it }
 
         val isQuickDownload = intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)
@@ -131,30 +161,53 @@ class QuickDownloadActivity : ComponentActivity() {
 
         if (intent.isTrustedQuick() && sharedUrlCached.isNotEmpty()) {
             // Silent quick mode needs a nonce-carrying, non-share launch; the
-            // launcher shortcut is a share, so it opens the sheet instead. The
-            // pipeline below never uses the cookie session.
-            val url = sharedUrlCached
-            lifecycleScope.launch {
-                SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
-                    .onSuccess { (queued, source) ->
-                        ToastUtil.makeToast(
-                            getString(R.string.gallery_items_queued, queued, source),
-                        )
-                        finish()
-                    }
-                    .onFailure {
-                        // Nothing was queued: gallery resolution failed and the
-                        // default lane could not enqueue either. Retrying from
-                        // the sheet runs the full pipeline with the session.
-                        ToastUtil.makeToast(getString(R.string.quick_download_needs_confirm))
-                        showConfigureSheet(listOf(url))
-                    }
-            }
+            // launcher shortcut is a share, so it opens the sheet instead.
+            quickDownload(sharedUrlCached)
             return
         }
 
         showConfigureSheet(if (sharedUrlCached.isEmpty()) null else listOf(sharedUrlCached))
     }
+
+    private fun handleClipboardQuickDownload() {
+        val url =
+            readClipboardText()?.takeIf { it.isNotBlank() }?.let { matchUrlFromSharedText(it) }
+                ?.takeIf { it.isNotBlank() }
+        if (url == null) {
+            ToastUtil.makeToast(getString(R.string.quick_clipboard_no_link))
+            finish()
+            return
+        }
+        quickDownload(url)
+    }
+
+    /** The single fenced quick lane: cookie-less, template-less, announced. */
+    private fun quickDownload(url: String) {
+        lifecycleScope.launch {
+            SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
+                .onSuccess { (queued, source) ->
+                    ToastUtil.makeToast(getString(R.string.gallery_items_queued, queued, source))
+                    finish()
+                }
+                .onFailure {
+                    // Nothing was queued: gallery resolution failed and the
+                    // default lane could not enqueue either. Retrying from
+                    // the sheet runs the full pipeline with the session.
+                    ToastUtil.makeToast(getString(R.string.quick_download_needs_confirm))
+                    showConfigureSheet(listOf(url))
+                }
+        }
+    }
+
+    private fun readClipboardText(): String? =
+        runCatching {
+                App.clipboard.primaryClip
+                    ?.takeIf { it.itemCount > 0 }
+                    ?.getItemAt(0)
+                    ?.coerceToText(this)
+                    ?.toString()
+            }
+            .getOrNull()
 
     /** Nonce-gated: a forged extra from another app opens the sheet instead. */
     private fun Intent.isTrustedQuick(): Boolean =

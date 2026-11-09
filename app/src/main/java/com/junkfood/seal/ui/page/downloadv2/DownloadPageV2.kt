@@ -112,6 +112,7 @@ import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Error
@@ -225,6 +226,9 @@ sealed interface UiAction {
     data object Resume : UiAction
 
     data class CopyErrorReport(val throwable: Throwable) : UiAction
+
+    /** Re-opens the confirm sheet for a login-walled failure. */
+    data class RetryWithCookies(val url: String) : UiAction
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
@@ -294,8 +298,15 @@ fun DownloadPageV2(
             }
             is UiAction.OpenFile -> {
                 action.filePath?.let {
-                    FileUtil.openFile(path = it) { context.makeToast(R.string.file_unavailable) }
+                    scope.launch {
+                        FileUtil.openFile(path = it) {
+                            context.makeToast(R.string.file_unavailable)
+                        }
+                    }
                 }
+            }
+            is UiAction.RetryWithCookies -> {
+                dialogViewModel.postAction(Action.ShowSheet(listOf(action.url)))
             }
             is UiAction.OpenThumbnailURL -> {
                 uriHandler.openUri(action.url)
@@ -305,8 +316,10 @@ fun DownloadPageV2(
             }
             is UiAction.ShareFile -> {
                 val shareTitle = context.getString(R.string.share)
-                FileUtil.createIntentForSharingFile(action.filePath)?.let {
-                    context.startActivity(Intent.createChooser(it, shareTitle))
+                scope.launch {
+                    FileUtil.createIntentForSharingFile(action.filePath)?.let {
+                        context.startActivity(Intent.createChooser(it, shareTitle))
+                    } ?: context.makeToast(R.string.file_unavailable)
                 }
             }
         }
@@ -580,7 +593,25 @@ fun DownloadPageImplV2(
                                         if (state.downloadState is Error) {
                                             {
                                                 ErrorFooter(
-                                                    onRetry = { onActionPost(task, UiAction.Resume) }
+                                                    onRetry = { onActionPost(task, UiAction.Resume) },
+                                                    onRetryWithCookies =
+                                                        (state.downloadState as Error)
+                                                            .throwable
+                                                            .takeIf {
+                                                                it is
+                                                                    DownloadErrorMessages
+                                                                        .LoginRequiredError
+                                                            }
+                                                            ?.let {
+                                                                {
+                                                                    onActionPost(
+                                                                        task,
+                                                                        UiAction.RetryWithCookies(
+                                                                            task.url
+                                                                        ),
+                                                                    )
+                                                                }
+                                                            },
                                                 )
                                             }
                                         } else null,
