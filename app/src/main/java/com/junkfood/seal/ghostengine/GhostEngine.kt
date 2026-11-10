@@ -189,6 +189,7 @@ object GhostEngine {
         val artist: String,
         val album: String,
         val durationMs: Long,
+        val authors: String = "",
     )
 
     data class RankedCandidate(
@@ -360,6 +361,7 @@ object GhostEngine {
                             artist = t["artist"]?.jsonPrimitive?.content ?: "",
                             album = t["album"]?.jsonPrimitive?.content ?: "",
                             durationMs = t["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
+                            authors = t["authors"]?.jsonPrimitive?.content ?: "",
                         )
                     }.getOrNull()
                 }
