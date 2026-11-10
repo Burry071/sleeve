@@ -35,6 +35,70 @@ class MetadataMatchingTest {
     }
 
     @Test
+    fun `audible query quotes the title and drops the narrator roll`() {
+        val query =
+            DownloadUtil.buildMetadataQuery(
+                SpotifyTrack(
+                    title = "Dune",
+                    artist = "Frank Herbert (narrated by Scott Brick, Orlagh Cassidy)",
+                    album = "Audible",
+                    durationMs = 75_876_000L,
+                    authors = "Frank Herbert",
+                ),
+                provider = "Audible",
+            )
+        assertEquals("\"Dune\" Frank Herbert audiobook", query)
+    }
+
+    @Test
+    fun `audible query never carries the share string or narrator names`() {
+        val query =
+            DownloadUtil.buildMetadataQuery(
+                SpotifyTrack(
+                    title = "Dune",
+                    artist =
+                        "Frank Herbert (narrated by Scott Brick) " +
+                            "https://www.audible.com/pd/B0036ZK8LQ",
+                    album = "Audible",
+                    durationMs = 75_876_000L,
+                    authors = "Frank Herbert",
+                ),
+                provider = "audible",
+            )
+        assertEquals("\"Dune\" Frank Herbert audiobook", query)
+    }
+
+    @Test
+    fun `audible query falls back to the quoted title when authors are missing`() {
+        val query =
+            DownloadUtil.buildMetadataQuery(
+                SpotifyTrack(
+                    title = "Dune",
+                    artist = "Frank Herbert (narrated by Scott Brick)",
+                    album = "Audible",
+                    durationMs = 75_876_000L,
+                ),
+                provider = "Audible",
+            )
+        assertEquals("\"Dune\" audiobook", query)
+    }
+
+    @Test
+    fun `spotify query keeps the catalogue shape`() {
+        val query =
+            DownloadUtil.buildMetadataQuery(
+                SpotifyTrack(
+                    title = "Song Name",
+                    artist = "The Artist",
+                    album = "Album",
+                    durationMs = 200_000L,
+                ),
+                provider = "Spotify",
+            )
+        assertEquals("The Artist Song Name audio", query)
+    }
+
+    @Test
     fun `low confidence music match widens to the wide pool`() {
         assertTrue(DownloadUtil.shouldWidenSearch(null))
         assertTrue(DownloadUtil.shouldWidenSearch(35.0))

@@ -426,6 +426,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     artist = track.artist,
                     album = track.album,
                     durationMs = track.durationMs,
+                    authors = track.authors,
                 )
             }
         val tasks =

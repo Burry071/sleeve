@@ -84,6 +84,7 @@ data class Task(
             val artist: String = "",
             val album: String = "",
             val durationMs: Long = 0L,
+            val authors: String = "",
         ) : TypeInfo
 
         @Serializable data object URL : TypeInfo

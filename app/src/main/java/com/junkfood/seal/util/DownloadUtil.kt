@@ -151,12 +151,34 @@ object DownloadUtil {
             }
         }
 
-    /** Normalized YouTube query for a catalogue track. */
-    internal fun buildMetadataQuery(track: GhostEngine.SpotifyTrack): String =
-        listOf(track.artist, track.title, "audio")
-            .filter { it.isNotBlank() }
-            .joinToString(separator = " ")
-            .let { Regex("\\s+").replace(it, " ").trim() }
+    /**
+     * Normalized YouTube query for a catalogue track. Audible tracks get the
+     * quoted-title form: their [GhostEngine.SpotifyTrack.artist] carries the
+     * narrator roll ("Author (narrated by A, B, ... 12 names)"), which drags
+     * the search away from the actual audiobook upload.
+     */
+    internal fun buildMetadataQuery(
+        track: GhostEngine.SpotifyTrack,
+        provider: String = "",
+    ): String =
+        if (provider.equals(AUDIBLE_PROVIDER, ignoreCase = true)) buildAudibleQuery(track)
+        else
+            listOf(track.artist, track.title, "audio")
+                .filter { it.isNotBlank() }
+                .joinToString(separator = " ")
+                .let(::collapse)
+
+    /** "<exact title>" <authors> audiobook — falls back to the quoted title. */
+    internal fun buildAudibleQuery(track: GhostEngine.SpotifyTrack): String {
+        val title =
+            collapse(track.title.replace('"', ' ')).takeIf { it.isNotBlank() }?.let { "\"$it\"" }
+        val authors = collapse(track.authors).takeIf { it.isNotBlank() }
+        return listOfNotNull(title, authors, "audiobook").joinToString(separator = " ")
+    }
+
+    private fun collapse(value: String): String = Regex("\\s+").replace(value, " ").trim()
+
+    private const val AUDIBLE_PROVIDER = "Audible"
 
     /**
      * The ranker scores candidates 0-100. Anything under 60 is not a confident
@@ -214,8 +236,10 @@ object DownloadUtil {
                     artist = metadata.artist,
                     album = metadata.album,
                     durationMs = metadata.durationMs,
+                    authors = metadata.authors,
                 )
-            val query = buildMetadataQuery(track)
+            val query = buildMetadataQuery(track, metadata.provider)
+            Log.i(TAG, "match query: $query")
 
             fun search(pool: String): List<PlaylistEntry> =
                 getPlaylistOrVideoInfo(

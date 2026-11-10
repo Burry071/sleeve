@@ -8,7 +8,7 @@ like every other metadata source.
 
 Public surface (JSON strings, like sleeve_engine):
     resolve(url) -> '{"ok": true, "title": ..., "tracks":
-                     [{"title", "artist", "album", "durationMs"}]}'
+                     [{"title", "artist", "authors", "album", "durationMs"}]}'
     search(keywords) -> same shape
 
 urllib only (Chaquopy-safe).
@@ -47,6 +47,7 @@ def _product_dto(product):
         "artist": artist,
         "album": "Audible",
         "durationMs": int(minutes) * 60 * 1000,
+        "authors": authors,
     }
 
 
