@@ -344,6 +344,14 @@ object GhostEngine {
                     .callAttr("rank_candidates", trackJson, candidatesJson, strictness, topN)
                     .toString()
             val obj = json.parseToJsonElement(reply).jsonObject
+            obj["rejected"]?.jsonArray?.forEach { el ->
+                val r = el.jsonObject
+                Log.i(
+                    "GhostEngine",
+                    "match rejected: ${r["title"]?.jsonPrimitive?.contentOrNull} — " +
+                        r["reason"]?.jsonPrimitive?.contentOrNull,
+                )
+            }
             if (obj["ok"]?.jsonPrimitive?.content != "true") {
                 error(obj["error"]?.jsonPrimitive?.content ?: "no candidate passed")
             }

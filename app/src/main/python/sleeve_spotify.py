@@ -442,8 +442,9 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
     strictness: 0=loose, 1=normal, 2=strict
     top_n: how many ranked candidates to keep for the review sheet.
 
-    returns {"ok","index","id","url","title","score","candidates":[...]}
-    where candidates is the top_n list with per-component reasons.
+    returns {"ok","index","id","url","title","score","candidates":[...],
+    "rejected":[...]} where candidates is the top_n list with per-component
+    reasons and rejected names the duration-vetoed uploads.
     """
     try:
         track = json.loads(track_json) if isinstance(track_json, str) else dict(track_json or {})
@@ -457,9 +458,35 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
             keep = 3
 
         long_form = (duration_ms or 0) > 1800_000
+        track_s = (duration_ms or 0) / 1000.0
         ranked = []
+        rejected = []
         for i, cand in enumerate(candidates):
             cand_title = cand.get("title", "") or ""
+            cand_s = cand.get("duration")
+            # An audiobook cannot be a fraction of its own runtime: a trailer,
+            # an excerpt or a single part is a different recording. Only a
+            # known duration can be vetoed — missing data stays neutral.
+            if (
+                long_form
+                and track_s > 0
+                and cand_s is not None
+                and float(cand_s) > 0
+                and float(cand_s) < track_s * 0.25
+            ):
+                rejected.append(
+                    {
+                        "index": i,
+                        "id": cand.get("id") or "",
+                        "title": cand_title,
+                        "reason": (
+                            "duration %d%% of book — below 25%% floor, "
+                            "cannot be the full book"
+                        )
+                        % round(float(cand_s) / track_s * 100.0),
+                    }
+                )
+                continue
             name = _name_score(title, artist, cand_title)
             name_floor = {0: 50.0, 1: 60.0, 2: 75.0}.get(strictness, 60.0)
             if name < name_floor:
@@ -507,12 +534,18 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
                 }
             )
         if not ranked:
-            return json.dumps({"ok": False, "error": "no candidate passed the floor"})
+            error = (
+                "no candidate matched the book's duration/length"
+                if long_form
+                else "no candidate passed the floor"
+            )
+            return json.dumps({"ok": False, "error": error, "rejected": rejected})
         ranked.sort(key=lambda item: item["score"], reverse=True)
         top = ranked[:keep]
         best = dict(top[0])
         best["ok"] = True
         best["candidates"] = top
+        best["rejected"] = rejected
         return json.dumps(best)
     except Exception as e:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(e)})
