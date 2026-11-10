@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -43,6 +44,24 @@ import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.ui.common.LocalDarkTheme
+import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
+
+/**
+ * Amber warning pair for the low-confidence badge. Green is reserved for the
+ * completed pill, so a flagged pick can never read as success.
+ */
+private val MatchWarnPalettes = Color(0xFFFFA000).toTonalPalettes()
+
+/** "Author — Title": the requested catalogue song, never the picked video's title. */
+internal fun metadataTitle(track: Task.TypeInfo.MetadataTrack): String =
+    listOf(track.artist, track.title)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(" — ")
+
+/** The catalogue title for a metadata task, or null for ordinary URL shares. */
+internal fun Task.metadataTitle(): String? =
+    (type as? Task.TypeInfo.MetadataTrack)?.let(::metadataTitle)
 
 /**
  * One playlist download: a summary header with batch actions and compact song
@@ -65,6 +84,9 @@ fun PlaylistBatchCard(
 ) {
     val summary = remember(entries) { BatchOps.summary(entries) }
     val reviewCount = remember(entries) { MatchOps.reviewCount(entries) }
+    // A single share still rides a one-song batch. Name the actual song and drop
+    // the "0/1 done" line: a lone track has no progress to summarise.
+    val singleTrack = remember(entries) { entries.singleOrNull()?.first }
     val containerColor =
         MaterialTheme.colorScheme.run {
             if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
@@ -91,29 +113,33 @@ fun PlaylistBatchCard(
                 )
                 Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(
-                        text = batch.title.ifBlank { stringResource(R.string.playlist) },
+                        text =
+                            singleTrack?.metadataTitle()?.takeIf { it.isNotBlank() }
+                                ?: batch.title.ifBlank { stringResource(R.string.playlist) },
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text =
-                            if (summary.failed > 0)
-                                stringResource(
-                                    R.string.playlist_progress_failed,
-                                    summary.completed,
-                                    summary.total,
-                                    summary.failed,
-                                )
-                            else
-                                stringResource(
-                                    R.string.playlist_progress,
-                                    summary.completed,
-                                    summary.total,
-                                ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (singleTrack == null) {
+                        Text(
+                            text =
+                                if (summary.failed > 0)
+                                    stringResource(
+                                        R.string.playlist_progress_failed,
+                                        summary.completed,
+                                        summary.total,
+                                        summary.failed,
+                                    )
+                                else
+                                    stringResource(
+                                        R.string.playlist_progress,
+                                        summary.completed,
+                                        summary.total,
+                                    ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 Icon(
                     imageVector =
@@ -201,15 +227,18 @@ private fun SongRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = state.viewState.title.ifBlank { task.url },
+                text =
+                    task.metadataTitle()?.takeIf { it.isNotBlank() }
+                        ?: state.viewState.title.ifBlank { task.url },
                 style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             if (MatchOps.reviewable(state)) {
+                val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
                 Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    color = MatchWarnPalettes.accent1(if (isDarkTheme) 30.0 else 90.0),
+                    contentColor = MatchWarnPalettes.accent1(if (isDarkTheme) 90.0 else 30.0),
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier.padding(top = 4.dp),
                 ) {

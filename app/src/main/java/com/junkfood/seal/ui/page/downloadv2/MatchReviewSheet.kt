@@ -33,7 +33,6 @@ import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.Task
-import com.junkfood.seal.download.Task.TypeInfo
 import com.junkfood.seal.ui.component.SealModalBottomSheet
 
 /**
@@ -70,7 +69,9 @@ fun MatchReviewSheet(
         contentPadding = PaddingValues(horizontal = 24.dp),
     ) {
         Text(
-            text = batch.title.ifBlank { stringResource(R.string.match_review_title) },
+            text =
+                entries.singleOrNull()?.first?.metadataTitle()?.takeIf { it.isNotBlank() }
+                    ?: batch.title.ifBlank { stringResource(R.string.match_review_title) },
             style = MaterialTheme.typography.titleLarge,
         )
         Text(
@@ -87,9 +88,8 @@ fun MatchReviewSheet(
                 Column(modifier = Modifier.padding(vertical = 10.dp)) {
                     Text(
                         text =
-                            state.viewState.title.ifBlank {
-                                (task.type as? TypeInfo.MetadataTrack)?.title.orEmpty()
-                            },
+                            task.metadataTitle()?.takeIf { it.isNotBlank() }
+                                ?: state.viewState.title.ifBlank { task.url },
                         style = MaterialTheme.typography.titleSmall,
                     )
                     match.candidates.forEach { candidate ->
