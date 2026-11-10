@@ -1,0 +1,10 @@
+2.1.0-beta.3
+
+Matching
+• Matching now ranks the top three candidates with per-component reasons, offers a review sheet for ambiguous picks, and re-downloads only the swapped song.
+• The flagged match badge reads "N% match · needs review" as a warning instead of a success.
+• Audible searches are built from the catalogue title and authors instead of the narrator roll.
+• Audiobook matches refuse uploads far shorter than the book instead of queueing trailers and excerpts.
+
+Logging
+• Each task's log records whether cookies were used.
