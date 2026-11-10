@@ -462,7 +462,7 @@
     <string name="playlist_progress_failed">%1$d/%2$d done · %3$d failed</string>
     <string name="dismiss_playlist">Dismiss playlist</string>
     <string name="dismiss_playlist_message">Stop unfinished songs and remove this playlist from Downloads? Downloaded files are kept.</string>
-    <string name="match_badge">match: %1$d%% — review?</string>
+    <string name="match_badge">%1$d%% match · needs review</string>
     <string name="review_matches">Review matches (%1$d)</string>
     <string name="batch_notification_review">%1$d pick(s) need a review</string>
     <string name="match_review_title">Review matches</string>
