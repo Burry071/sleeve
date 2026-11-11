@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -676,7 +674,9 @@ fun ErrorFooter(
     onRetry: () -> Unit,
     onRetryWithCookies: (() -> Unit)? = null,
 ) {
-    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
+    // No verticalScroll here: the card hosts this footer inside a Row, which
+    // measures children with unbounded height, and a vertical scroller throws.
+    Column(modifier = modifier) {
         FilledTonalButton(
             onClick = onRetry,
             modifier = Modifier,
