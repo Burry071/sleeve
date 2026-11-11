@@ -53,4 +53,53 @@ class FilterPredictTest {
         val entry = task() to state(Error(Throwable("boom"), RestartableAction.Download))
         assertEquals(listOf(Filter.All, Filter.Canceled), matching(entry))
     }
+
+    @Test
+    fun `every queued or running state is downloading and unfiltered`() {
+        val queued =
+            listOf<Task.DownloadState>(
+                Idle,
+                Task.DownloadState.ReadyWithInfo,
+                Task.DownloadState.FetchingInfo(taskId = "t"),
+                Task.DownloadState.Running(taskId = "t"),
+            )
+        queued.forEach { downloadState ->
+            assertEquals(
+                "$downloadState",
+                listOf(Filter.All, Filter.Downloading),
+                matching(task() to state(downloadState)),
+            )
+        }
+    }
+
+    @Test
+    fun `canceled state is canceled and unfiltered`() {
+        val entry =
+            task() to
+                state(Task.DownloadState.Canceled(action = RestartableAction.Download))
+        assertEquals(listOf(Filter.All, Filter.Canceled), matching(entry))
+    }
+
+    @Test
+    fun `playlist filter never accepts a task in any state`() {
+        val states: List<Task.DownloadState> =
+            listOf(
+                Idle,
+                Task.DownloadState.ReadyWithInfo,
+                Task.DownloadState.FetchingInfo(taskId = "t"),
+                Task.DownloadState.Running(taskId = "t"),
+                Task.DownloadState.Canceled(action = RestartableAction.Download),
+                Error(Throwable("boom"), RestartableAction.Download),
+                Completed("/tmp/v.mp4"),
+            )
+        states.forEach { downloadState ->
+            assertEquals("$downloadState", false, Filter.Playlist.predict(task() to state(downloadState)))
+        }
+    }
+
+    @Test
+    fun `a batched song is invisible to the state tabs too`() {
+        val running = Task.DownloadState.Running(taskId = "t")
+        assertEquals(emptyList<Filter>(), matching(task(batch) to state(running)))
+    }
 }

@@ -90,6 +90,23 @@ class BatchOpsTest {
     }
 
     @Test
+    fun `activity order puts batches with work left first`() {
+        val done = BatchInfo(id = "done", title = "Done", provider = "YouTube")
+        val failed = BatchInfo(id = "failed", title = "Failed", provider = "YouTube")
+        val active = BatchInfo(id = "active", title = "Active", provider = "YouTube")
+        val map =
+            linkedMapOf(
+                task(done, 0) to state(Completed(null)),
+                task(failed, 0) to state(Error(Throwable("boom"), RestartableAction.Download)),
+                task(active, 0) to state(Running(Job(), "id", 0.5f)),
+            )
+        assertEquals(
+            listOf("active", "failed", "done"),
+            BatchOps.activityOrder(BatchOps.groups(map)).map { it.batch.id },
+        )
+    }
+
+    @Test
     fun `an empty batch has a zero summary`() {
         val summary = BatchOps.summary(emptyList())
         assertEquals(0, summary.total)
