@@ -240,6 +240,21 @@
       "published": true,
       "distributed": true,
       "verified_at": "2026-11-10T20:47:09Z"
+    },
+    {
+      "tag": "v2.1.0-beta.4",
+      "version_name": "2.1.0-beta.4",
+      "base_version_code": 201000240,
+      "shipped_version_code": 201000240,
+      "asset_name": "Sleeve-generic-release.apk",
+      "asset_size": 113046806,
+      "sha256": "3edd805581dfc86724305dba9a65c257dc3478ddee1a2f40d43c579f02487c42",
+      "cert_sha256": "2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3",
+      "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0-beta.4/Sleeve-generic-release.apk",
+      "published_at": "2026-11-11T23:19:04Z",
+      "published": true,
+      "distributed": true,
+      "verified_at": "2026-11-11T23:19:36Z"
     }
   ]
 }
