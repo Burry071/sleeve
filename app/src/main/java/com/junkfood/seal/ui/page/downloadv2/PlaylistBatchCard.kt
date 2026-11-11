@@ -56,9 +56,13 @@ import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
  */
 private val MatchWarnPalettes = Color(0xFFFFA000).toTonalPalettes()
 
-/** "Author — Title": the requested catalogue song, never the picked video's title. */
+/**
+ * "Title — Author": the requested catalogue song, never the picked video's
+ * title. `authors` outranks `artist` because an audiobook's artist field is the
+ * narrator, which reads as the byline when shown first.
+ */
 internal fun metadataTitle(track: Task.TypeInfo.MetadataTrack): String =
-    listOf(track.artist, track.title)
+    listOf(track.title, track.authors.ifBlank { track.artist })
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .joinToString(" — ")
@@ -271,8 +275,8 @@ private fun SongRow(
                             text =
                                 stringResource(
                                     when {
-                                        held -> R.string.match_held_badge
                                         pending -> R.string.match_pending
+                                        held -> R.string.match_held_badge
                                         else -> R.string.match_badge_short
                                     }
                                 ),
