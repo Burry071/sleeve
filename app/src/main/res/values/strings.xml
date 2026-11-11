@@ -466,6 +466,10 @@
     <string name="batch_notification_progress">%1$d/%2$d downloaded</string>
     <string name="stop">Stop</string>
     <string name="no_playlists_yet">No playlists yet</string>
+    <string name="no_playlists_hint">Paste a playlist or audiobook link to start one.</string>
+    <string name="no_single_downloads">No downloads in this tab.</string>
+    <string name="batches_live_in_playlist">Playlists and books are in the Playlist tab.</string>
+    <string name="show_playlists">Show playlists</string>
     <string name="playlist_progress">%1$d/%2$d done</string>
     <string name="playlist_progress_failed">%1$d/%2$d done · %3$d failed</string>
     <string name="dismiss_playlist">Dismiss playlist</string>

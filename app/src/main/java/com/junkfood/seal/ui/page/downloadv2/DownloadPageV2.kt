@@ -61,6 +61,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -184,6 +185,14 @@ enum class Filter {
             Canceled -> stringResource(R.string.status_canceled)
             Finished -> stringResource(R.string.status_completed)
         }
+
+    /** Playlists and books live in one place; All is the single-download inbox. */
+    val showsBatchCards: Boolean
+        get() = this == Playlist
+
+    /** Individual cards belong to every filter except Playlist. */
+    val showsTaskCards: Boolean
+        get() = this != Playlist
 
     fun predict(entry: Pair<Task, Task.State>): Boolean {
         val (task, state) = entry
@@ -476,7 +485,9 @@ fun DownloadPageImplV2(
     val expandedBatches = remember { mutableStateMapOf<String, Boolean>() }
     val playlists by
         remember(activeFilter, dismissedBatches) {
-            derivedStateOf { BatchOps.groups(taskDownloadStateMap, dismissedBatches) }
+            derivedStateOf {
+                BatchOps.activityOrder(BatchOps.groups(taskDownloadStateMap, dismissedBatches))
+            }
         }
     val filteredMap by
         remember(activeFilter) {
@@ -590,7 +601,19 @@ fun DownloadPageImplV2(
                             PaddingValues(start = 20.dp, end = 20.dp, bottom = 80.dp),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
-                    if (activeFilter != Filter.Playlist && filteredMap.isNotEmpty()) {
+                    // A mixed All tab is the one place both kinds are visible;
+                    // point at Playlist in one line instead of hiding the batches.
+                    if (
+                        activeFilter == Filter.All &&
+                            playlists.isNotEmpty() &&
+                            filteredMap.isNotEmpty()
+                    ) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            BatchInPlaylistBanner(onClick = { activeFilter = Filter.Playlist })
+                        }
+                    }
+
+                    if (activeFilter.showsTaskCards && filteredMap.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             val videoCount =
                                 filteredMap.count {
@@ -606,10 +629,10 @@ fun DownloadPageImplV2(
                         }
                     }
 
-                    if (activeFilter == Filter.Playlist) {
+                    if (activeFilter.showsBatchCards) {
                         items(
                             items = playlists,
-                            key = { it.batch.id },
+                            key = { "batch:${it.batch.id}" },
                             span = { GridItemSpan(maxLineSpan) },
                         ) { group ->
                             PlaylistBatchCard(
@@ -629,58 +652,89 @@ fun DownloadPageImplV2(
                                 onSongAction = { task, action -> onActionPost(task, action) },
                             )
                         }
-                    } else if (isGridView) {
-                        items(
-                            items =
-                                filteredMap.toList().sortedBy { (_, state) -> state.downloadState },
-                            key = { (task, _) -> task.uiKey },
-                        ) { (task, state) ->
-                            with(state.viewState) {
-                                VideoCardV2(
-                                    modifier =
-                                        Modifier.animateItem().padding(bottom = 20.dp).padding(),
-                                    viewState = this,
-                                    progress =
-                                        (state.downloadState as? Running)
-                                            ?.progress
-                                            ?.takeIf { it >= 0f },
-                                    footerContent =
-                                        if (state.downloadState is Error) {
-                                            {
-                                                ErrorFooter(
-                                                    onRetry = { onActionPost(task, UiAction.Resume) },
-                                                    onRetryWithCookies =
-                                                        (state.downloadState as Error)
-                                                            .throwable
-                                                            .takeIf {
-                                                                it is
-                                                                    DownloadErrorMessages
-                                                                        .LoginRequiredError
-                                                            }
-                                                            ?.let {
-                                                                {
-                                                                    onActionPost(
-                                                                        task,
-                                                                        UiAction.RetryWithCookies(
-                                                                            task.url
-                                                                        ),
-                                                                    )
-                                                                }
-                                                            },
-                                                )
-                                            }
-                                        } else null,
-                                    actionButton = {
-                                        ActionButton(
-                                            modifier = Modifier,
-                                            downloadState = state.downloadState,
-                                        ) {
-                                            onActionPost(task, it)
-                                        }
+                    }
+                    if (activeFilter.showsTaskCards) {
+                        if (isGridView) {
+                            items(
+                                items =
+                                    filteredMap.toList().sortedBy { (_, state) ->
+                                        state.downloadState
                                     },
+                                key = { (task, _) -> task.uiKey },
+                            ) { (task, state) ->
+                                with(state.viewState) {
+                                    VideoCardV2(
+                                        modifier =
+                                            Modifier.animateItem()
+                                                .padding(bottom = 20.dp)
+                                                .padding(),
+                                        viewState = this,
+                                        progress =
+                                            (state.downloadState as? Running)
+                                                ?.progress
+                                                ?.takeIf { it >= 0f },
+                                        footerContent =
+                                            if (state.downloadState is Error) {
+                                                {
+                                                    ErrorFooter(
+                                                        onRetry = {
+                                                            onActionPost(task, UiAction.Resume)
+                                                        },
+                                                        onRetryWithCookies =
+                                                            (state.downloadState as Error)
+                                                                .throwable
+                                                                .takeIf {
+                                                                    it is
+                                                                        DownloadErrorMessages
+                                                                            .LoginRequiredError
+                                                                }
+                                                                ?.let {
+                                                                    {
+                                                                        onActionPost(
+                                                                            task,
+                                                                            UiAction
+                                                                                .RetryWithCookies(
+                                                                                    task.url
+                                                                                ),
+                                                                        )
+                                                                    }
+                                                                },
+                                                    )
+                                                }
+                                            } else null,
+                                        actionButton = {
+                                            ActionButton(
+                                                modifier = Modifier,
+                                                downloadState = state.downloadState,
+                                            ) {
+                                                onActionPost(task, it)
+                                            }
+                                        },
+                                        stateIndicator = {
+                                            CardStateIndicator(
+                                                modifier = Modifier,
+                                                downloadState = state.downloadState,
+                                            )
+                                        },
+                                        onButtonClick = { showActionSheet(task) },
+                                    )
+                                }
+                            }
+                        } else {
+                            items(
+                                items =
+                                    filteredMap.toList().sortedBy { (_, state) ->
+                                        state.downloadState
+                                    },
+                                key = { (task, _) -> task.uiKey },
+                                span = { GridItemSpan(maxLineSpan) },
+                            ) { (task, state) ->
+                                VideoListItem(
+                                    modifier = Modifier.animateItem().padding(bottom = 16.dp),
+                                    viewState = state.viewState,
                                     stateIndicator = {
-                                        CardStateIndicator(
-                                            modifier = Modifier,
+                                        ListItemStateText(
+                                            modifier = Modifier.padding(top = 3.dp),
                                             downloadState = state.downloadState,
                                         )
                                     },
@@ -688,41 +742,61 @@ fun DownloadPageImplV2(
                                 )
                             }
                         }
-                    } else {
-                        items(
-                            items =
-                                filteredMap.toList().sortedBy { (_, state) -> state.downloadState },
-                            key = { (task, _) -> task.uiKey },
-                            span = { GridItemSpan(maxLineSpan) },
-                        ) { (task, state) ->
-                            VideoListItem(
-                                modifier = Modifier.animateItem().padding(bottom = 16.dp),
-                                viewState = state.viewState,
-                                stateIndicator = {
-                                    ListItemStateText(
-                                        modifier = Modifier.padding(top = 3.dp),
-                                        downloadState = state.downloadState,
-                                    )
-                                },
-                                onButtonClick = { showActionSheet(task) },
-                            )
-                        }
                     }
                 }
             }
         }
+        // Tabs never mix kinds: All is the single-download inbox, Playlist holds
+        // playlists and books, state tabs filter singles. The empty states are the
+        // only place a tab points at another one.
         when {
             activeFilter == Filter.Playlist && playlists.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    Text(
-                        text = stringResource(R.string.no_playlists_yet),
-                        modifier = Modifier.align(Alignment.Center),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.no_playlists_yet),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = stringResource(R.string.no_playlists_hint),
+                            modifier = Modifier.padding(top = 6.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
-            activeFilter != Filter.Playlist && filteredMap.isEmpty() -> {
+            // An empty All must not read as "nothing is downloading" while a
+            // playlist or book runs under Playlist.
+            activeFilter == Filter.All && filteredMap.isEmpty() && playlists.isNotEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.batches_live_in_playlist),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        TextButton(
+                            modifier = Modifier.padding(top = 8.dp),
+                            onClick = { activeFilter = Filter.Playlist },
+                        ) {
+                            Text(stringResource(R.string.show_playlists))
+                        }
+                    }
+                }
+            }
+            activeFilter.showsTaskCards &&
+                filteredMap.isEmpty() &&
+                playlists.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // The empty state is also the only place a first-time user
                     // can start without the FAB; keep the action under the copy.
@@ -748,6 +822,33 @@ fun DownloadPageImplV2(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(stringResource(R.string.paste_link))
+                        }
+                    }
+                }
+            }
+            // A state tab never lists batch songs, so an empty state tab can
+            // still have visible downloads under Playlist. Say where they are
+            // instead of leaving the screen blank.
+            activeFilter.showsTaskCards && filteredMap.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.no_single_downloads),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        if (playlists.isNotEmpty()) {
+                            Text(
+                                text = stringResource(R.string.batches_live_in_playlist),
+                                modifier = Modifier.padding(top = 6.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
                         }
                     }
                 }
@@ -1027,6 +1128,35 @@ fun SubHeader(
             )
         }
 
+    }
+}
+
+/** One line over the All list: the batches are one tap away in Playlist. */
+@Composable
+private fun BatchInPlaylistBanner(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.batches_live_in_playlist),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(R.string.show_playlists),
+                modifier = Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
     }
 }
 

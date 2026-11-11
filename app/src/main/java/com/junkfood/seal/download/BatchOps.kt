@@ -99,6 +99,21 @@ object BatchOps {
             .filter { it.id !in dismissed }
             .map { batch -> BatchGroup(batch, entries(map, batch.id)) }
 
+    /**
+     * Batches with work left first, so the Playlist tab opens on what is moving.
+     * The sort is stable, so batches in the same band keep insertion order.
+     */
+    fun activityOrder(groups: List<BatchGroup>): List<BatchGroup> =
+        groups.sortedBy { group ->
+            val summary = group.summary
+            when {
+                summary.active > 0 -> 0
+                summary.failed > 0 || summary.canceled > 0 -> 1
+                summary.unfinished > 0 -> 2
+                else -> 3
+            }
+        }
+
     fun dismissPlan(map: Map<Task, Task.State>, batchId: String): DismissPlan {
         val all = entries(map, batchId)
         return DismissPlan(
