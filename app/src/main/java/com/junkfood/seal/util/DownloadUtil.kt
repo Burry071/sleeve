@@ -45,6 +45,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1709,6 +1710,17 @@ object DownloadUtil {
         taskId: String,
         downloadPreferences: DownloadPreferences,
         progressCallback: ((Float, Long, String) -> Unit)?,
+        /**
+         * yt-dlp process ids must never repeat: the vendor keeps a process map
+         * keyed by id and a killed-but-unreaped entry makes every later execute
+         * with that id fail with "Process ID already exists" until the app
+         * process dies. Each attempt asks for a fresh id instead.
+         */
+        processIdFactory: () -> String = { taskId },
+        /** Reports the id of the attempt about to run, so cancel targets it. */
+        onProcessStarted: (String) -> Unit = {},
+        /** False once the task was canceled; checked before every attempt. */
+        isActive: () -> Boolean = { true },
     ): Result<List<String>> {
         if (videoInfo == null)
             return Result.failure(Throwable(context.getString(R.string.fetch_info_error_msg)))
@@ -1724,6 +1736,8 @@ object DownloadUtil {
             if (directItem)
                 downloadPreferences.copy(createThumbnail = false, embedThumbnail = false)
             else downloadPreferences
+
+        if (!isActive()) return Result.failure(CancellationException("task canceled"))
 
         with(downloadPreferences) {
             val url =
@@ -1778,6 +1792,9 @@ object DownloadUtil {
                 )
             val downloadStartedAtMs = System.currentTimeMillis()
             for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
+                if (!isActive()) return Result.failure(CancellationException("task canceled"))
+                val processId = processIdFactory()
+                onProcessStarted(processId)
                 val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
                 if (clients != null) {
                     Log.i(TAG, "download attempt ${attemptIndex + 1}: player_client=$clients")
@@ -1932,7 +1949,11 @@ object DownloadUtil {
                     }
                     .runCatching {
                         YoutubeDL.getInstance()
-                            .execute(request = this, processId = taskId, callback = progressCallback)
+                            .execute(
+                                request = this,
+                                processId = processId,
+                                callback = progressCallback,
+                            )
                     }
                     .exceptionOrNull()
                 if (attemptFailure == null) {

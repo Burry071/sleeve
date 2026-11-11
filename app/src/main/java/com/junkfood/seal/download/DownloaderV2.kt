@@ -35,6 +35,7 @@ import com.junkfood.seal.util.makeToast
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
@@ -42,6 +43,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -642,6 +644,17 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     /** Deletes the file a swapped pick replaced, but only after the new file is complete. */
     private val pendingSwapCleanup = ConcurrentHashMap<String, String>()
 
+    /** Suffix source for yt-dlp process ids; never reused within this process. */
+    private val processSequence = AtomicLong()
+
+    /**
+     * A fresh yt-dlp process id for every attempt. The vendor keeps process ids
+     * in a map and a dead-but-unreaped entry makes that id permanently unusable
+     * for the rest of the app process, so a retry must never reuse it.
+     */
+    private fun nextProcessId(taskId: String): String =
+        "$taskId:${processSequence.incrementAndGet()}"
+
     private val Task.notificationId: Int
         get() = id.hashCode()
 
@@ -1022,10 +1035,24 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         // launches a second downloadVideo for the same task.
         scope
             .launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                val runJob = coroutineContext[Job]
+                // Cancel must win even when the state has already advanced to a
+                // new attempt id: the job itself is the authority on liveness.
+                val isActive = {
+                    runJob?.isActive == true && (downloadState as? Running)?.job === runJob
+                }
                 DownloadUtil.downloadVideo(
                         videoInfo = info,
                         taskId = id,
                         downloadPreferences = preferences,
+                        processIdFactory = { nextProcessId(id) },
+                        onProcessStarted = { processId ->
+                            val current = downloadState
+                            if (current is Running && current.taskId != processId) {
+                                downloadState = current.copy(taskId = processId)
+                            }
+                        },
+                        isActive = isActive,
                         progressCallback = { progressPercentage, _, text ->
                             val progress = progressPercentage / 100f
                             when (val preState = downloadState) {
@@ -1060,6 +1087,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 videoInfo = info,
                                 taskId = id,
                                 downloadPreferences = preferences.copy(aria2c = false),
+                                processIdFactory = { nextProcessId(id) },
+                                onProcessStarted = { processId ->
+                                    val current = downloadState
+                                    if (current is Running && current.taskId != processId) {
+                                        downloadState = current.copy(taskId = processId)
+                                    }
+                                },
+                                isActive = isActive,
                                 progressCallback = { progressPercentage, _, text ->
                                     val progress = progressPercentage / 100f
                                     when (val preState = downloadState) {
@@ -1142,7 +1177,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         }
                     }
                     .onFailure { throwable ->
-                        if (throwable is YoutubeDL.CanceledException) {
+                        if (
+                            throwable is YoutubeDL.CanceledException ||
+                                throwable is CancellationException
+                        ) {
                             return@onFailure
                         }
                         // A failed replacement keeps the old file and row; the
@@ -1179,19 +1217,26 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             is DownloadState.Cancelable -> {
                 // Any of the three workers may own this task: a yt-dlp
                 // process, a Ghost engine transfer, or an N_m3u8DL-RE run.
-                // Missing ones just report false; none may block the cancel.
+                // yt-dlp is keyed by the current attempt id; the embedded
+                // engines are keyed by the stable task id. Missing ones just
+                // report false; none may block the cancel.
                 val killed =
                     YoutubeDL.destroyProcessById(preState.taskId) ||
-                        DownloadUtil.cancelGhostTask(preState.taskId) ||
-                        DownloadUtil.cancelNm3u8DlRe(preState.taskId)
+                        DownloadUtil.cancelGhostTask(id) ||
+                        DownloadUtil.cancelNm3u8DlRe(id)
                 preState.job.cancel()
                 if (usesOwnNotification) {
                     NotificationUtil.cancelNotification(notificationId)
                 }
                 // If the worker finished between the snapshot above and now,
                 // keep its terminal state instead of overwriting it with
-                // Canceled.
-                if (killed || downloadState == preState) {
+                // Canceled. A still-cancelable state of the same run is ours
+                // even when its attempt id changed while the kill ran.
+                val current = downloadState
+                if (
+                    killed ||
+                        (current is DownloadState.Cancelable && current.job === preState.job)
+                ) {
                     val progress = if (preState is Running) preState.progress else null
                     downloadState =
                         DownloadState.Canceled(action = preState.action, progress = progress)
