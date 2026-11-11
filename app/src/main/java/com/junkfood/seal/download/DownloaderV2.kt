@@ -21,11 +21,15 @@ import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.download.Task.RestartableAction.Download
 import com.junkfood.seal.download.Task.RestartableAction.FetchInfo
 import com.junkfood.seal.download.Task.TypeInfo
+import com.junkfood.seal.util.AudioVerify
+import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
+import com.junkfood.seal.util.VerifyResult
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
@@ -33,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +53,9 @@ import org.koin.core.component.KoinComponent
 private const val TAG = "DownloaderV2"
 
 private const val MAX_CONCURRENCY = 3
+
+/** The provider the Audible gate and the post-download check both cover. */
+private const val AUDIBLE_PROVIDER = "Audible"
 
 interface DownloaderV2 {
     fun getTaskStateMap(): SnapshotStateMap<Task, Task.State>
@@ -72,6 +80,17 @@ interface DownloaderV2 {
 
     fun remove(task: Task): Boolean
 
+    /**
+     * Replace a held catalogue book with one task per verified part, all in the
+     * book's batch. Each part downloads its own upload as a separate file;
+     * nothing is concatenated.
+     *
+     * @return the number of part tasks queued; 0 when nothing was queued —
+     *   no parts, no batch for them to belong to, or a task this queue does
+     *   not hold.
+     */
+    fun enqueueParts(task: Task, parts: List<MatchCandidate>): Int = 0
+
     /** Stop every unfinished song in the batch. */
     fun cancelBatch(batchId: String) {
         BatchOps.stopTargets(getTaskStateMap(), batchId).forEach { cancel(it) }
@@ -95,12 +114,18 @@ interface DownloaderV2 {
         }
     }
 
-    /** Mark every flagged pick in the batch as seen, clearing the review entry. */
+    /**
+     * Mark every flagged pick in the batch as seen, clearing the review entry.
+     * A pick that is still [MatchResult.pending] is left alone: its replacement
+     * file is not on disk yet, so acknowledging it would hide the review entry
+     * and leave the swap unverifiable. A [MatchResult.held] book is left alone
+     * too: Accept all must never clear a refusal the user has not answered.
+     */
     fun acknowledgeMatches(batchId: String) {
         val map = getTaskStateMap()
         BatchOps.entries(map, batchId).forEach { (task, state) ->
             val match = state.match ?: return@forEach
-            if (match.flagged && !match.acknowledged) {
+            if (MatchOps.acknowledgeable(state)) {
                 map[task] = state.copy(match = match.copy(acknowledged = true))
             }
         }
@@ -110,9 +135,11 @@ interface DownloaderV2 {
     /**
      * Re-download the songs whose picks the user swapped. Only the chosen
      * candidate is fetched — never a new search — and only that song's file is
-     * produced. Returns how many songs were queued.
+     * produced. One [SwapResult] per distinct task id, in input order; never
+     * throws and never deletes a file.
      */
-    suspend fun swapMatches(selections: List<Pair<Task, MatchCandidate>>): Int = 0
+    suspend fun swapMatches(selections: List<Pair<Task, MatchCandidate>>): List<SwapResult> =
+        emptyList()
 }
 
 internal object FakeDownloaderV2 : DownloaderV2 {
@@ -132,6 +159,10 @@ internal object FakeDownloaderV2 : DownloaderV2 {
 
     override fun remove(task: Task): Boolean {
         return true
+    }
+
+    override fun enqueueParts(task: Task, parts: List<MatchCandidate>): Int {
+        return 0
     }
 }
 
@@ -156,6 +187,15 @@ internal fun needsCancelBeforeRemoval(state: Task.State): Boolean =
 internal fun clearsOwnNotificationOnRemoval(state: Task.State, usesOwnNotification: Boolean): Boolean =
     usesOwnNotification && state.downloadState !is DownloadState.Cancelable
 
+/**
+ * A metadata task normally resolves by searching the catalogue for its book or
+ * track. A split part already carries the verified URL of one upload, so it
+ * must go straight to extraction: re-running the search would gate that part as
+ * if it were the whole book and hold it forever.
+ */
+internal val TypeInfo.MetadataTrack.needsSearch: Boolean
+    get() = !directUrl
+
 @OptIn(FlowPreview::class)
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -163,6 +203,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     private val snapshotFlow = snapshotFlow { taskStateMap.toMap() }
 
     init {
+        // Observation starts with the downloader. Idempotent: App.onCreate()
+        // registers first, and this keeps a DownloaderV2 built in isolation
+        // from silently missing live network state.
+        NetworkPolicy.init(appContext)
+
         scope.launch(Dispatchers.Default) {
             snapshotFlow
                 .onEach { state ->
@@ -186,6 +231,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             .onFailure { Log.e(TAG, "stopService failed", it) }
                     }
                 }
+        }
+
+        // A network that comes back must wake the queue: snapshotFlow only
+        // re-emits on a map change, so a task parked by the metered gate would
+        // otherwise sit there until the user touched it.
+        NetworkPolicy.onNetworkRestored = {
+            scope.launch(Dispatchers.Default) { kickFromNetwork() }
         }
 
         scope.launch(Dispatchers.IO) {
@@ -242,7 +294,17 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 preState
                             }
                         }
-                    state.copy(downloadState = downloadState)
+                    state.copy(
+                        downloadState = downloadState,
+                        // A pending swap is persisted, but the old path it
+                        // replaces is not. Never restore a pending state that
+                        // has no way to be resolved: completed -> promote;
+                        // otherwise fall back to the previous pick.
+                        match =
+                            state.match?.restoreAfterProcessDeath(
+                                completed = downloadState is Completed
+                            ),
+                    )
                 }
         taskList.forEach { (task, state) -> enqueue(task, state) }
     }
@@ -308,6 +370,73 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         return false
     }
 
+    /**
+     * A split book: no single upload is the book, so the held task is replaced
+     * by one task per verified part, inside the same batch.
+     *
+     * Every part is a [TypeInfo.MetadataTrack] with
+     * [TypeInfo.MetadataTrack.directUrl] set, so it downloads its own URL
+     * instead of searching for the book again (and being held again). Its own
+     * duration is carried, so the post-download check verifies this part, not
+     * the book.
+     *
+     * The part tasks are built before the book task is removed: a failure while
+     * building must not leave the batch without its container. The book task is
+     * never downloaded through the pick the gate refused.
+     */
+    override fun enqueueParts(task: Task, parts: List<MatchCandidate>): Int {
+        if (parts.isEmpty()) return 0
+        val book = task.type as? TypeInfo.MetadataTrack ?: return 0
+        // A part set lives in the book's batch; without one there is no group
+        // to report progress or completion against, so nothing is invented.
+        val batch = task.batch ?: return 0
+        // A fetch or download in flight must not be torn out from under its
+        // worker: a split plan replaces a held book, which is never active.
+        val state = taskStateMap[task] ?: return 0
+        if (state.downloadState is FetchingInfo || state.downloadState is Running) return 0
+
+        val bookTitle = book.title.ifBlank { batch.title }
+        val audioPreferences = task.preferences.copy(extractAudio = true)
+        val partTasks =
+            parts.mapIndexed { position, part ->
+                val title = "$bookTitle — Part ${position + 1}"
+                val metadata =
+                    book.copy(
+                        index = position,
+                        provider = AUDIBLE_PROVIDER,
+                        title = title,
+                        durationMs = part.duration * 1000L,
+                        directUrl = true,
+                    )
+                val partTask =
+                    Task(
+                        url = part.url,
+                        type = metadata,
+                        preferences = audioPreferences,
+                        batch = batch,
+                        origin = task.origin,
+                    )
+                partTask to
+                    Task.State(
+                        downloadState = Idle,
+                        videoInfo = null,
+                        viewState =
+                            Task.ViewState(
+                                url = part.url,
+                                title = title,
+                                uploader = book.artist,
+                                duration = part.duration.toInt(),
+                            ),
+                    )
+            }
+
+        // Add the parts before dropping the held book: a process death between
+        // the two leaves a duplicate review entry, not an empty batch.
+        partTasks.forEach { (partTask, partState) -> enqueue(partTask, partState) }
+        remove(task)
+        return partTasks.size
+    }
+
     override fun cancel(task: Task): Boolean = task.cancelImpl()
 
     override fun restart(task: Task) {
@@ -318,45 +447,124 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      * Re-fetches only the candidate metadata, never the search. The scheduler
      * then re-runs exactly the swapped songs; the old file is deleted only once
      * its replacement finishes.
+     *
+     * Nothing here deletes: a swap that fails or is interrupted must leave the
+     * old file and its history row intact. Deletion lives in
+     * [cleanupSwappedFile], after the replacement is verified.
      */
-    override suspend fun swapMatches(selections: List<Pair<Task, MatchCandidate>>): Int =
+    override suspend fun swapMatches(
+        selections: List<Pair<Task, MatchCandidate>>
+    ): List<SwapResult> =
         withContext(Dispatchers.IO) {
-            var queued = 0
+            val results = mutableListOf<SwapResult>()
             selections
                 .distinctBy { it.first.id }
                 .forEach { (task, candidate) ->
-                    val current = taskStateMap[task] ?: return@forEach
-                    // A matching or downloading song must not have its state
-                    // torn out from under the worker.
-                    if (current.downloadState is FetchingInfo || current.downloadState is Running) {
-                        return@forEach
-                    }
-                    val match = current.match ?: return@forEach
-                    val fetched =
-                        DownloadUtil.fetchVideoInfoFromUrl(
-                            url = candidate.url,
-                            preferences = task.preferences,
-                            taskKey = task.id,
-                        )
-                    if (fetched.isFailure) {
-                        Log.w(
-                            TAG,
-                            "${task.id} swap fetch failed: ${fetched.exceptionOrNull()?.message}",
-                        )
-                        return@forEach
-                    }
-                    val info = fetched.getOrThrow()
-                    val oldPath = (current.downloadState as? Completed)?.filePath
-                    if (!oldPath.isNullOrBlank()) pendingSwapCleanup[task.id] = oldPath
-                    task.match = match.withSelection(candidate)
-                    task.info = info
-                    task.viewState = Task.ViewState.fromVideoInfo(info)
-                    task.downloadState = ReadyWithInfo
-                    queued++
+                    // One broken selection costs its own status line, never the
+                    // batch: the caller renders one row per result and an
+                    // exception here would escape into the UI coroutine.
+                    results +=
+                        runCatching { swapOne(task, candidate) }
+                            .getOrElse { failure ->
+                                // Cancellation is not a failed swap: let it
+                                // unwind the caller's scope.
+                                if (failure is CancellationException) throw failure
+                                Log.w(
+                                    TAG,
+                                    "${task.id} swap failed unexpectedly: ${failure.message}",
+                                    failure,
+                                )
+                                swapResult(
+                                    task,
+                                    candidate,
+                                    SwapOutcome.FetchFailed,
+                                    shortReason(failure),
+                                )
+                            }
                 }
             Snapshot.sendApplyNotifications()
-            queued
+            results
         }
+
+    /**
+     * One selection, start to finish. Returns the outcome; throws only on a bug,
+     * which [swapMatches] turns into a [SwapOutcome.FetchFailed] line.
+     */
+    private suspend fun swapOne(task: Task, candidate: MatchCandidate): SwapResult {
+        val current = taskStateMap[task] ?: return swapResult(task, candidate, SwapOutcome.Missing)
+        // A matching or downloading song must not have its state torn out from
+        // under the worker.
+        if (current.downloadState is FetchingInfo || current.downloadState is Running) {
+            return swapResult(task, candidate, SwapOutcome.Busy)
+        }
+        val match = current.match ?: return swapResult(task, candidate, SwapOutcome.Missing)
+        val fetched =
+            DownloadUtil.fetchVideoInfoFromUrl(
+                url = candidate.url,
+                preferences = task.preferences,
+                taskKey = task.id,
+            )
+        val failure = fetched.exceptionOrNull()
+        if (failure != null) {
+            Log.w(TAG, "${task.id} swap fetch failed: ${failure.message}")
+            // The old pick and its file were never touched; make sure a
+            // half-applied pending flag cannot survive.
+            if (match.pending) task.match = match.cancelPending()
+            return swapResult(task, candidate, SwapOutcome.FetchFailed, shortReason(failure))
+        }
+        val info = fetched.getOrThrow()
+        // Park the file this pick replaces before the new state can let the
+        // scheduler overwrite history. An empty path means there was nothing on
+        // disk to delete on success.
+        pendingSwapCleanup[task.id] = (current.downloadState as? Completed)?.filePath.orEmpty()
+        // An explicit pick is the one way out of a gate hold, but the hold is
+        // cleared only by confirmSelection() after the file exists. If the
+        // pick fails, cancelPending() keeps held=true and the review entry
+        // (and its picker) survives.
+        task.match = match.withSelection(candidate)
+        task.info = info
+        task.viewState = Task.ViewState.fromVideoInfo(info)
+        task.downloadState = ReadyWithInfo
+        return swapResult(task, candidate, SwapOutcome.Queued)
+    }
+
+    /**
+     * Non-blank text for [Task.DownloadState.Error.message]. Error surfaces
+     * prefer this field when `throwable.message` is blank, so a throwable that
+     * carries no message must not leave it empty.
+     */
+    private fun errorText(throwable: Throwable, friendly: Throwable): String =
+        friendly.message?.takeIf { it.isNotBlank() }
+            ?: throwable.message?.takeIf { it.isNotBlank() }
+            ?: appContext.getString(R.string.unknown_error)
+
+    /** One short, user-safe line; never a stack trace. */
+    private fun shortReason(throwable: Throwable): String =
+        DownloadErrorMessages.asFriendly(throwable)
+            .message
+            .orEmpty()
+            .lineSequence()
+            .first()
+            .take(160)
+
+    /** One status line for the review sheet; the title falls back to the URL. */
+    private fun swapResult(
+        task: Task,
+        candidate: MatchCandidate,
+        outcome: SwapOutcome,
+        reason: String = "",
+    ): SwapResult =
+        SwapResult(
+            taskId = task.id,
+            uiKey = task.uiKey,
+            title =
+                (task.type as? TypeInfo.MetadataTrack)?.title?.takeIf { it.isNotBlank() }
+                    ?: task.url,
+            candidateUrl = candidate.url,
+            candidateTitle = candidate.title,
+            outcome = outcome,
+            reason = reason,
+        )
 
     override fun acknowledgeMatches(batchId: String) {
         super.acknowledgeMatches(batchId)
@@ -472,12 +680,45 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         )
     }
 
-    /** Called after a song completes: drop the file its swapped pick replaced. */
-    private fun cleanupSwappedFile(taskId: String, newPath: String?) {
-        val oldPath = pendingSwapCleanup.remove(taskId) ?: return
-        if (oldPath == newPath) return
-        runCatching { File(oldPath).takeIf { it.isFile }?.delete() }
-            .onFailure { Log.w(TAG, "could not delete replaced file: ${it.message}") }
+    /**
+     * Called after a song completes: promote the pending pick to the real one
+     * and drop the file (and history row) it replaced.
+     *
+     * Order is the contract: the replacement must exist and be non-empty first;
+     * only then are the old row and file deleted, together. A swap that produced
+     * no file cancels the pending pick and keeps both, so the user never loses
+     * the download they already had.
+     */
+    private suspend fun cleanupSwappedFile(taskId: String, newPath: String?) {
+        // Null means no swap was registered in this process (the pending pick
+        // was restored after a restart): there is no parked path to delete,
+        // but a verified replacement still promotes the pending pick.
+        val oldPath = pendingSwapCleanup.remove(taskId)
+        val newFile = newPath?.let(::File)
+        val task = taskStateMap.keys.firstOrNull { it.id == taskId }
+        if (newFile == null || !newFile.isFile || newFile.length() <= 0L) {
+            Log.w(TAG, "swap for $taskId produced no file; keeping the old pick")
+            task?.match?.takeIf { it.pending }?.let { task.match = it.cancelPending() }
+            return
+        }
+        if (!oldPath.isNullOrBlank() && oldPath != newPath) {
+            // Row first: a crash between the two leaves an orphan file (harmless)
+            // instead of a history row pointing at a deleted file.
+            DatabaseUtil.deleteInfoByPath(oldPath)
+            runCatching { File(oldPath).takeIf { it.isFile }?.delete() }
+                .onFailure { Log.w(TAG, "could not delete replaced file: ${it.message}") }
+        }
+        task?.match?.takeIf { it.pending }?.let { task.match = it.confirmSelection() }
+    }
+
+    /**
+     * A swapped download failed: drop the parked path and put the old pick
+     * back. The old file and its history row were never touched, so they stay.
+     */
+    private fun abandonSwappedFile(taskId: String) {
+        if (pendingSwapCleanup.remove(taskId) == null) return
+        val task = taskStateMap.keys.firstOrNull { it.id == taskId } ?: return
+        task.match?.takeIf { it.pending }?.let { task.match = it.cancelPending() }
     }
 
     /**
@@ -512,8 +753,29 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             )
     }
 
+    /**
+     * Wakes the scheduler when a network becomes usable again. Calling
+     * [doYourWork] directly is required: `Snapshot.sendApplyNotifications()`
+     * alone does not re-emit `snapshotFlow` when the map did not change.
+     */
+    private fun kickFromNetwork() = doYourWork()
+
+    /** Processor time of the last "parked on a metered network" log line. */
+    @Volatile private var lastMeteredLogAt = 0L
+
     /** Processes pending tasks, prioritizing downloads. */
     private fun doYourWork() {
+        // The one enforcement point for the metered gate. It sits here, above
+        // the yt-dlp/aria2/Ghost dispatch, so every lane shares it and a
+        // transfer already in flight is never interrupted mid-stream.
+        if (!NetworkPolicy.canStartDownloads()) {
+            val now = System.currentTimeMillis()
+            if (now - lastMeteredLogAt > 30_000L) {
+                lastMeteredLogAt = now
+                Log.i(TAG, "queue parked: metered network, no permit")
+            }
+            return
+        }
         if (taskStateMap.countRunning() >= MAX_CONCURRENCY) return
 
         taskStateMap.entries
@@ -540,8 +802,16 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             execute()
             return
         }
-        (type as? TypeInfo.MetadataTrack)?.let { track ->
-            resolveMetadata(track)
+        val track = type as? TypeInfo.MetadataTrack
+        if (track != null) {
+            if (track.needsSearch) {
+                resolveMetadata(track)
+            } else {
+                // A split part carries the verified URL of one upload: there
+                // is no catalogue entry to search and no page to sniff, so it
+                // is extracted directly whatever the gallery preferences say.
+                fetchInfo()
+            }
             return
         }
         if (
@@ -623,7 +893,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             }
                         }
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        task.downloadState = Error(throwable = friendly, action = FetchInfo)
+                        task.downloadState =
+                            Error(
+                                throwable = friendly,
+                                action = FetchInfo,
+                                message = errorText(throwable, friendly),
+                            )
                         if (usesOwnNotification) {
                             NotificationUtil.notifyError(
                                 title = viewState.title,
@@ -667,15 +942,19 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         info = resolved.videoInfo
                         viewState = Task.ViewState.fromVideoInfo(resolved.videoInfo)
                         match = resolved.match
-                        downloadState = ReadyWithInfo
+                        // A held book finishes without ReadyWithInfo, so the
+                        // scheduler never spends a byte on an unverified pick.
+                        downloadState = MatchOps.resolvedState(resolved.match)
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) return@onFailure
                         if (downloadState !is FetchingInfo) return@onFailure
+                        val friendly = DownloadErrorMessages.asFriendly(throwable)
                         downloadState =
                             Error(
-                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                throwable = friendly,
                                 action = FetchInfo,
+                                message = errorText(throwable, friendly),
                             )
                         if (usesOwnNotification) {
                             NotificationUtil.notifyError(
@@ -689,6 +968,45 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
         downloadState = FetchingInfo(job = job, taskId = id)
         job.start()
+    }
+
+    /**
+     * Phase 1b safety net for an Audible book: measure the file that actually
+     * landed against the catalogue runtime. Returns null for every other task;
+     * there is nothing to prove.
+     *
+     * A mismatch writes the measured duration, re-opens the review entry through
+     * the columns phase 1a already renders, and keeps the file: a short book the
+     * user can still play beats deleting a download they waited for.
+     */
+    private suspend fun Task.verifyAudibleDuration(path: String): VerifyResult? {
+        val track = type as? TypeInfo.MetadataTrack ?: return null
+        if (!track.provider.equals(AUDIBLE_PROVIDER, ignoreCase = true)) return null
+        if (track.durationMs <= 0L) return null
+        val result =
+            withContext(Dispatchers.IO) {
+                AudioVerify.verifyDuration(appContext, File(path), track.durationMs)
+            }
+        val verdict = if (result.ok) "ok" else "mismatch"
+        val measured = "${result.actualMs / 1000L}s of ${result.expectedMs / 1000L}s"
+        val line = "verify: $verdict: ${result.reason.ifBlank { "within tolerance" }} ($measured)"
+        Log.i(TAG, "$id $line")
+        TaskAuditLog.append(id, line)
+        match =
+            if (result.ok) {
+                match?.copy(actualDurationMs = result.actualMs)
+            } else {
+                match?.copy(
+                    flagged = true,
+                    // A failed check outranks a swap confirmation: the entry
+                    // must stay visible until the user picks again.
+                    acknowledged = false,
+                    held = false,
+                    actualDurationMs = result.actualMs,
+                    gateReason = result.reason,
+                )
+            }
+        return result
     }
 
     private fun Task.download() {
@@ -766,9 +1084,38 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     }
                     .onSuccess { pathList ->
                         val newPath = pathList.firstOrNull()
-                        downloadState = Completed(newPath)
                         newPath?.let { enrichWithCompletedFile(it) }
-                        cleanupSwappedFile(id, newPath)
+                        // Post-download safety net first: the gate proves the
+                        // pick, this proves the file that actually landed. A
+                        // failed check must not delete the old file/row a swap
+                        // was about to replace.
+                        val verify = newPath?.let { verifyAudibleDuration(it) }
+                        if (verify != null && !verify.ok) {
+                            // Keep the old pick/file/row; drop the parked path
+                            // and make the short replacement a reviewable warning.
+                            val previousPath = pendingSwapCleanup[id]
+                            abandonSwappedFile(id)
+                            val keepPath =
+                                previousPath?.takeIf { File(it).isFile } ?: newPath
+                            val warning =
+                                if (keepPath != null && keepPath != newPath) {
+                                    "replacement rejected: ${verify.reason}; kept the previous file"
+                                } else {
+                                    verify.reason
+                                }
+                            match =
+                                match?.copy(
+                                    flagged = true,
+                                    acknowledged = false,
+                                    held = false,
+                                    actualDurationMs = verify.actualMs,
+                                    gateReason = verify.reason,
+                                )
+                            downloadState = Completed(keepPath, warning = warning)
+                        } else {
+                            cleanupSwappedFile(id, newPath)
+                            downloadState = Completed(newPath)
+                        }
 
                         if (usesOwnNotification) {
                             val text =
@@ -797,8 +1144,16 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
+                        // A failed replacement keeps the old file and row; the
+                        // pending pick must not stay "Replacing…" forever.
+                        abandonSwappedFile(id)
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        downloadState = Error(throwable = friendly, action = Download)
+                        downloadState =
+                            Error(
+                                throwable = friendly,
+                                action = Download,
+                                message = errorText(throwable, friendly),
+                            )
                         if (usesOwnNotification) {
                             NotificationUtil.notifyError(
                                 title = viewState.title,
@@ -859,6 +1214,16 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     private fun Task.restartImpl() {
         when (val preState = downloadState) {
             is DownloadState.Restartable -> {
+                // A held book has no verified full-length source. Restarting it
+                // would download the upload the gate refused, so the explicit
+                // pick in the review sheet is the only way out of a hold.
+                if (preState.action == Download && match?.held == true) {
+                    TaskAuditLog.append(
+                        id,
+                        "gate: restart refused — pick a candidate in Review matches",
+                    )
+                    return
+                }
                 downloadState =
                     when (preState.action) {
                         Download -> ReadyWithInfo
@@ -907,10 +1272,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         if (throwable is YoutubeDL.CanceledException) {
                             return@onFailure
                         }
+                        val friendly = DownloadErrorMessages.asFriendly(throwable)
                         downloadState =
                             Error(
-                                throwable = DownloadErrorMessages.asFriendly(throwable),
+                                throwable = friendly,
                                 action = Download,
+                                message = errorText(throwable, friendly),
                             )
                         NotificationUtil.notifyError(
                             title = viewState.title,

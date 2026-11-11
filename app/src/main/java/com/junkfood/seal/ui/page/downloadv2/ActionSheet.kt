@@ -336,7 +336,13 @@ fun LazyListScope.ActionButtons(
             }
             item(key = "ErrorReportButton") {
                 ErrorReportButton(modifier = Modifier.animateItem()) {
-                    onActionPost(task, UiAction.CopyErrorReport(downloadState.throwable))
+                    onActionPost(
+                        task,
+                        UiAction.CopyErrorReport(
+                            downloadState.throwable,
+                            message = downloadState.message,
+                        ),
+                    )
                 }
             }
         }

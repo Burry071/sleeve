@@ -46,10 +46,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FloatingActionButton
@@ -113,6 +115,7 @@ import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
+import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.download.Task.DownloadState.Canceled
@@ -139,11 +142,15 @@ import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
+import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
+import com.junkfood.seal.ui.page.download.MeteredNetworkDialog
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -159,12 +166,6 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private const val TAG = "DownloadPageV2"
-
-/** Sheet actions that hand a task to the download pipeline. */
-private fun Action.startsDownload(): Boolean =
-    this is Action.DownloadWithPreset ||
-        this is Action.RunCommand ||
-        this is Action.DownloadMetadataTracks
 
 enum class Filter {
     All,
@@ -227,7 +228,7 @@ sealed interface UiAction {
 
     data object Resume : UiAction
 
-    data class CopyErrorReport(val throwable: Throwable) : UiAction
+    data class CopyErrorReport(val throwable: Throwable, val message: String = "") : UiAction
 
     /** Re-opens the confirm sheet for a login-walled failure. */
     data class RetryWithCookies(val url: String) : UiAction
@@ -265,7 +266,9 @@ fun DownloadPageV2(
             }
         } else null
 
-    fun postAction(action: Action) {
+    var pendingMeteredAction by remember { mutableStateOf<Action?>(null) }
+
+    fun enqueueAction(action: Action) {
         if (
             action.startsDownload() &&
                 NOTIFICATION.getBoolean() &&
@@ -274,6 +277,16 @@ fun DownloadPageV2(
             showNotificationDialog = true
         }
         dialogViewModel.postAction(action)
+    }
+
+    fun postAction(action: Action) {
+        // One gate for both hosts: only actions that hand work to the pipeline
+        // are parked, and "Don't allow" drops them without queueing.
+        if (action.startsDownload() && !NetworkPolicy.canStartDownloads()) {
+            pendingMeteredAction = action
+            return
+        }
+        enqueueAction(action)
     }
 
     DownloadPageImplV2(
@@ -294,15 +307,8 @@ fun DownloadPageV2(
             downloader.acknowledgeMatches(batchId)
             dialogViewModel.closeMatchReview()
         },
-        onReviewSwap = { selections ->
-            dialogViewModel.closeMatchReview()
-            scope.launch {
-                val queued = downloader.swapMatches(selections)
-                if (queued == 0 && selections.isNotEmpty()) {
-                    context.makeToast(R.string.match_swap_failed)
-                }
-            }
-        },
+        onReviewSwap = { selections -> downloader.swapMatches(selections) },
+        onReviewParts = { task, parts -> downloader.enqueueParts(task, parts) },
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -311,7 +317,7 @@ fun DownloadPageV2(
             UiAction.Resume -> downloader.restart(task)
             is UiAction.CopyErrorReport -> {
                 clipboardManager.setText(
-                    AnnotatedString(getErrorReport(action.throwable, task.url))
+                    AnnotatedString(getErrorReport(action.throwable, task.url, action.message))
                 )
                 context.makeToast(R.string.error_copied)
             }
@@ -380,6 +386,22 @@ fun DownloadPageV2(
         )
     }
 
+    pendingMeteredAction?.let { action ->
+        MeteredNetworkDialog(
+            onDismissRequest = { pendingMeteredAction = null },
+            onAllowOnceConfirm = {
+                NetworkPolicy.allowMeteredOnce()
+                pendingMeteredAction = null
+                enqueueAction(action)
+            },
+            onAllowAlwaysConfirm = {
+                CELLULAR_DOWNLOAD.updateBoolean(true)
+                pendingMeteredAction = null
+                enqueueAction(action)
+            },
+        )
+    }
+
     if (showDialog) {
 
         DownloadDialog(
@@ -444,7 +466,8 @@ fun DownloadPageImplV2(
     onReviewOpen: (String) -> Unit = {},
     onReviewDismiss: () -> Unit = {},
     onReviewAcceptAll: (String) -> Unit = {},
-    onReviewSwap: (List<Pair<Task, MatchCandidate>>) -> Unit = {},
+    onReviewSwap: suspend (List<Pair<Task, MatchCandidate>>) -> List<SwapResult> = { emptyList() },
+    onReviewParts: suspend (Task, List<MatchCandidate>) -> Int = { _, _ -> 0 },
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
@@ -701,35 +724,60 @@ fun DownloadPageImplV2(
             }
             activeFilter != Filter.Playlist && filteredMap.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    DownloadQueuePlaceholder(
+                    // The empty state is also the only place a first-time user
+                    // can start without the FAB; keep the action under the copy.
+                    Column(
                         modifier =
-                            Modifier.fillMaxHeight(0.4f)
+                            Modifier.fillMaxHeight(0.7f)
                                 .widthIn(max = 360.dp)
-                                .align(Alignment.Center)
-                    )
+                                .align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        DownloadQueuePlaceholder(
+                            modifier = Modifier.fillMaxWidth().weight(1f, fill = false)
+                        )
+                        Button(
+                            onClick = downloadCallback,
+                            modifier = Modifier.padding(bottom = 16.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ContentPaste,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.paste_link))
+                        }
+                    }
                 }
             }
         }
     }
-    if (selectedTask != null) {
-        val task = selectedTask!!
-        val (downloadState, _, viewState) = taskDownloadStateMap[task] ?: return
-        SealModalBottomSheet(
-            sheetState = sheetState,
-            contentPadding = PaddingValues(),
-            onDismissRequest = {
-                scope.launch { sheetState.hide() }.invokeOnCompletion { selectedTask = null }
-            },
-        ) {
-            SheetContent(
-                task = task,
-                downloadState = downloadState,
-                viewState = viewState,
+    // A nullable let, not an early return: a task removed while its sheet is
+    // open must not stop the rest of the page (and its sheet state) composing.
+    selectedTask?.let { task ->
+        taskDownloadStateMap[task]?.let { taskState ->
+            val (downloadState, _, viewState) = taskState
+            SealModalBottomSheet(
+                sheetState = sheetState,
+                contentPadding = PaddingValues(),
                 onDismissRequest = {
                     scope.launch { sheetState.hide() }.invokeOnCompletion { selectedTask = null }
                 },
-                onActionPost = onActionPost,
-            )
+            ) {
+                SheetContent(
+                    task = task,
+                    downloadState = downloadState,
+                    viewState = viewState,
+                    onDismissRequest = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            selectedTask = null
+                        }
+                    },
+                    onActionPost = onActionPost,
+                )
+            }
         }
     }
     dismissTarget?.let { target ->
@@ -768,6 +816,7 @@ fun DownloadPageImplV2(
                 entries = group.entries,
                 onDismissRequest = onReviewDismiss,
                 onSwap = onReviewSwap,
+                onDownloadParts = onReviewParts,
                 onAcceptAll = { onReviewAcceptAll(batchId) },
             )
         }
@@ -800,7 +849,7 @@ private fun HeaderCompact(modifier: Modifier = Modifier, onMenuOpen: () -> Unit)
         }
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            stringResource(R.string.download_queue),
+            stringResource(R.string.nav_active_downloads),
             style =
                 MaterialTheme.typography.titleLarge.copy(
                     fontSize = 20.sp,
@@ -815,7 +864,7 @@ private fun HeaderExpanded(modifier: Modifier = Modifier) {
     Row(modifier = modifier.height(64.dp), verticalAlignment = Alignment.CenterVertically) {
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            stringResource(R.string.download_queue),
+            stringResource(R.string.nav_active_downloads),
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Medium),
         )
     }
