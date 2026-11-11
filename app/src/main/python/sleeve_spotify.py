@@ -298,7 +298,9 @@ def resolve(url, client_id="", client_secret=""):
 
 # ------------------------------------------------------------ ranked matching
 # Quality-ranked candidate picking (spotDL-adapted recipe):
-#   - name match: difflib ratio on slugified token strings (floor 60)
+#   - name match: difflib ratio on slugified token strings (floor 60); for
+#     long-form items the candidate's marketing decoration ("Full Audiobook",
+#     "Book One", "|" / "-" separators) is stripped first
 #   - artist match: uploader vs artist (+10 for YouTube's official "- Topic"
 #     artist channels), floor 40
 #   - duration: exp decay of |delta seconds| (x100), slower decay for long
@@ -323,6 +325,36 @@ _JUNK_CHANNEL_WORDS = (
 )
 _ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|\band\b|\bx\b|\bft\b|\bfeat\b)\s*")
 _BRACKET_RE = re.compile(r"\([^)]*\)|\[[^]]*]")
+
+# Marketing decoration that audiobook uploads carry and the catalogue title
+# never does. Stripped from the *candidate* title for the name score, and only
+# when the track is long-form: a music title saying "book one" is the artist's
+# own wording and must keep costing name points.
+_LONG_FORM_DECOR_RE = re.compile(
+    r"\b(?:full|complete)\s+audiobook\b"
+    r"|\bunabridged\b"
+    r"|\baudiobook\b"
+    r"|\b(?:science\s+fiction|sci[\s-]*fi|epic|saga|fantasy|thriller|novel"
+    r"|best[\s-]*seller)\b"
+    r"|\bbook\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven"
+    r"|twelve|\d{1,2})\b",
+    re.I,
+)
+_LONG_FORM_SEP_RE = re.compile(r"\s*\|\s*|\s+[-\u2013\u2014]+\s*|\s*[-\u2013\u2014]+\s+")
+# Part markers are not part of the book identity; strip them for the name
+# score so "Dune - Part 1" still matches the catalogue title. The gate does the
+# actual part parsing later.
+_LONG_FORM_PART_RE = re.compile(
+    r"\bpart\s+(?:\d{1,2}|[ivxlcdm]{1,6}|one|two|three|four|five|six|seven|eight|nine|ten"
+    r"|eleven|twelve)\b"
+    r"|\bpt\.?\s*\d{1,2}\b"
+    r"|\b\d{1,2}\s*(?:of|/)\s*\d{1,2}\b",
+    re.I,
+)
+
+
+def _is_part_upload(title):
+    return bool(_LONG_FORM_PART_RE.search(title or ""))
 
 
 def _strip_marks(text):
@@ -352,13 +384,24 @@ def _ratio(a, b):
     return _difflib.SequenceMatcher(None, a, b).ratio() * 100.0
 
 
-def _name_score(track_title, track_artist, cand_title):
+def _strip_long_form_decor(title):
+    """Drop audiobook marketing and part decoration from a candidate title."""
+    text = _LONG_FORM_DECOR_RE.sub(" ", title or "")
+    text = _LONG_FORM_PART_RE.sub(" ", text)
+    text = _LONG_FORM_SEP_RE.sub(" ", text)
+    return " ".join(text.split())
+
+
+def _name_score(track_title, track_artist, cand_title, long_form=False):
     t = _slug(track_title)
-    c = _slug(cand_title)
+    scored_title = _strip_long_form_decor(cand_title) if long_form else cand_title
+    c = _slug(scored_title)
     score = _ratio(" ".join(sorted(t.split())), " ".join(sorted(c.split())))
     if score <= 75.0:
         full = _slug(track_artist + " " + track_title)
         score = max(score, _ratio(" ".join(sorted(full.split())), " ".join(sorted(c.split()))))
+    # The penalty reads the title as uploaded: decoration stripping must not
+    # hide a "[Live]" or "(Remix)" marker from it.
     cand_raw = _raw_slug(cand_title)
     track_raw = _raw_slug(track_artist + " " + track_title)
     for word in _FORBIDDEN_WORDS:
@@ -416,6 +459,16 @@ def _duration_delta(track_ms, cand_s):
     return delta, delta / track_s * 100.0
 
 
+def _duration_seconds(value):
+    """Candidate runtime in whole seconds; None when unknown or non-numeric."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _duration_score(track_ms, cand_s):
     track_s = (track_ms or 0) / 1000.0
     delta, pct = _duration_delta(track_ms, cand_s)
@@ -442,9 +495,11 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
     strictness: 0=loose, 1=normal, 2=strict
     top_n: how many ranked candidates to keep for the review sheet.
 
-    returns {"ok","index","id","url","title","score","candidates":[...],
-    "rejected":[...]} where candidates is the top_n list with per-component
-    reasons and rejected names the duration-vetoed uploads.
+    returns {"ok","index","id","url","title","score","uploader","channel",
+    "duration","candidates":[...],"rejected":[...]} where candidates is the
+    top_n list with per-component reasons and the candidate's uploader,
+    channel and duration (whole seconds, null when unknown) echoed back, and
+    rejected names the duration-vetoed uploads.
     """
     try:
         track = json.loads(track_json) if isinstance(track_json, str) else dict(track_json or {})
@@ -473,6 +528,7 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
                 and cand_s is not None
                 and float(cand_s) > 0
                 and float(cand_s) < track_s * 0.25
+                and not _is_part_upload(cand_title)
             ):
                 rejected.append(
                     {
@@ -487,7 +543,7 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
                     }
                 )
                 continue
-            name = _name_score(title, artist, cand_title)
+            name = _name_score(title, artist, cand_title, long_form=long_form)
             name_floor = {0: 50.0, 1: 60.0, 2: 75.0}.get(strictness, 60.0)
             if name < name_floor:
                 continue
@@ -530,6 +586,9 @@ def rank_candidates(track_json, candidates_json, strictness=1, top_n=3):
                     "url": cand.get("url") or "",
                     "title": cand_title,
                     "score": round(final, 1),
+                    "uploader": cand.get("uploader") or "",
+                    "channel": cand.get("channel") or "",
+                    "duration": _duration_seconds(cand.get("duration")),
                     "reasons": reasons,
                 }
             )

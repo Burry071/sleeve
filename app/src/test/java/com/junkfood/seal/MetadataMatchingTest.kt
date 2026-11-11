@@ -111,12 +111,12 @@ class MetadataMatchingTest {
     fun `a floor-rejected music pool still searches the wide pool`() {
         val wide = candidate(id = "wide", score = 88.0)
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { true },
-                musicSearch = { null },
-                wideSearch = { wide },
+                musicSearch = { emptyList() },
+                wideSearch = { listOf(wide) },
             )
-        assertEquals(wide, best)
+        assertEquals(listOf(wide), best)
     }
 
     @Test
@@ -124,15 +124,15 @@ class MetadataMatchingTest {
         var wideSearches = 0
         val music = candidate(id = "music", score = 85.0)
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { true },
-                musicSearch = { music },
+                musicSearch = { listOf(music) },
                 wideSearch = {
                     wideSearches++
-                    null
+                    emptyList()
                 },
             )
-        assertEquals(music, best)
+        assertEquals(listOf(music), best)
         assertEquals(0, wideSearches)
     }
 
@@ -141,12 +141,12 @@ class MetadataMatchingTest {
         val music = candidate(id = "music", score = 40.0)
         val wide = candidate(id = "wide", score = 88.0)
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { true },
-                musicSearch = { music },
-                wideSearch = { wide },
+                musicSearch = { listOf(music) },
+                wideSearch = { listOf(wide) },
             )
-        assertEquals(wide, best)
+        assertEquals(listOf(wide, music), best)
     }
 
     @Test
@@ -154,21 +154,21 @@ class MetadataMatchingTest {
         val music = candidate(id = "music", score = 40.0)
         val wide = candidate(id = "wide", score = 30.0)
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { true },
-                musicSearch = { music },
-                wideSearch = { wide },
+                musicSearch = { listOf(music) },
+                wideSearch = { listOf(wide) },
             )
-        assertEquals(music, best)
+        assertEquals(listOf(music, wide), best)
     }
 
     @Test
     fun `no match in either pool returns null`() {
         assertNull(
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { true },
-                musicSearch = { null },
-                wideSearch = { null },
+                musicSearch = { emptyList() },
+                wideSearch = { emptyList() },
             )
         )
     }
@@ -177,12 +177,12 @@ class MetadataMatchingTest {
     fun `a canceled match does not search the wide pool`() {
         var wideSearches = 0
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { false },
-                musicSearch = { null },
+                musicSearch = { emptyList() },
                 wideSearch = {
                     wideSearches++
-                    candidate(id = "wide", score = 88.0)
+                    listOf(candidate(id = "wide", score = 88.0))
                 },
             )
         assertNull(best)
@@ -193,10 +193,10 @@ class MetadataMatchingTest {
     fun `a cancel during the wide search discards its result`() {
         var activeChecks = 0
         val best =
-            DownloadUtil.matchBestCandidate(
+            DownloadUtil.matchBestCandidates(
                 isActive = { activeChecks++ < 1 },
-                musicSearch = { candidate(id = "music", score = 40.0) },
-                wideSearch = { candidate(id = "wide", score = 88.0) },
+                musicSearch = { listOf(candidate(id = "music", score = 40.0)) },
+                wideSearch = { listOf(candidate(id = "wide", score = 88.0)) },
             )
         assertNull(best)
     }
