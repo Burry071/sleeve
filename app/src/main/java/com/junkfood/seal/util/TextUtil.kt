@@ -135,8 +135,8 @@ fun Number?.toBitrateText(): String {
     }
 }
 
-fun getErrorReport(th: Throwable, url: String): String =
-    App.getVersionReport() + "\nURL: ${url}\n${th.message}"
+fun getErrorReport(th: Throwable, url: String, message: String = ""): String =
+    App.getVersionReport() + "\nURL: ${url}\n${message.ifBlank { th.message.orEmpty() }}"
 
 @Deprecated(
     "Use findURLsFromString instead",

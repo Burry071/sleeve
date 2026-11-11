@@ -39,6 +39,7 @@ import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.FileUtil.getExternalDownloadDirectory
 import com.junkfood.seal.util.FileUtil.getExternalPrivateDownloadDirectory
 import com.junkfood.seal.util.INTERNAL_PREFS
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -72,6 +73,8 @@ class App : Application() {
         super.onCreate()
         MMKV.initialize(this)
         com.junkfood.seal.ghostengine.GhostEngine.init(this)
+        // Registers the one default-network callback; never before this point.
+        NetworkPolicy.init(this)
 
         startKoin {
             androidLogger()
@@ -263,6 +266,15 @@ class App : Application() {
                 .setIntent(intent)
                 .setLongLived(true)
                 .build()
+
+        /**
+         * The service was destroyed for good (not merely unbound): a later
+         * [startService] must start it again instead of trusting a stale flag.
+         * `isServiceRunning` is left to [stopService]/[connection].
+         */
+        fun onDownloadServiceDestroyed() {
+            isServiceStarted = false
+        }
 
         fun stopService() {
             if (isServiceStarted) {

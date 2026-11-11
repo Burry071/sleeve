@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.junkfood.seal.ui.common.SettingsProvider
+import com.junkfood.seal.ui.page.download.MeteredNetworkDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.Config
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
@@ -30,14 +31,18 @@ import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Se
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
+import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.ACTION_QUICK_CLIPBOARD
+import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.EXTRA_QUICK_NONCE
 import com.junkfood.seal.util.INTERNAL_PREFS
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
+import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.QUICK_NONCE_KEY
 import com.junkfood.seal.util.isTrustedQuickIntent
 import com.junkfood.seal.util.matchUrlFromSharedText
@@ -66,6 +71,12 @@ class QuickDownloadActivity : ComponentActivity() {
     /** Android 10+ refuses clipboard reads until this window has focus, and the
      * shortcut tap starts us before focus arrives. */
     private var awaitingClipboardQuickDownload = false
+
+    /**
+     * A download the metered gate parked. The dialog hosting it lives in the
+     * sheet composition, so this state is what survives until the user answers.
+     */
+    private val pendingMeteredAction = mutableStateOf<(() -> Unit)?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -183,6 +194,16 @@ class QuickDownloadActivity : ComponentActivity() {
 
     /** The single fenced quick lane: cookie-less, template-less, announced. */
     private fun quickDownload(url: String) {
+        if (!NetworkPolicy.canStartDownloads()) {
+            // No format chosen yet, so don't raise the cellular dialog here:
+            // the sheet's postSheetAction gate covers the actual Download.
+            showConfigureSheet(listOf(url))
+            return
+        }
+        startQuickDownload(url)
+    }
+
+    private fun startQuickDownload(url: String) {
         lifecycleScope.launch {
             SleeveQuickDownload.quickDownload(applicationContext, url, get<DownloaderV2>())
                 .onSuccess { (queued, source) ->
@@ -246,6 +267,19 @@ class QuickDownloadActivity : ComponentActivity() {
         // sheet then opens on its URL input instead of finishing straight away.
         viewModel.postAction(Action.ShowSheet(urlList))
 
+        // Both enqueue entry points in this sheet pass the same gate as the
+        // main page; "Don't allow" simply drops the action.
+        fun postSheetAction(action: Action) {
+            if (action.startsDownload() && !NetworkPolicy.canStartDownloads()) {
+                pendingMeteredAction.value = { postSheetAction(action) }
+                return
+            }
+            viewModel.postAction(action)
+            // The metadata page replaced the sheet, so the hidden-state finish
+            // already fired. Queue first, then close this overlay ourselves.
+            if (action is Action.DownloadMetadataTracks) finish()
+        }
+
         onNewIntentHandler = { newIntent ->
             newIntent.getSharedURL()?.takeIf { it.isNotBlank() }?.let { url ->
                 sharedUrlCached = url
@@ -297,6 +331,22 @@ class QuickDownloadActivity : ComponentActivity() {
                         }
                     }
 
+                    pendingMeteredAction.value?.let { action ->
+                        MeteredNetworkDialog(
+                            onDismissRequest = { pendingMeteredAction.value = null },
+                            onAllowOnceConfirm = {
+                                NetworkPolicy.allowMeteredOnce()
+                                pendingMeteredAction.value = null
+                                action()
+                            },
+                            onAllowAlwaysConfirm = {
+                                CELLULAR_DOWNLOAD.updateBoolean(true)
+                                pendingMeteredAction.value = null
+                                action()
+                            },
+                        )
+                    }
+
                     if (showDialog) {
                         DownloadDialog(
                             state = state,
@@ -304,7 +354,7 @@ class QuickDownloadActivity : ComponentActivity() {
                             config = Config(),
                             preferences = preferences,
                             onPreferencesUpdate = { preferences = it },
-                            onActionPost = { viewModel.postAction(it) },
+                            onActionPost = { postSheetAction(it) },
                         )
                     }
 
@@ -336,15 +386,7 @@ class QuickDownloadActivity : ComponentActivity() {
                                     viewModel.postAction(Action.Reset)
                                     this.finish()
                                 },
-                                onActionPost = { action ->
-                                    viewModel.postAction(action)
-                                    // The metadata page replaced the sheet, so the
-                                    // Hidden-state finish above already fired. Queue
-                                    // first, then close this overlay ourselves.
-                                    if (action is Action.DownloadMetadataTracks) {
-                                        this@QuickDownloadActivity.finish()
-                                    }
-                                },
+                                onActionPost = { action -> postSheetAction(action) },
                             )
                     }
                 }
