@@ -74,6 +74,9 @@ class DownloadService : Service() {
     override fun onDestroy() {
         // Guarantee the badge goes away no matter which stop path ran.
         stopForeground(STOP_FOREGROUND_REMOVE)
+        // The started half died with us: App must not believe a later start
+        // would be a no-op, or downloads would queue behind a dead service.
+        App.onDownloadServiceDestroyed()
         super.onDestroy()
     }
 

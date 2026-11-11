@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalTextApi::class, ExperimentalTextApi::class, ExperimentalTextApi::class)
+@file:OptIn(ExperimentalTextApi::class)
 
 package com.junkfood.seal.ui.theme
 

@@ -46,7 +46,6 @@ import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -197,24 +196,6 @@ object DownloadUtil {
 
     /**
      * Picks the winner between the YouTube Music pool and the plain-YouTube
-     * pool. A floor-rejected music pool arrives here as null instead of as an
-     * error, so the widening leg still runs. [isActive] is polled before the
-     * second search and after it, so a cancel never leaves that search running.
-     */
-    internal fun matchBestCandidate(
-        isActive: () -> Boolean,
-        musicSearch: () -> GhostEngine.RankedCandidate?,
-        wideSearch: () -> GhostEngine.RankedCandidate?,
-    ): GhostEngine.RankedCandidate? {
-        val musicBest = musicSearch()
-        if (!isActive()) return null
-        if (!shouldWidenSearch(musicBest?.score)) return musicBest
-        val best = listOfNotNull(musicBest, wideSearch()).maxByOrNull { it.score }
-        return if (isActive()) best else null
-    }
-
-    /**
-     * Picks the winner between the YouTube Music pool and the plain-YouTube
      * pool, keeping the top [limit] candidates for the review sheet. A
      * floor-rejected music pool arrives here as an empty list, so the widening
      * leg still runs. [isActive] is polled before the second search and after
@@ -251,7 +232,7 @@ object DownloadUtil {
     /** A resolved catalogue track plus the cached candidates the review sheet needs. */
     data class MetadataResolution(val videoInfo: VideoInfo, val match: MatchResult)
 
-    private fun GhostEngine.RankedCandidate.toMatchCandidate(): MatchCandidate =
+    internal fun GhostEngine.RankedCandidate.toMatchCandidate(): MatchCandidate =
         MatchCandidate(
             index = index,
             id = id,
@@ -259,6 +240,27 @@ object DownloadUtil {
             title = title,
             score = score,
             reasons = reasons,
+            uploader = uploader,
+            channel = channel,
+            duration = duration,
+        )
+
+    /**
+     * One part of a split as the review sheet's candidate row. The set is not
+     * ranked: `score` stays 0 so no part can win a sort or read as a
+     * confidence figure. The channel doubles as uploader, because a part has
+     * no separate owner in the gate's reply.
+     */
+    internal fun GhostEngine.AudiblePart.toMatchCandidate(): MatchCandidate =
+        MatchCandidate(
+            index = index,
+            id = id,
+            url = url,
+            title = title,
+            score = 0.0,
+            uploader = channel,
+            channel = channel,
+            duration = durationSeconds,
         )
 
     /** Logs every ranker score so the pick is auditable on the device later. */
@@ -283,6 +285,85 @@ object DownloadUtil {
             }
         Log.i(TAG, "$taskKey $verdict")
         TaskAuditLog.append(taskKey, verdict)
+    }
+
+    /** One gate decision: the candidate to use and whether it must be held. */
+    internal data class GateDecision(
+        val pick: GhostEngine.RankedCandidate,
+        val held: Boolean,
+        val reason: String = "",
+        /**
+         * Verified part set of a split, in part order. Empty for a hold and for
+         * a pass: a hold has no plan, and a pass needs only its one pick.
+         */
+        val parts: List<GhostEngine.AudiblePart> = emptyList(),
+    )
+
+    /**
+     * Runs the audible gate and records its verdict in the audit log. Returns
+     * null when the gate itself failed: the caller then keeps the existing
+     * ranker behaviour, because a broken gate must not block every Audible
+     * download.
+     */
+    private fun audibleGate(
+        taskKey: String,
+        track: GhostEngine.SpotifyTrack,
+        ranked: List<GhostEngine.RankedCandidate>,
+    ): GhostEngine.AudibleGateResult? {
+        val attempt = GhostEngine.gateAudibleCandidates(track, ranked)
+        val gate = attempt.getOrNull()
+        if (gate == null) {
+            val reason =
+                attempt.exceptionOrNull()?.message?.takeIf { it.isNotBlank() } ?: "unknown error"
+            Log.w(TAG, "$taskKey audible gate unavailable: $reason")
+            TaskAuditLog.append(taskKey, "gate: unavailable — $reason; using rank #1")
+            return null
+        }
+        val line =
+            "gate: ${gate.verdict} — ${gate.reason.ifBlank { "no reason" }}" +
+                if (gate.passed) {
+                    " (pick ${(gate.ratio * 100).roundToInt()}% of book)"
+                } else {
+                    " (best ${(gate.bestRatio * 100).roundToInt()}% of book)"
+                }
+        Log.i(TAG, "$taskKey $line")
+        TaskAuditLog.append(taskKey, line)
+        return gate
+    }
+
+    /**
+     * Maps a gate verdict onto the candidate this task will use. A pass may
+     * name a candidate the ranker did not put first: the gate, not the score,
+     * decides identity. A hold still fetches metadata for display, but from
+     * the closest candidate instead of the ranker's favourite. A split is a
+     * hold with a plan: no single upload may download, but the complete part
+     * set the gate verified is carried along so it can be queued.
+     */
+    internal fun decideGatePick(
+        gate: GhostEngine.AudibleGateResult,
+        ranked: List<GhostEngine.RankedCandidate>,
+    ): GateDecision {
+        val fallback = ranked.first()
+        if (!gate.passed) {
+            val display = ranked.firstOrNull { it.id == gate.bestId } ?: fallback
+            val reason = gate.reason.ifBlank { "gate held the pick" }
+            return GateDecision(
+                pick = display,
+                held = true,
+                reason = reason,
+                // Only a split names the uploads that together are the book;
+                // a plain hold must never look like a plan.
+                parts = if (gate.splittable) gate.parts else emptyList(),
+            )
+        }
+        val passing =
+            ranked.firstOrNull { it.id == gate.candidateId }
+                ?: return GateDecision(
+                    fallback,
+                    held = true,
+                    reason = "gate returned an unknown candidate",
+                )
+        return GateDecision(passing, held = false)
     }
 
     /**
@@ -310,6 +391,7 @@ object DownloadUtil {
                     album = metadata.album,
                     durationMs = metadata.durationMs,
                     authors = metadata.authors,
+                    language = metadata.language,
                 )
             val query = buildMetadataQuery(track, metadata.provider)
             Log.i(TAG, "match query: $query")
@@ -327,6 +409,12 @@ object DownloadUtil {
                     .orEmpty()
 
             var rankError: Throwable? = null
+            // Audible must see the whole search pool: a full-book upload can
+            // sit below rank 3, and a 12-part set needs more than 10 rows. The
+            // gate supports up to 20 parts; 30 leaves room for duplicates.
+            val audible = metadata.provider.equals("audible", ignoreCase = true)
+            val poolLimit = if (audible) 30 else 3
+            val widePool = if (audible) "ytsearch30" else "ytsearch10"
 
             // A floor rejection is a failed ranking, not a fatal error: the
             // plain-YouTube pool still needs its chance before the task fails.
@@ -337,6 +425,7 @@ object DownloadUtil {
                         track = track,
                         candidatesJson = jsonFormat.encodeToString(candidates),
                         strictness = RANKING_STRICTNESS.getInt(),
+                        topN = poolLimit,
                     )
                     .onFailure { rankError = it }
                     .getOrElse { emptyList() }
@@ -346,7 +435,8 @@ object DownloadUtil {
                 matchBestCandidates(
                     isActive = isActive,
                     musicSearch = { ranked("ytmsearch5") },
-                    wideSearch = { ranked("ytsearch10") },
+                    wideSearch = { ranked(widePool) },
+                    limit = poolLimit,
                 )
 
             // A canceled first leg degrades to an empty pool, so stop before
@@ -361,21 +451,66 @@ object DownloadUtil {
             }
 
             val best = ranked.first()
-            val matchCandidates = ranked.map { it.toMatchCandidate() }
+
+            // Precision gate: an Audible book must prove its identity and its
+            // full length before any media request. Other providers keep the
+            // ranker-only path exactly as before. A gate failure falls back to
+            // the ranker and leaves a warning in the audit log.
+            val gate =
+                if (metadata.provider.equals("audible", ignoreCase = true)) {
+                    audibleGate(taskKey, track, ranked)
+                } else {
+                    null
+                }
+            val decision = gate?.let { decideGatePick(it, ranked) }
+            val pick = decision?.pick ?: best
+            val pickUrl = pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
+            val held = decision?.held == true
+            // Keep the passing pick visible even when it was below rank 3.
+            val displayed =
+                (listOf(pick) + ranked)
+                    .distinctBy { it.url.ifBlank { it.id } }
+                    .take(3)
+            val matchCandidates = displayed.map { it.toMatchCandidate() }
             val flagged = MatchOps.isLowConfidence(matchCandidates)
             logMatch(taskKey, track, matchCandidates, flagged)
+            // The split plan the gate verified. Top-3 display above stays the
+            // same; these are the uploads that together are the book, so they
+            // are kept apart from the ranked rows instead of competing with
+            // them for a slot.
+            val partPlan =
+                if (held) decision?.parts.orEmpty().map { it.toMatchCandidate() } else emptyList()
             val match =
                 MatchResult(
-                    candidates = matchCandidates,
-                    selectedUrl = matchCandidates.first().url,
-                    selectedScore = matchCandidates.first().score,
-                    flagged = flagged,
-                )
+                        candidates = matchCandidates,
+                        // A held book has no pick yet. The review sheet reads
+                        // `selectedUrl` as "already chosen" and disables Apply
+                        // for that row, so preselecting the displayed candidate
+                        // would make the only sensible override impossible.
+                        // Any row the user taps is then an explicit choice.
+                        selectedUrl = if (held) "" else pickUrl,
+                        selectedScore = if (held) 0.0 else pick.score,
+                        flagged = flagged,
+                    )
+                    .let { base ->
+                        if (!held) {
+                            base
+                        } else {
+                            base.copy(
+                                held = true,
+                                expectedDurationMs = metadata.durationMs,
+                                gateReason = decision?.reason.orEmpty(),
+                                parts = partPlan,
+                            )
+                        }
+                    }
 
-            val resolvedUrl = best.url.ifBlank { "https://www.youtube.com/watch?v=" + best.id }
+            // A held book still fetches the closest candidate's metadata (for
+            // display and the review sheet), but the caller must not write
+            // ReadyWithInfo, so no media bytes are requested.
             val resolved =
                 fetchVideoInfoFromUrl(
-                        url = resolvedUrl,
+                        url = pickUrl,
                         preferences = preferences,
                         taskKey = taskKey,
                     )
@@ -1413,7 +1548,9 @@ object DownloadUtil {
 
         val outcome =
             runBlocking {
-                val settle = async { GhostEngine.watch(engineTaskId) }
+                // progressFlow is a UI mirror only: the terminal verdict is the
+                // value watch() returns for THIS task. Reading the flow after
+                // await() raced a newer task's snapshot into this decision.
                 val bridge =
                     launch(Dispatchers.IO) {
                         GhostEngine.progressFlow.collect { p ->
@@ -1433,9 +1570,9 @@ object DownloadUtil {
                             }
                         }
                     }
-                settle.await()
+                val terminal = GhostEngine.watch(engineTaskId)
                 bridge.cancel()
-                GhostEngine.progressFlow.value
+                terminal
             }
         ghostTasks.remove(taskId)
 

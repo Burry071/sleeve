@@ -210,7 +210,7 @@ fun NavigationDrawerSheetContent(
         Spacer(Modifier.height(20.dp))
         ProvideTextStyle(MaterialTheme.typography.labelLarge) {
             NavigationDrawerItem(
-                label = { Text(stringResource(R.string.download_queue)) },
+                label = { Text(stringResource(R.string.nav_active_downloads)) },
                 icon = { Icon(Icons.Filled.Download, null) },
                 onClick = {
                     scope
@@ -220,7 +220,7 @@ fun NavigationDrawerSheetContent(
                 selected = currentRoute == Route.HOME,
             )
             NavigationDrawerItem(
-                label = { Text(stringResource(R.string.downloads_history)) },
+                label = { Text(stringResource(R.string.nav_library)) },
                 icon = { Icon(Icons.Outlined.Subscriptions, null) },
                 onClick = {
                     scope
@@ -374,7 +374,7 @@ fun NavigationRailContent(
                 Icon(
                     if (currentTopDestination == Route.HOME) Icons.Filled.Download
                     else Icons.Outlined.Download,
-                    stringResource(R.string.download_queue),
+                    stringResource(R.string.nav_active_downloads),
                 )
             },
             modifier = Modifier,
@@ -387,7 +387,7 @@ fun NavigationRailContent(
                 Icon(
                     if (currentTopDestination == Route.DOWNLOADS) Icons.Filled.Subscriptions
                     else Icons.Outlined.Subscriptions,
-                    stringResource(R.string.downloads_history),
+                    stringResource(R.string.nav_library),
                 )
             },
             modifier = Modifier,

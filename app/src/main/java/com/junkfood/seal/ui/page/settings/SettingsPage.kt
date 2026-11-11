@@ -168,8 +168,8 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
                         onNavigateTo(Route.DOWNLOAD_FORMAT)
                     }
                     SettingItem(
-                        title = "Spotify",
-                        description = "Playlist transfer credentials (spotDL pattern)",
+                        title = stringResource(id = R.string.settings_spotify),
+                        description = stringResource(id = R.string.settings_spotify_desc),
                         icon = Icons.Rounded.QueueMusic,
                     ) {
                         showSpotifyDialog = true
@@ -186,7 +186,7 @@ fun SettingsPage(onNavigateBack: () -> Unit, onNavigateTo: (String) -> Unit) {
                     }
                     SettingItem(
                         title = stringResource(id = R.string.custom_command),
-                        description = stringResource(id = R.string.custom_command_desc),
+                        description = stringResource(id = R.string.custom_command_settings_desc),
                         icon = Icons.Rounded.Terminal,
                     ) {
                         onNavigateTo(Route.TEMPLATE)

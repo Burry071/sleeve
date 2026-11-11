@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.junkfood.seal.App
 import com.junkfood.seal.UpdateDownloadService
 import java.io.File
 import java.net.HttpURLConnection
@@ -109,6 +110,14 @@ object AppUpdateManager {
         compareValuesBy(a, b, { it.major }, { it.minor }, { it.patch }, { it.channelRank }, { it.build })
 
     /**
+     * Which releases a channel may install: a stable channel refuses GitHub
+     * prereleases, a beta channel takes both. Pure so the predicate is testable
+     * without MMKV or the network.
+     */
+    internal fun channelAccepts(prerelease: Boolean, channel: Int): Boolean =
+        channel != STABLE || !prerelease
+
+    /**
      * Chooses the release asset this device can install. A release missing the
      * preferred artifact falls back to the universal one, so a missing split
      * never hides an update. The digest travels with the chosen asset, so a
@@ -193,6 +202,12 @@ object AppUpdateManager {
         // A download in flight owns the state; a Ready APK does not — the scan
         // below may prove it stale (installed meanwhile) or keep it.
         if (mutableState.value is State.Downloading) return
+        // A debug build must never install a release APK over itself: the
+        // signature would not match and the installer would just fail.
+        if (App.isDebugBuild()) {
+            mutableState.value = State.UpToDate
+            return
+        }
         lastCheckAt = System.currentTimeMillis()
         mutableState.value = State.Checking
         withContext(Dispatchers.IO) {
@@ -231,10 +246,17 @@ object AppUpdateManager {
                 // version (or a release without an installable APK) silently
                 // hides newer builds. Scan the list and keep the newest real
                 // release carrying an APK for this device.
+                val channel = with(PreferenceUtil) { UPDATE_CHANNEL.getInt() }
                 val best =
                     releases
                         .asSequence()
                         .filter { it["draft"]?.jsonPrimitive?.content != "true" }
+                        .filter { release ->
+                            channelAccepts(
+                                prerelease = release["prerelease"]?.jsonPrimitive?.content == "true",
+                                channel = channel,
+                            )
+                        }
                         .mapNotNull { release ->
                             val tag =
                                 release["tag_name"]

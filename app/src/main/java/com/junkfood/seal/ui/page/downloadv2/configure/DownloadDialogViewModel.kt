@@ -76,7 +76,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class Loading(val taskKey: String, val job: Job) : SheetState
 
-        data class Error(val action: Action, val throwable: Throwable) : SheetState
+        data class Error(
+            val action: Action,
+            val throwable: Throwable,
+            /** Friendly text mirroring [Task.DownloadState.Error.message]; blank falls back. */
+            val message: String = "",
+        ) : SheetState
     }
 
     sealed interface SheetValue {
@@ -222,7 +227,13 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         }
                     }
                     .onFailure { th ->
-                        mSheetStateFlow.update { SheetState.Error(action = action, throwable = th) }
+                        mSheetStateFlow.update {
+                            SheetState.Error(
+                                action = action,
+                                throwable = th,
+                                message = th.message.orEmpty(),
+                            )
+                        }
                     }
             }
         mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchPlaylist_$url", job = job) }
@@ -248,7 +259,13 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, throwable = th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(
+                                    action,
+                                    throwable = th,
+                                    message = th.message.orEmpty(),
+                                )
+                            }
                         }
                     }
             }
@@ -378,7 +395,13 @@ private val VIDEO_FIRST_HOSTS: Regex =
                                 message
                             }
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, IllegalStateException(friendly)) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(
+                                    action,
+                                    IllegalStateException(friendly),
+                                    message = friendly,
+                                )
+                            }
                         }
                     }
             }
@@ -415,7 +438,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, th, message = th.message.orEmpty())
+                            }
                         }
                     }
             }
@@ -439,6 +464,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     album = track.album,
                     durationMs = track.durationMs,
                     authors = track.authors,
+                    language = track.language,
                 )
             }
         val tasks =
@@ -474,7 +500,9 @@ private val VIDEO_FIRST_HOSTS: Regex =
                     }
                     .onFailure { th ->
                         withContext(Dispatchers.Main) {
-                            mSheetStateFlow.update { SheetState.Error(action, th) }
+                            mSheetStateFlow.update {
+                                SheetState.Error(action, th, message = th.message.orEmpty())
+                            }
                         }
                     }
             }
@@ -497,3 +525,12 @@ private val VIDEO_FIRST_HOSTS: Regex =
         mSelectionStateFlow.update { SelectionState.Idle }
     }
 }
+
+/**
+ * The single predicate both enqueue hosts gate on: only these actions hand a
+ * task to the download pipeline, so only these need the metered check.
+ */
+internal fun DownloadDialogViewModel.Action.startsDownload(): Boolean =
+    this is DownloadDialogViewModel.Action.DownloadWithPreset ||
+        this is DownloadDialogViewModel.Action.RunCommand ||
+        this is DownloadDialogViewModel.Action.DownloadMetadataTracks

@@ -5,7 +5,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppUpdateManagerTest {
@@ -85,5 +87,23 @@ class AppUpdateManagerTest {
     @Test
     fun releaseWithoutAUsableAssetIsSkipped() {
         assertNull(AppUpdateManager.releaseAsset(release(arm64), listOf("armeabi-v7a")))
+    }
+
+    @Test
+    fun theStableChannelRefusesPrereleases() {
+        // A beta tag must never be offered to someone who asked for stable.
+        assertFalse(AppUpdateManager.channelAccepts(prerelease = true, channel = STABLE))
+        assertTrue(AppUpdateManager.channelAccepts(prerelease = true, channel = PRE_RELEASE))
+    }
+
+    @Test
+    fun theStableChannelAcceptsFullReleases() {
+        assertTrue(AppUpdateManager.channelAccepts(prerelease = false, channel = STABLE))
+    }
+
+    @Test
+    fun thePrereleaseChannelTakesBothKinds() {
+        assertTrue(AppUpdateManager.channelAccepts(prerelease = false, channel = PRE_RELEASE))
+        assertTrue(AppUpdateManager.channelAccepts(prerelease = true, channel = PRE_RELEASE))
     }
 }

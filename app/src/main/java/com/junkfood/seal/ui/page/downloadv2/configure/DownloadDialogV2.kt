@@ -284,6 +284,8 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
     // Actions carry their link when they have one, so an error for a source
     // this page never enumerated (Audible, a future action) still renders.
     val url = state.action.url
+    // C6: the friendly field wins, the transient throwable is the fallback.
+    val message = state.message.ifBlank { state.throwable.message.orEmpty() }
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(
             imageVector = Icons.Outlined.ErrorOutline,
@@ -296,7 +298,7 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
             modifier = Modifier.padding(top = 12.dp),
         )
         Text(
-            text = state.throwable.message.toString(),
+            text = message,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier =
@@ -318,7 +320,7 @@ private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost:
                             buildString {
                                 append(App.getVersionReport())
                                 url?.let { append("\nURL: ").append(it) }
-                                append('\n').append(state.throwable.message)
+                                append('\n').append(message)
                             }
                         )
                     )
