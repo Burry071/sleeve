@@ -1,0 +1,12 @@
+2.1.0-beta.4
+
+Audible
+• Audible books gate before download: hold with a reason instead of guessing; verified split books download as checked parts.
+• Numeric-ASIN Audible links and "Title by Author" uploads now resolve.
+
+Downloads
+• Playlist batches and single downloads live in separate tabs, with a pointer from All; batch rows lead with the book title.
+
+Fixes
+• Fix crash when a failed task's Retry footer renders in a card row.
+• Stop/Resume on a stuck download no longer wedges it.

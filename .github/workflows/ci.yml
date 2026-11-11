@@ -222,6 +222,18 @@ jobs:
           (`CN=Sleeve, O=Burry071`), so switching between them is never an Android
           "downgrade" and updates keep working. Check any file against `SHA256SUMS`
           with `sha256sum -c SHA256SUMS`.
+
+          ## Known issues
+
+          - Restoring the queue after the app is killed and relaunched brings the
+            tasks back but does not continue them — press Resume on the task.
+
+          ## Metered networks, as measured
+
+          Tested on Wi-Fi marked metered: the "Allow downloading with cellular?"
+          prompt appears before any transfer, and no media bytes move until you
+          allow it. The track list itself is fetched before the prompt so the
+          sheet can show the book and its duration.
           NOTES
           cd dist
           gh release create "$GITHUB_REF_NAME" \
