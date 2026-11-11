@@ -310,10 +310,36 @@ def _title_tokens(title):
     return {token for token in _normalize_title(title).split() if token not in _ARTICLES}
 
 
-def _title_f1(expected_title, candidate_title):
+def _strip_artist_byline(candidate_title, artist):
+    """Candidate tokens with the exact artist byline removed.
+
+    Uploads spell the book as "Title by Author"; symmetric F1 counts the author
+    words as noise ("Atomic Habits by James Clear" scores 0.57). Only the exact
+    artist sequence from the resolved track is dropped, plus one preceding
+    " by ", so a "by" inside the title itself stays and the sequel guard still
+    sees the extra word in "Dune Messiah".
+    """
+    tokens = _normalize_title(candidate_title).split()
+    artist_tokens = _normalize_title(artist).split()
+    if not artist_tokens:
+        return tokens
+    width = len(artist_tokens)
+    for start in range(len(tokens) - width + 1):
+        if tokens[start:start + width] != artist_tokens:
+            continue
+        begin = start - 1 if start > 0 and tokens[start - 1] == "by" else start
+        return tokens[:begin] + tokens[start + width:]
+    return tokens
+
+
+def _title_f1(expected_title, candidate_title, artist=""):
     """Token-set F1; 0.90 rejects sequels ("Dune Messiah" vs "Dune" = 0.67)."""
     expected = _title_tokens(expected_title)
-    candidate = _title_tokens(candidate_title)
+    candidate = {
+        token
+        for token in _strip_artist_byline(candidate_title, artist)
+        if token not in _ARTICLES
+    }
     if not expected or not candidate:
         return 0.0
     overlap = len(expected & candidate)
@@ -748,7 +774,9 @@ def gate_audible(track_json, candidates_json):
                     "uploader": uploader,
                     "seconds": seconds,
                     "ratio": (seconds / expected_s) if seconds else 0.0,
-                    "f1": _title_f1(title, candidate_title),
+                    "f1": _title_f1(
+                        title, candidate_title, track.get("artist") or ""
+                    ),
                     "languages": declared_languages,
                     "language_conflict": _declared_conflict(
                         expected_language, declared_languages

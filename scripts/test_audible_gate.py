@@ -234,6 +234,64 @@ class GateVerdictTest(unittest.TestCase):
         self.assertEqual(0.0, result["best_ratio"])
 
 
+class BylineTitleTest(unittest.TestCase):
+    """"Book Title by Author" is a common upload spelling on YouTube."""
+
+    # The live Atomic Habits shortlist: the top entries are the exact book at
+    # 100% of runtime, but symmetric F1 counted "by james clear" as noise.
+    ATOMIC_BYLINE = book(
+        "Atomic Habits", 20_088_000, "James Clear (narrated by James Clear)"
+    )
+
+    def test_the_real_atomic_habits_upload_passes(self):
+        result = gate(
+            self.ATOMIC_BYLINE,
+            [
+                candidate(
+                    "Atomic Habits by James Clear Full Audiobook",
+                    20_090,
+                    uploader="JunkLoader",
+                    id="atomic-byline",
+                )
+            ],
+        )
+
+        self.assertEqual("pass", result["verdict"])
+        self.assertEqual("atomic-byline", result["candidate_id"])
+
+    def test_a_byline_upload_still_holds_on_duration(self):
+        result = gate(
+            self.ATOMIC_BYLINE,
+            [
+                candidate(
+                    "Atomic Habits by James Clear Full Audiobook",
+                    14_865,  # 74% of the book
+                    uploader="JunkLoader",
+                    id="atomic-byline-partial",
+                )
+            ],
+        )
+
+        self.assertEqual("hold", result["verdict"])
+        self.assertIn("no full-length candidate", result["reason"])
+
+    def test_the_sequel_guard_survives_the_byline(self):
+        result = gate(
+            DUNE,
+            [candidate("Dune Messiah by Frank Herbert", 75_720, id="messiah")],
+        )
+
+        self.assertEqual("hold", result["verdict"])
+
+    def test_a_by_inside_the_real_title_is_not_stripped(self):
+        result = gate(
+            book("By the River", 10_800_000, "Jane Doe"),
+            [candidate("By the River by Jane Doe", 10_800, id="river")],
+        )
+
+        self.assertEqual("pass", result["verdict"])
+
+
 class GatePolicyTest(unittest.TestCase):
     def test_a_full_length_single_titled_book_one_passes(self):
         result = gate(
