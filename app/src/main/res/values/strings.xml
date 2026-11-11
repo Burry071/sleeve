@@ -493,6 +493,9 @@
     <string name="match_review_title">Review matches</string>
     <string name="match_review_hint">Some songs were matched with low confidence. Pick a different version to re-download just that song.</string>
     <string name="match_held_hint">No full-length version was proven for this book, so nothing was downloaded. Pick the right version to download it.</string>
+    <string name="match_split_hint">These books were found as verified sets of parts. Download the parts to finish each book.</string>
+    <string name="match_split_row_hint">Found as %1$d verified parts that cover the whole book. Download the set to finish it.</string>
+    <string name="match_held_resume_hint">This book is on hold. Pick a version in Review matches.</string>
     <string name="match_verify_mismatch">Downloaded %1$s of %2$s</string>
     <string name="apply_swaps">Apply (%1$d)</string>
     <string name="accept_all">Accept all</string>

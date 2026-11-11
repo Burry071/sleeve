@@ -160,6 +160,9 @@ fun MatchReviewSheet(
         remember(flagged) {
             flagged.isNotEmpty() && flagged.all { it.second.match?.held == true }
         }
+    // A verified part set is held too, but it is the opposite story: the whole
+    // book was found, just never as one file.
+    val splitOnly = remember(flagged) { MatchOps.splitOnly(flagged) }
 
     SealModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -174,7 +177,11 @@ fun MatchReviewSheet(
         Text(
             text =
                 stringResource(
-                    if (heldOnly) R.string.match_held_hint else R.string.match_review_hint
+                    when {
+                        splitOnly -> R.string.match_split_hint
+                        heldOnly -> R.string.match_held_hint
+                        else -> R.string.match_review_hint
+                    }
                 ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -216,17 +223,28 @@ fun MatchReviewSheet(
                     }
                     if (match.held) {
                         // The gate refused this book. A score cannot explain a
-                        // hold, so the reason is shown verbatim.
+                        // hold, so the reason is shown verbatim. A verified part
+                        // set is evidence the whole book was found, not an
+                        // error, so it must not borrow the error colour.
+                        val verifiedSplit = MatchOps.isVerifiedSplit(match)
                         if (match.gateReason.isNotBlank()) {
                             Text(
                                 text = match.gateReason,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.error,
+                                color =
+                                    if (verifiedSplit) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                         }
                         Text(
-                            text = stringResource(R.string.match_held_hint),
+                            text =
+                                if (verifiedSplit)
+                                    stringResource(
+                                        R.string.match_split_row_hint,
+                                        match.parts.size,
+                                    )
+                                else stringResource(R.string.match_held_hint),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 2.dp),

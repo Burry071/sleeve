@@ -31,6 +31,7 @@ import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.VerifyResult
 import com.junkfood.seal.util.VideoInfo
+import com.junkfood.seal.util.makeToast
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -1222,6 +1223,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         id,
                         "gate: restart refused — pick a candidate in Review matches",
                     )
+                    // A silent no-op reads as a broken button; say where the
+                    // hold can be resolved.
+                    scope.launch {
+                        withContext(Dispatchers.Main) {
+                            appContext.makeToast(R.string.match_held_resume_hint)
+                        }
+                    }
                     return
                 }
                 downloadState =

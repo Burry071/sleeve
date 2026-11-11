@@ -44,6 +44,20 @@ object MatchOps {
     fun flaggedEntries(entries: List<Pair<Task, Task.State>>): List<Pair<Task, Task.State>> =
         entries.filter { reviewable(it.second) }
 
+    /**
+     * A held book that the gate resolved as a verified whole-book part set. The
+     * hold is "nothing to download in one file", not "no source": the set covers
+     * the book and the review sheet offers the parts.
+     */
+    fun isVerifiedSplit(match: MatchResult?): Boolean =
+        match?.held == true && match.parts.isNotEmpty()
+
+    /** Every reviewable entry in the batch is a verified split set. */
+    fun splitOnly(entries: List<Pair<Task, Task.State>>): Boolean {
+        val reviewable = flaggedEntries(entries)
+        return reviewable.isNotEmpty() && reviewable.all { isVerifiedSplit(it.second.match) }
+    }
+
     fun reviewCount(entries: List<Pair<Task, Task.State>>): Int = flaggedEntries(entries).size
 
     /** The one review entry appears only after the batch has finished. */
