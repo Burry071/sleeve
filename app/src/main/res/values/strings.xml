@@ -11,6 +11,8 @@
     <string name="extract_audio">Save as audio</string>
     <string name="create_thumbnail">Save thumbnail</string>
     <string name="settings">Settings</string>
+    <string name="settings_spotify">Spotify</string>
+    <string name="settings_spotify_desc">Connect Spotify to download playlists</string>
     <string name="download_settings_desc">General, format, custom command</string>
     <string name="download">Download</string>
     <string name="url_empty">The link cannot be empty</string>
@@ -39,6 +41,8 @@
     <string name="confirm">Confirm</string>
     <string name="dismiss">Cancel</string>
     <string name="downloads_history">Downloads</string>
+    <string name="nav_active_downloads">Active downloads</string>
+    <string name="nav_library">Library</string>
     <string name="audio">Audio</string>
     <string name="link_copied">Link copied to clipboard</string>
     <string name="open_url">Open link</string>
@@ -62,6 +66,7 @@
     <string name="engine_design_desc">Engine architecture from Ghost Downloader by XiaoYouChR (GPL-3.0)</string>
     <string name="custom_command">Custom command</string>
     <string name="custom_command_desc">Run yt-dlp command with custom template</string>
+    <string name="custom_command_settings_desc">Fine-tune every download with your own options</string>
     <string name="custom_command_template">Command template</string>
     <string name="edit">Edit</string>
     <string name="start_execute">Start executing command</string>
@@ -120,6 +125,7 @@
     </string>
     <string name="concurrent_download">Multi-threaded download</string>
     <string name="concurrent_download_desc">Download more parts of M3U8/MPD videos in parallel</string>
+    <string name="concurrent_download_parts">%1$d parts</string>
     <string name="concurrent_download_num">%d thread(s) would be used to download DASH/HLS native video concurrently.</string>
     <string name="options">Options</string>
     <string name="additional_settings">Additional settings</string>
@@ -137,7 +143,7 @@
     <string name="playlist_indicator_text">Downloading playlist (%1$d/%2$d)…</string>
     <string name="audio_directory">Audio folder</string>
     <string name="download_directory">Download directory</string>
-    <string name="download_directory_desc">Select where to store videos and audio files</string>
+    <string name="download_directory_desc">Choose the folder your finished files land in</string>
     <string name="subdirectory">Save to subdirectory</string>
     <string name="subdirectory_desc">Save files in folders named as respective fields</string>
     <string name="permission_issue">Storage permission issue</string>
@@ -165,6 +171,7 @@
 
     <string name="status_enqueued">Enqueued</string>
     <string name="status_completed">Finished</string>
+    <string name="status_incomplete">Incomplete</string>
     <string name="status_downloading">Downloading</string>
     <string name="status_canceled">Canceled</string>
     <string name="status_fetching_video_info">Fetching info</string>
@@ -231,6 +238,7 @@
     <string name="aria2_desc">Use aria2c as the external downloader</string>
     <string name="ghost_engine" translatable="false">Ghost engine</string>
     <string name="ghost_engine_desc">Download with the Ghost engine (multi-thread segmented HTTP and HLS); falls back to yt-dlp while unavailable</string>
+    <string name="aria2_over_ghost">Aria2 takes precedence when both are on</string>
     <string name="cookies">Cookies</string>
     <string name="cookies_desc">Use Netscape formatted cookies for downloads</string>
     <string name="cookies_file_name" translatable="false">cookies.txt</string>
@@ -256,9 +264,9 @@
     <string name="lowest_quality">Lowest quality</string>
     <string name="download_queue">Download queue</string>
     <string name="unavailable">Unavailable</string>
-    <string name="format_settings_desc">File format, video quality, subtitles</string>
-    <string name="general_settings_desc">Yt-dlp version, notification, playlist</string>
-    <string name="network_settings_desc">Rate limit, downloader, cookies</string>
+    <string name="format_settings_desc">Pick the file type and quality you get</string>
+    <string name="general_settings_desc">Decide what happens every time you tap download</string>
+    <string name="network_settings_desc">Control when downloads may start and how fast they run</string>
     <string name="disable_preview">Disable preview</string>
     <string name="disable_preview_desc">No display of thumbnails during download</string>
     <string name="privacy">Privacy</string>
@@ -463,13 +471,30 @@
     <string name="dismiss_playlist">Dismiss playlist</string>
     <string name="dismiss_playlist_message">Stop unfinished songs and remove this playlist from Downloads? Downloaded files are kept.</string>
     <string name="match_badge">%1$d%% match · needs review</string>
+    <string name="match_badge_short">Review</string>
+    <string name="match_held_badge">Needs a pick</string>
+    <string name="match_paste_link_hint">Found a full-book upload the search missed? Paste its YouTube link.</string>
+    <string name="match_use_link">Use link</string>
+    <string name="match_split_title">Complete set — %1$d parts</string>
+    <string name="match_part_label">Part %1$d</string>
+    <string name="match_download_parts">Download all %1$d parts</string>
+    <string name="match_pending">Replacing…</string>
+    <string name="match_swap_queued">Re-downloading</string>
+    <string name="match_swap_busy">Busy, try again later</string>
+    <string name="match_swap_missing">No longer in the queue</string>
+    <string name="match_swap_fetch_failed">Couldn\'t start</string>
+    <string name="match_accept_all_hint">Accept all is off while picks differ — apply them, or pick the original again.</string>
     <string name="review_matches">Review matches (%1$d)</string>
     <string name="batch_notification_review">%1$d pick(s) need a review</string>
     <string name="match_review_title">Review matches</string>
     <string name="match_review_hint">Some songs were matched with low confidence. Pick a different version to re-download just that song.</string>
+    <string name="match_held_hint">No full-length version was proven for this book, so nothing was downloaded. Pick the right version to download it.</string>
+    <string name="match_verify_mismatch">Downloaded %1$s of %2$s</string>
     <string name="apply_swaps">Apply (%1$d)</string>
     <string name="accept_all">Accept all</string>
     <string name="match_swap_failed">Could not apply the swap</string>
+    <string name="match_swap_summary">Replaced %1$d of %2$d · %3$d failed</string>
+    <string name="match_swap_summary_all">Replaced all %1$d</string>
     <string name="task_log_title">Task log</string>
     <string name="no_logs_yet">No log lines yet</string>
     <string name="proceed">Continue</string>
@@ -481,7 +506,9 @@
     <string name="best_quality_desc">Download the best available format</string>
     <string name="task_added">Task added to queue</string>
     <string name="you_ll_find_your_downloads_here">You\'ll find your downloads here</string>
-    <string name="download_hint">Tap on the download button or share a video link to this app to start a download</string>
+    <string name="download_hint">Tap Paste link or share a video link to this app to start a download</string>
+    <string name="paste_link">Paste link</string>
+    <string name="download_waiting_wifi">Waiting for Wi-Fi</string>
     <string name="status_downloaded">Downloaded</string>
     <string name="all">All</string>
     <string name="select_multiple_link">Select from %1$d links</string>

@@ -145,26 +145,40 @@ class BatchMatchInvariantTest {
     }
 
     @Test
-    fun `a swap targets exactly one file and leaves the rest untouched`() {
+    fun `a swap targets exactly one file and stays pending until confirmed`() {
         val entries = finishedStates()
         val swapped =
             entries.keys.first { (it.type as Task.TypeInfo.MetadataTrack).title == "Track 11" }
         val before = entries.getValue(swapped).match!!
         val alternative = before.candidates[1]
 
-        // Exactly one task is queued for the re-download.
-        assertEquals(listOf(swapped), MatchOps.swapTargets(listOf(swapped to alternative)))
-
         val newMatch = before.withSelection(alternative)
         assertNotEquals(before.selectedUrl, newMatch.selectedUrl)
-        assertTrue(newMatch.acknowledged)
-        assertFalse(MatchOps.reviewable(entries.getValue(swapped).copy(match = newMatch)))
+        assertEquals(alternative.url, newMatch.selectedUrl)
+        // The swap is not trusted yet: no acknowledgement, and the old pick is parked.
+        assertTrue(newMatch.pending)
+        assertFalse(newMatch.acknowledged)
+        assertEquals(before.selectedUrl, newMatch.previousSelectedUrl)
+        assertEquals(before.selectedScore, newMatch.previousSelectedScore, 0.0)
 
-        val afterSwap = entries + (swapped to entries.getValue(swapped).copy(match = newMatch))
-        assertEquals(2, MatchOps.reviewCount(afterSwap.toList()))
+        // While pending, the review entry still counts this song.
+        assertTrue(MatchOps.reviewable(entries.getValue(swapped).copy(match = newMatch)))
+        val pending = entries + (swapped to entries.getValue(swapped).copy(match = newMatch))
+        assertEquals(3, MatchOps.reviewCount(pending.toList()))
         entries
             .filterKeys { it != swapped }
-            .forEach { (task, state) -> assertEquals(state, afterSwap.getValue(task)) }
+            .forEach { (task, state) -> assertEquals(state, pending.getValue(task)) }
+
+        // Confirming is what closes the review entry, and only for this song.
+        val confirmed = newMatch.confirmSelection()
+        assertFalse(confirmed.pending)
+        assertTrue(confirmed.acknowledged)
+        assertFalse(MatchOps.reviewable(entries.getValue(swapped).copy(match = confirmed)))
+        val afterConfirm = entries + (swapped to entries.getValue(swapped).copy(match = confirmed))
+        assertEquals(2, MatchOps.reviewCount(afterConfirm.toList()))
+        entries
+            .filterKeys { it != swapped }
+            .forEach { (task, state) -> assertEquals(state, afterConfirm.getValue(task)) }
     }
 
     @Test
@@ -175,7 +189,6 @@ class BatchMatchInvariantTest {
             entries.map { (task, state) ->
                 task to state.copy(match = state.match!!.copy(acknowledged = true))
             }
-        assertEquals(3, MatchOps.acknowledgeTargets(entries).size)
         assertEquals(0, MatchOps.reviewCount(acknowledged))
         assertFalse(MatchOps.reviewVisible(acknowledged))
     }

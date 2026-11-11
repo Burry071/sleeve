@@ -5,14 +5,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -42,6 +45,7 @@ import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
@@ -236,17 +240,70 @@ private fun SongRow(
             )
             if (MatchOps.reviewable(state)) {
                 val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
+                // A pending replacement is already downloading: say so, and keep
+                // the amber pair for "this pick may be wrong" only.
+                val pending = state.match?.pending == true
+                val held = state.match?.held == true
                 Surface(
-                    color = MatchWarnPalettes.accent1(if (isDarkTheme) 30.0 else 90.0),
-                    contentColor = MatchWarnPalettes.accent1(if (isDarkTheme) 90.0 else 30.0),
+                    color =
+                        if (pending) MaterialTheme.colorScheme.primaryContainer
+                        else MatchWarnPalettes.accent1(if (isDarkTheme) 30.0 else 90.0),
+                    contentColor =
+                        if (pending) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MatchWarnPalettes.accent1(if (isDarkTheme) 90.0 else 30.0),
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier.padding(top = 4.dp),
                 ) {
-                    Text(
-                        text = stringResource(R.string.match_badge, state.match?.percent ?: 0),
-                        style = MaterialTheme.typography.labelSmall,
+                    // Compact icon + one word: a row cannot act on a percentage.
+                    Row(
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (!pending) {
+                            Icon(
+                                imageVector = Icons.Rounded.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text(
+                            text =
+                                stringResource(
+                                    when {
+                                        held -> R.string.match_held_badge
+                                        pending -> R.string.match_pending
+                                        else -> R.string.match_badge_short
+                                    }
+                                ),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+            val warning = (state.downloadState as? Completed)?.warning.orEmpty()
+            if (warning.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(R.string.status_incomplete),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
             }
             if (progress != null) {

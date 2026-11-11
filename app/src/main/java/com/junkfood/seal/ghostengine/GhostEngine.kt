@@ -29,6 +29,25 @@ object GhostEngine {
     private const val TAG = "GhostEngine"
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Candidate payload for the audible gate. Defaults are encoded so a
+     * candidate with an unknown duration still reaches Python as `0` instead
+     * of disappearing; the gate treats 0 as unknown and holds.
+     */
+    private val gateJson = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
+    }
+
+    /** Poll interval while a transfer is live. */
+    private const val POLL_INTERVAL_MS = 500L
+
+    /** Gap between retries of a poll that could not be parsed. */
+    private const val RETRY_DELAY_MS = 500L
+
+    /** How many times one unreadable poll is retried before [watch] gives up. */
+    private const val MAX_POLL_RETRIES = 3
+
     /** Mirrors sleeve_engine.py task states. */
     enum class TaskState { WAITING, RUNNING, COMPLETED, ERROR, CANCELLED }
 
@@ -125,38 +144,90 @@ object GhostEngine {
             }
         }
 
-    /** Poll engine progress into [progressFlow] until the task settles. */
-    suspend fun watch(taskId: String) {
-        withContext(Dispatchers.IO) {
-            while (true) {
-                val snap =
-                    runCatching {
-                        call("progress", taskId) { obj ->
-                            EngineProgress(
-                                taskId = taskId,
-                                state =
-                                    runCatching {
-                                        TaskState.valueOf(
-                                            obj["state"]!!.jsonPrimitive.content.uppercase(),
-                                        )
-                                    }.getOrDefault(TaskState.ERROR),
-                                downloadedBytes =
-                                    obj["downloaded"]!!.jsonPrimitive.longOrNull ?: 0,
-                                totalBytes = obj["total"]!!.jsonPrimitive.longOrNull ?: -1,
-                                speedBps = obj["speedBps"]!!.jsonPrimitive.longOrNull ?: 0,
-                                error = obj["error"]?.jsonPrimitive?.content ?: "",
-                            )
-                        }
-                    }.getOrNull()
-                if (snap == null) return@withContext
-                progress.value = snap
-                if (snap.state != TaskState.WAITING && snap.state != TaskState.RUNNING) {
-                    return@withContext
+    /**
+     * Poll engine progress into [progressFlow] until the task settles, and
+     * return that terminal snapshot.
+     *
+     * The return value — never [progressFlow] — is the caller's verdict. When
+     * the engine cannot be read after [MAX_POLL_RETRIES] retries, an ERROR
+     * snapshot for [taskId] is returned instead of null: a caller must never
+     * have to guess which task a shared flow currently holds.
+     */
+    suspend fun watch(taskId: String): EngineProgress? =
+        withContext<EngineProgress?>(Dispatchers.IO) {
+            var lastGood: EngineProgress? = null
+            var consecutiveFailures = 0
+            var terminal: EngineProgress? = null
+            pollLoop@ while (true) {
+                val snap = poll(taskId)
+                if (snap == null) {
+                    // One unreadable poll is not a verdict: the engine can be
+                    // busy rewriting its state file. Retry a bounded number of
+                    // times, then report only what was actually observed.
+                    if (consecutiveFailures >= MAX_POLL_RETRIES) {
+                        // Retries exhausted: report a verdict for THIS task.
+                        // Returning null would push the caller back onto the
+                        // shared flow, where a newer task's snapshot decides.
+                        terminal =
+                            lastGood?.takeIf { it.isTerminal() }
+                                ?: unreadableSnapshot(taskId, lastGood)
+                        break@pollLoop
+                    }
+                    consecutiveFailures++
+                    delay(RETRY_DELAY_MS)
+                    continue@pollLoop
                 }
-                delay(500)
+                consecutiveFailures = 0
+                lastGood = snap
+                // UI-only mirror: callers use the returned snapshot, not this.
+                progress.value = snap
+                if (snap.isTerminal()) {
+                    terminal = snap
+                    break@pollLoop
+                }
+                delay(POLL_INTERVAL_MS)
             }
+            terminal
         }
-    }
+
+    /**
+     * Terminal verdict for a task whose progress stayed unreadable past the
+     * retry budget. The id is carried through so the caller can never mistake
+     * it for another transfer's snapshot; observed bytes are kept for the log.
+     */
+    internal fun unreadableSnapshot(taskId: String, lastGood: EngineProgress?): EngineProgress =
+        EngineProgress(
+            taskId = taskId,
+            state = TaskState.ERROR,
+            downloadedBytes = lastGood?.downloadedBytes ?: 0L,
+            totalBytes = lastGood?.totalBytes ?: -1L,
+            speedBps = 0L,
+            error = "engine progress unavailable",
+        )
+
+    /** One read of the engine; null when this poll could not be parsed. */
+    private fun poll(taskId: String): EngineProgress? =
+        runCatching {
+                call("progress", taskId) { obj ->
+                    EngineProgress(
+                        taskId = taskId,
+                        state =
+                            runCatching {
+                                TaskState.valueOf(
+                                    obj["state"]!!.jsonPrimitive.content.uppercase(),
+                                )
+                            }.getOrDefault(TaskState.ERROR),
+                        downloadedBytes = obj["downloaded"]!!.jsonPrimitive.longOrNull ?: 0,
+                        totalBytes = obj["total"]!!.jsonPrimitive.longOrNull ?: -1,
+                        speedBps = obj["speedBps"]!!.jsonPrimitive.longOrNull ?: 0,
+                        error = obj["error"]?.jsonPrimitive?.content ?: "",
+                    )
+                }
+            }
+            .getOrNull()
+
+    private fun EngineProgress.isTerminal(): Boolean =
+        state != TaskState.WAITING && state != TaskState.RUNNING
 
     fun cancel(taskId: String) {
         runCatching { ensureStarted(); module().callAttr("cancel", taskId) }
@@ -192,8 +263,10 @@ object GhostEngine {
         val album: String,
         val durationMs: Long,
         val authors: String = "",
+        val language: String = "",
     )
 
+    @kotlinx.serialization.Serializable
     data class RankedCandidate(
         val index: Int,
         val id: String,
@@ -201,7 +274,67 @@ object GhostEngine {
         val title: String,
         val score: Double,
         val reasons: List<String> = emptyList(),
+        /** Uploader/owner the ranker saw; empty when it reported none. */
+        val uploader: String = "",
+        /** Display channel of the candidate; empty when unknown. */
+        val channel: String = "",
+        /** Whole seconds; `0` means the ranker reported no duration. */
+        val duration: Long = 0L,
     )
+
+    /**
+     * One upload of a split book: a part of the set that together is the book.
+     * `durationSeconds` is whole seconds, the unit the gate compares in; the
+     * download stage converts it to ms exactly once.
+     */
+    data class AudiblePart(
+        /** Part number as the gate parsed it (1-based, except zero-based sets). */
+        val index: Int = 0,
+        val id: String = "",
+        val url: String = "",
+        val title: String = "",
+        val durationSeconds: Long = 0L,
+        val channel: String = "",
+    )
+
+    /**
+     * Verdict of the deterministic audible pre-download gate
+     * (`sleeve_audible_gate.gate_audible`). It is not a score: `pass` is the
+     * only value that may download one file, and `split` the only other value
+     * that may spend bytes — on the complete part set it names.
+     */
+    data class AudibleGateResult(
+        val verdict: String = VERDICT_HOLD,
+        val reason: String = "",
+        /** The passing candidate; empty unless [passed]. */
+        val candidateId: String = "",
+        /** Passing candidate's duration divided by expected runtime; 0 when held. */
+        val ratio: Double = 0.0,
+        /** Audible runtime in ms, carried for the audit line and the UI. */
+        val expectedMs: Long = 0L,
+        /** Closest candidate to the expected runtime, for display on a hold. */
+        val bestId: String = "",
+        val bestRatio: Double = 0.0,
+        /** The split plan, in part order; empty for every other verdict. */
+        val parts: List<AudiblePart> = emptyList(),
+        /** Number of parts the gate reported; 0 when the verdict is not a split. */
+        val partCount: Int = 0,
+    ) {
+        /** Only a proven full-length single upload may start a download. */
+        val passed: Boolean
+            get() = verdict == VERDICT_PASS
+
+        /** No upload is the book, but a complete part set is: download all parts. */
+        val splittable: Boolean
+            get() = verdict == VERDICT_SPLIT
+
+        companion object {
+            const val VERDICT_PASS = "pass"
+            const val VERDICT_SPLIT = "split"
+            const val VERDICT_HOLD = "hold"
+            const val VERDICT_NO_SOURCE = "no_source"
+        }
+    }
 
     data class GalleryItem(
         val url: String,
@@ -369,6 +502,11 @@ object GhostEngine {
                                 c["reasons"]?.jsonArray?.mapNotNull {
                                     it.jsonPrimitive.contentOrNull
                                 } ?: emptyList(),
+                            // Absent on rankers older than the metadata
+                            // contract; the defaults keep them decodable.
+                            uploader = c["uploader"]?.jsonPrimitive?.contentOrNull ?: "",
+                            channel = c["channel"]?.jsonPrimitive?.contentOrNull ?: "",
+                            duration = c["duration"]?.jsonPrimitive?.longOrNull ?: 0L,
                         )
                     }.getOrNull()
                 }
@@ -376,6 +514,63 @@ object GhostEngine {
                 error(obj["error"]?.jsonPrimitive?.content ?: "no candidate passed")
             }
             ranked
+        }
+
+    /**
+     * Deterministic audible identity gate: title F1 plus a single full-length
+     * duration test, before any media request. Kept separate from
+     * [rankCandidatesWithAlternatives] so a fuzzy score never decides
+     * identity. Pure Python; a JSON-string bridge like the rest.
+     */
+    fun gateAudibleCandidates(
+        track: SpotifyTrack,
+        candidates: List<RankedCandidate>,
+    ): Result<AudibleGateResult> =
+        runCatching {
+            ensureStarted()
+            val reply =
+                Python.getInstance()
+                    .getModule("sleeve_audible_gate")
+                    .callAttr(
+                        "gate_audible",
+                        gateJson.encodeToString(track),
+                        gateJson.encodeToString(candidates),
+                    )
+                    .toString()
+            val obj = json.parseToJsonElement(reply).jsonObject
+            if (obj["ok"]?.jsonPrimitive?.content != "true") {
+                error(obj["error"]?.jsonPrimitive?.contentOrNull ?: "audible gate failed")
+            }
+            // Only a split carries `parts`; pass/hold/no_source keep the
+            // phase-1 shape, so an absent array simply leaves the plan empty.
+            val parts =
+                (obj["parts"] as? JsonArray).orEmpty().mapNotNull { el ->
+                    runCatching {
+                        val part = el.jsonObject
+                        AudiblePart(
+                            index = part["part_index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                            id = part["id"]?.jsonPrimitive?.contentOrNull ?: "",
+                            url = part["url"]?.jsonPrimitive?.contentOrNull ?: "",
+                            title = part["title"]?.jsonPrimitive?.contentOrNull ?: "",
+                            durationSeconds = part["duration"]?.jsonPrimitive?.longOrNull ?: 0L,
+                            channel = part["channel"]?.jsonPrimitive?.contentOrNull ?: "",
+                        )
+                    }.getOrNull()
+                }
+            AudibleGateResult(
+                verdict =
+                    obj["verdict"]?.jsonPrimitive?.contentOrNull
+                        ?: AudibleGateResult.VERDICT_HOLD,
+                reason = obj["reason"]?.jsonPrimitive?.contentOrNull ?: "",
+                candidateId = obj["candidate_id"]?.jsonPrimitive?.contentOrNull ?: "",
+                ratio = obj["ratio"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+                expectedMs = track.durationMs,
+                bestId = obj["best_id"]?.jsonPrimitive?.contentOrNull ?: "",
+                bestRatio = obj["best_ratio"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+                parts = parts,
+                partCount =
+                    obj["part_count"]?.jsonPrimitive?.content?.toIntOrNull() ?: parts.size,
+            )
         }
 
     /** Audible catalog metadata (public API, Libation-derived — no account). */
@@ -401,6 +596,7 @@ object GhostEngine {
                             album = t["album"]?.jsonPrimitive?.content ?: "",
                             durationMs = t["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
                             authors = t["authors"]?.jsonPrimitive?.content ?: "",
+                            language = t["language"]?.jsonPrimitive?.content ?: "",
                         )
                     }.getOrNull()
                 }

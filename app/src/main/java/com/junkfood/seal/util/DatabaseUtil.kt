@@ -71,6 +71,13 @@ object DatabaseUtil {
 
     suspend fun deleteInfoById(id: Int) = dao.deleteInfoById(id)
 
+    /**
+     * Drops the history row of one file path. Used when a swapped pick replaces
+     * a finished download: the row and the file go together, never the file
+     * alone.
+     */
+    suspend fun deleteInfoByPath(path: String) = dao.deleteInfoByPath(path)
+
     suspend fun insertTemplate(commandTemplate: CommandTemplate) =
         dao.insertTemplate(commandTemplate)
 

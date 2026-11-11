@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -87,6 +88,7 @@ import com.junkfood.seal.ui.common.LocalFixedColorRoles
 import com.junkfood.seal.ui.common.motion.materialSharedAxisY
 import com.junkfood.seal.ui.component.GreenTonalPalettes
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.toDurationText
 import com.junkfood.seal.util.toFileSizeText
 import kotlinx.coroutines.Job
@@ -477,11 +479,16 @@ private fun statePillColors(downloadState: Task.DownloadState): Pair<Color, Colo
     return when (downloadState) {
         is Error ->
             MaterialTheme.colorScheme.run { errorContainer to onErrorContainer }
-        is Completed -> {
-            val container = GreenTonalPalettes.accent1(if (isDarkTheme) 30.0 else 90.0)
-            val content = GreenTonalPalettes.accent1(if (isDarkTheme) 90.0 else 30.0)
-            container to content
-        }
+        is Completed ->
+            // A file that landed short is not a success: the error pair is the
+            // same caution the song row and the review sheet use.
+            if (downloadState.warning.isNotBlank()) {
+                MaterialTheme.colorScheme.run { errorContainer to onErrorContainer }
+            } else {
+                val container = GreenTonalPalettes.accent1(if (isDarkTheme) 30.0 else 90.0)
+                val content = GreenTonalPalettes.accent1(if (isDarkTheme) 90.0 else 30.0)
+                container to content
+            }
         is Running, is FetchingInfo ->
             MaterialTheme.colorScheme.run { primaryContainer to onPrimaryContainer }
         else ->
@@ -522,7 +529,9 @@ fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.Downlo
                     }
                     is Completed -> {
                         Icon(
-                            imageVector = Icons.Filled.CheckCircle,
+                            imageVector =
+                                if (state.warning.isNotBlank()) Icons.Rounded.Warning
+                                else Icons.Filled.CheckCircle,
                             contentDescription = null,
                             tint = content,
                             modifier = Modifier.size(12.dp),
@@ -550,10 +559,16 @@ fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.Downlo
 private fun statePillText(downloadState: Task.DownloadState): String =
     when (downloadState) {
         is Canceled -> stringResource(R.string.status_canceled)
-        is Completed -> stringResource(R.string.status_downloaded)
+        is Completed ->
+            if (downloadState.warning.isNotBlank()) stringResource(R.string.status_incomplete)
+            else stringResource(R.string.status_downloaded)
         is Error -> stringResource(R.string.status_error)
         is FetchingInfo -> stringResource(R.string.status_fetching_video_info)
-        Idle, ReadyWithInfo -> stringResource(R.string.status_enqueued)
+        Idle -> stringResource(R.string.status_enqueued)
+        // A queued replacement waits on the metered gate, not on the pipeline.
+        ReadyWithInfo ->
+            if (NetworkPolicy.canStartDownloads()) stringResource(R.string.status_enqueued)
+            else stringResource(R.string.download_waiting_wifi)
         is Running -> {
             val progress = downloadState.progress
             if (progress >= 0) "%.1f%%".format(progress * 100f)

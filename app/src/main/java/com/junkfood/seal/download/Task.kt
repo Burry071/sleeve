@@ -105,6 +105,15 @@ data class Task(
             val album: String = "",
             val durationMs: Long = 0L,
             val authors: String = "",
+            val language: String = "",
+            /**
+             * The URL is one verified upload, not a catalogue entry to search
+             * for. A split part carries its own video URL, so resolution goes
+             * straight to extraction instead of re-running the book search
+             * (which would gate the part as if it were the whole book).
+             * Appended last so every positional caller still compiles.
+             */
+            val directUrl: Boolean = false,
         ) : TypeInfo
 
         @Serializable data object URL : TypeInfo
@@ -161,9 +170,20 @@ data class Task(
         data class Error(
             @Transient val throwable: Throwable = Throwable(),
             override val action: RestartableAction,
+            /** Friendly text for the card; appended last so positional callers still compile. */
+            val message: String = "",
         ) : DownloadState, Restartable
 
-        @Serializable data class Completed(val filePath: String?) : DownloadState
+        @Serializable
+        data class Completed(
+            val filePath: String?,
+            /**
+             * Post-download duration mismatch for an Audible book; empty when
+             * the file passed or was never checked. Appended last with a
+             * default so states cached by beta.4 still decode.
+             */
+            val warning: String = "",
+        ) : DownloadState
 
         override fun compareTo(other: DownloadState): Int {
             return ordinal - other.ordinal
