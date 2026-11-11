@@ -48,6 +48,7 @@ def _product_dto(product):
         "album": "Audible",
         "durationMs": int(minutes) * 60 * 1000,
         "authors": authors,
+        "language": product.get("language") or "",
     }
 
 
