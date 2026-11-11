@@ -23,7 +23,11 @@ _UA = (
     "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
 )
-_ASIN_RE = re.compile(r"\b([AB][0-9A-Z]{9})\b")
+_ASIN_RE = re.compile(r"\b([0-9A-Z]{10})\b")
+# Audible product URLs are /pd/<ASIN> or /pd/<slug>/<ASIN>. Read the path
+# segment first: ASINs are not always letter-prefixed (1705047572 is a real
+# Fellowship of the Ring ASIN), and a bare token scan could hit a slug word.
+_PATH_ASIN_RE = re.compile(r"/pd/(?:[^/?#]+/)?([0-9A-Z]{10})(?=[/?#]|$)")
 _TIMEOUT = 15
 
 
@@ -56,7 +60,7 @@ def resolve(url, keywords=""):
     """Resolve an Audible product URL/ASIN, or a keyword search."""
     try:
         asin = None
-        m = _ASIN_RE.search(url or "")
+        m = _PATH_ASIN_RE.search(url or "") or _ASIN_RE.search(url or "")
         if m:
             asin = m.group(1)
         if asin:
