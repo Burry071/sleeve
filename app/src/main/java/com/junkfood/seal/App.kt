@@ -73,8 +73,6 @@ class App : Application() {
         super.onCreate()
         MMKV.initialize(this)
         com.junkfood.seal.ghostengine.GhostEngine.init(this)
-        // Registers the one default-network callback; never before this point.
-        NetworkPolicy.init(this)
 
         startKoin {
             androidLogger()
@@ -98,6 +96,11 @@ class App : Application() {
                 else getPackageInfo(packageName, 0)
             }
         applicationScope = CoroutineScope(SupervisorJob())
+        // Registers the default-network callback only now: it can fire as soon
+        // as a network is up and reads PreferenceUtil, whose class initializer
+        // reaches DatabaseUtil -> App.context and applicationScope. Registering
+        // it earlier poisons PreferenceUtil for the process and crashes launch.
+        NetworkPolicy.init(this)
 
         clipboard = getSystemService()!!
         connectivityManager = getSystemService()!!
