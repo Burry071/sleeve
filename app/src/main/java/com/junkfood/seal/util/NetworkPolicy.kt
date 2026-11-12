@@ -99,10 +99,18 @@ object NetworkPolicy {
     /** Side-effect free, never throws. */
     fun canStartDownloads(): Boolean =
         runCatching {
+                val cellularAllowed = with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() }
+                val metered = isMetered()
+                val remaining = permitRemainingMs()
+                // The one line that answers "why did this burst download?":
+                // a permit that expired mid-batch is the usual surprise.
+                if (metered && !cellularAllowed && remaining > 0) {
+                    Log.i(TAG, "metered permit honored, ${remaining / 1000}s left")
+                }
                 permits(
-                    cellularAllowed = with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() },
-                    metered = isMetered(),
-                    permitArmed = isPermitArmed(),
+                    cellularAllowed = cellularAllowed,
+                    metered = metered,
+                    permitArmed = remaining > 0,
                 )
             }
             .getOrDefault(true)
@@ -130,14 +138,15 @@ object NetworkPolicy {
         permitArmed: Boolean,
     ): Boolean = cellularAllowed || !metered || permitArmed
 
-    private fun isPermitArmed(): Boolean {
+    /** Milliseconds left on the "Allow once" permit; `0` when none is armed. */
+    private fun permitRemainingMs(): Long {
         val armedAt = permitArmedAt
-        if (armedAt == 0L) return false
+        if (armedAt == 0L) return 0L
         val elapsed = SystemClock.elapsedRealtime() - armedAt
-        if (elapsed in 0..PERMIT_WINDOW_MS) return true
+        if (elapsed in 0..PERMIT_WINDOW_MS) return PERMIT_WINDOW_MS - elapsed
         // Expired: drop the stale stamp so a clock jump cannot resurrect it.
         permitArmedAt = 0L
-        return false
+        return 0L
     }
 
     private fun refresh(manager: ConnectivityManager) {

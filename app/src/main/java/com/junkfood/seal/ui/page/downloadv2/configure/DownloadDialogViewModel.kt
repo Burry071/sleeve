@@ -182,7 +182,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                 is Action.FetchGallery -> fetchGallery(this)
                 is Action.DownloadMetadataTracks -> downloadMetadataTracks(this)
                 Action.Cancel -> cancel()
-                Action.Reset -> resetSelectionState()
+                Action.Reset -> resetFlow()
             }
         }
     }
@@ -521,6 +521,18 @@ private val VIDEO_FIRST_HOSTS: Regex =
         state.job.cancel()
     }
 
+    /**
+     * Drop the whole configure flow. A Reset can land while a resolve is still
+     * Loading — that Loading carries a live job and possibly a yt-dlp process,
+     * and leaving it parked made the next open show a spinner whose job was
+     * already gone.
+     */
+    private fun resetFlow() {
+        if (sheetState is SheetState.Loading) cancel()
+        mSheetStateFlow.update { SheetState.InputUrl }
+        resetSelectionState()
+    }
+
     private fun resetSelectionState() {
         mSelectionStateFlow.update { SelectionState.Idle }
     }
@@ -528,9 +540,25 @@ private val VIDEO_FIRST_HOSTS: Regex =
 
 /**
  * The single predicate both enqueue hosts gate on: only these actions hand a
- * task to the download pipeline, so only these need the metered check.
+ * task to the download pipeline, so only these need the metered check. The
+ * `when` is exhaustive on purpose: a new [DownloadDialogViewModel.Action] must
+ * state whether it starts a download or it does not compile, so no lane can
+ * silently skip the gate.
  */
 internal fun DownloadDialogViewModel.Action.startsDownload(): Boolean =
-    this is DownloadDialogViewModel.Action.DownloadWithPreset ||
-        this is DownloadDialogViewModel.Action.RunCommand ||
-        this is DownloadDialogViewModel.Action.DownloadMetadataTracks
+    when (this) {
+        is DownloadDialogViewModel.Action.DownloadWithPreset,
+        is DownloadDialogViewModel.Action.RunCommand,
+        is DownloadDialogViewModel.Action.DownloadMetadataTracks -> true
+
+        DownloadDialogViewModel.Action.HideSheet,
+        is DownloadDialogViewModel.Action.ShowSheet,
+        is DownloadDialogViewModel.Action.FetchSpotify,
+        is DownloadDialogViewModel.Action.FetchAudible,
+        is DownloadDialogViewModel.Action.FetchGallery,
+        is DownloadDialogViewModel.Action.ProceedWithURLs,
+        DownloadDialogViewModel.Action.Reset,
+        is DownloadDialogViewModel.Action.FetchPlaylist,
+        is DownloadDialogViewModel.Action.FetchFormats,
+        DownloadDialogViewModel.Action.Cancel -> false
+    }
