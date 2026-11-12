@@ -35,6 +35,8 @@ fun MeteredNetworkDialog(
         //                modifier = Modifier.padding(horizontal = 24.dp)
         //            )
         //        },
+        // The gate fires on metered Wi-Fi as well as cellular, so the copy says
+        // "metered network"; the resource key keeps its old name for translations.
         title = { Text(text = stringResource(id = R.string.download_with_cellular_request)) },
         buttons = {
             SealDialogButtonVariant(
