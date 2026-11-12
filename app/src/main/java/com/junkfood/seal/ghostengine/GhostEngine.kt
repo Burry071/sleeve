@@ -209,14 +209,10 @@ object GhostEngine {
     private fun poll(taskId: String): EngineProgress? =
         runCatching {
                 call("progress", taskId) { obj ->
+                    val rawState = obj["state"]!!.jsonPrimitive.content
                     EngineProgress(
                         taskId = taskId,
-                        state =
-                            runCatching {
-                                TaskState.valueOf(
-                                    obj["state"]!!.jsonPrimitive.content.uppercase(),
-                                )
-                            }.getOrDefault(TaskState.ERROR),
+                        state = parseState(rawState, taskId),
                         downloadedBytes = obj["downloaded"]!!.jsonPrimitive.longOrNull ?: 0,
                         totalBytes = obj["total"]!!.jsonPrimitive.longOrNull ?: -1,
                         speedBps = obj["speedBps"]!!.jsonPrimitive.longOrNull ?: 0,
@@ -225,6 +221,18 @@ object GhostEngine {
                 }
             }
             .getOrNull()
+
+    /**
+     * An unrecognised state is a broken contract between the engine and this
+     * parser, but ERROR is the only safe verdict. Name the value that arrived
+     * so the log says what the engine sent instead of only what we assumed.
+     */
+    private fun parseState(raw: String, taskId: String): TaskState =
+        runCatching { TaskState.valueOf(raw.uppercase()) }
+            .getOrElse {
+                Log.w(TAG, "unknown engine state '$raw' for task $taskId; treating as ERROR")
+                TaskState.ERROR
+            }
 
     private fun EngineProgress.isTerminal(): Boolean =
         state != TaskState.WAITING && state != TaskState.RUNNING
