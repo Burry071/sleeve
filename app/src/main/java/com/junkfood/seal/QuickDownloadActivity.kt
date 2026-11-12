@@ -22,19 +22,19 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.junkfood.seal.ui.common.SettingsProvider
-import com.junkfood.seal.ui.page.download.MeteredNetworkDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.Config
+import com.junkfood.seal.ui.page.downloadv2.configure.DialogScreen
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
-import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SelectionState
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
-import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
-import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMetered
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMeteredDialog
+import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
+import com.junkfood.seal.ui.page.downloadv2.configure.dialogScreen
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.ACTION_QUICK_CLIPBOARD
-import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.EXTRA_QUICK_NONCE
 import com.junkfood.seal.util.INTERNAL_PREFS
@@ -42,7 +42,6 @@ import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
-import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.QUICK_NONCE_KEY
 import com.junkfood.seal.util.isTrustedQuickIntent
 import com.junkfood.seal.util.matchUrlFromSharedText
@@ -74,9 +73,10 @@ class QuickDownloadActivity : ComponentActivity() {
 
     /**
      * A download the metered gate parked. The dialog hosting it lives in the
-     * sheet composition, so this state is what survives until the user answers.
+     * sheet composition, so this holder is what survives until the user
+     * answers. Shared with the downloads page so both gates cannot drift.
      */
-    private val pendingMeteredAction = mutableStateOf<(() -> Unit)?>(null)
+    private val metered = PendingMetered()
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -270,14 +270,12 @@ class QuickDownloadActivity : ComponentActivity() {
         // Both enqueue entry points in this sheet pass the same gate as the
         // main page; "Don't allow" simply drops the action.
         fun postSheetAction(action: Action) {
-            if (action.startsDownload() && !NetworkPolicy.canStartDownloads()) {
-                pendingMeteredAction.value = { postSheetAction(action) }
-                return
+            metered.post(action) {
+                viewModel.postAction(action)
+                // The metadata page replaced the sheet, so the hidden-state
+                // finish already fired. Queue first, then close this overlay.
+                if (action is Action.DownloadMetadataTracks) finish()
             }
-            viewModel.postAction(action)
-            // The metadata page replaced the sheet, so the hidden-state finish
-            // already fired. Queue first, then close this overlay ourselves.
-            if (action is Action.DownloadMetadataTracks) finish()
         }
 
         onNewIntentHandler = { newIntent ->
@@ -321,31 +319,20 @@ class QuickDownloadActivity : ComponentActivity() {
                                     // sheet in the same frame, and the stale
                                     // snapshot used to finish the activity before
                                     // FormatPage could render.
-                                    if (
-                                        viewModel.selectionStateFlow.value ==
-                                            SelectionState.Idle
-                                    ) {
+                                    val live =
+                                        dialogScreen(
+                                            viewModel.sheetValueFlow.value,
+                                            viewModel.sheetStateFlow.value,
+                                            viewModel.selectionStateFlow.value,
+                                        )
+                                    if (live == DialogScreen.Hidden) {
                                         this@QuickDownloadActivity.finish()
                                     }
                                 }
                         }
                     }
 
-                    pendingMeteredAction.value?.let { action ->
-                        MeteredNetworkDialog(
-                            onDismissRequest = { pendingMeteredAction.value = null },
-                            onAllowOnceConfirm = {
-                                NetworkPolicy.allowMeteredOnce()
-                                pendingMeteredAction.value = null
-                                action()
-                            },
-                            onAllowAlwaysConfirm = {
-                                CELLULAR_DOWNLOAD.updateBoolean(true)
-                                pendingMeteredAction.value = null
-                                action()
-                            },
-                        )
-                    }
+                    PendingMeteredDialog(pending = metered)
 
                     if (showDialog) {
                         DownloadDialog(
@@ -358,30 +345,30 @@ class QuickDownloadActivity : ComponentActivity() {
                         )
                     }
 
-                    when (selectionState) {
-                        is SelectionState.FormatSelection ->
+                    when (val screen = dialogScreen(sheetValue, state, selectionState)) {
+                        DialogScreen.Hidden, is DialogScreen.Sheet -> {}
+
+                        is DialogScreen.Format ->
                             FormatPage(
-                                state = selectionState,
+                                state = screen.state,
                                 onDismissRequest = {
                                     viewModel.postAction(Action.Reset)
                                     this.finish()
                                 },
                             )
 
-                        SelectionState.Idle -> {}
-                        is SelectionState.PlaylistSelection -> {
+                        is DialogScreen.Playlist ->
                             PlaylistSelectionPage(
-                                state = selectionState,
+                                state = screen.state,
                                 onDismissRequest = {
                                     viewModel.postAction(Action.Reset)
                                     this.finish()
                                 },
                             )
-                        }
 
-                        is SelectionState.MetadataTracks ->
+                        is DialogScreen.Metadata ->
                             MetadataTracksPage(
-                                state = selectionState,
+                                state = screen.state,
                                 onDismissRequest = {
                                     viewModel.postAction(Action.Reset)
                                     this.finish()
