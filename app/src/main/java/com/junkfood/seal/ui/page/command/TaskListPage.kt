@@ -78,6 +78,8 @@ import com.junkfood.seal.ui.component.PasteFromClipBoardButton
 import com.junkfood.seal.ui.component.SealDialog
 import com.junkfood.seal.ui.component.SealModalBottomSheetM2
 import com.junkfood.seal.ui.component.TaskStatus
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMetered
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMeteredDialog
 import com.junkfood.seal.ui.page.settings.command.CommandTemplateDialog
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.updateInt
@@ -100,6 +102,9 @@ fun TaskListPage(
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     var showBottomSheet by remember { mutableStateOf(false) }
+    // Start used to enqueue straight past the metered gate, so on a metered
+    // network the card appeared parked with no word of explanation.
+    val metered = remember { PendingMetered() }
     val sheetState =
         androidx.compose.material.rememberModalBottomSheetState(
             skipHalfExpanded = true,
@@ -244,10 +249,12 @@ fun TaskListPage(
                             FilledButtonWithIcon(
                                 onClick = {
                                     view.slightHapticFeedback()
-                                    downloader.enqueue(
-                                        TaskFactory.createCustomCommand(url, template)
-                                    )
-                                    onDismissRequest()
+                                    metered.postDownload {
+                                        downloader.enqueue(
+                                            TaskFactory.createCustomCommand(url, template)
+                                        )
+                                        onDismissRequest()
+                                    }
                                 },
                                 icon = Icons.Outlined.DownloadDone,
                                 text = stringResource(R.string.start),
@@ -272,6 +279,7 @@ fun TaskListPage(
                 }
             },
         )
+    PendingMeteredDialog(pending = metered)
 }
 
 private fun Task.DownloadState.toStatus(): TaskStatus =
