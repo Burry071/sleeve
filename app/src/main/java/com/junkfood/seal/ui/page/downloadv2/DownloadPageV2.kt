@@ -482,7 +482,22 @@ fun DownloadPageImplV2(
     var activeFilter by remember { mutableStateOf(Filter.All) }
     var dismissedBatches by remember { mutableStateOf(PreferenceUtil.getDismissedBatches()) }
     var dismissTarget by remember { mutableStateOf<BatchInfo?>(null) }
-    val expandedBatches = remember { mutableStateMapOf<String, Boolean>() }
+    // Only collapsed ids are stored: a new batch opens expanded, and removing
+    // an id is the same operation as expanding it (the old tri-state map could
+    // not tell "never touched" from "expanded again").
+    var collapsedBatches by remember { mutableStateOf(emptySet<String>()) }
+    val liveBatchIds by
+        remember {
+            derivedStateOf {
+                taskDownloadStateMap.keys.mapNotNullTo(mutableSetOf()) { it.batch?.id }
+            }
+        }
+    // A tombstone only hides a batch while its songs are still in the queue;
+    // once they are gone it is dead weight, so every membership change prunes.
+    LaunchedEffect(liveBatchIds) {
+        PreferenceUtil.pruneDismissedBatches(liveBatchIds)
+        dismissedBatches = PreferenceUtil.getDismissedBatches()
+    }
     val playlists by
         remember(activeFilter, dismissedBatches) {
             derivedStateOf {
@@ -639,10 +654,12 @@ fun DownloadPageImplV2(
                                 modifier = Modifier.animateItem().padding(bottom = 16.dp),
                                 batch = group.batch,
                                 entries = group.entries,
-                                expanded = expandedBatches[group.batch.id] != false,
+                                expanded = group.batch.id !in collapsedBatches,
                                 onToggleExpanded = {
-                                    expandedBatches[group.batch.id] =
-                                        expandedBatches[group.batch.id] == false
+                                    collapsedBatches =
+                                        if (group.batch.id in collapsedBatches)
+                                            collapsedBatches - group.batch.id
+                                        else collapsedBatches + group.batch.id
                                 },
                                 onStop = { onBatchStop(group.batch.id) },
                                 onResume = { onBatchResume(group.batch.id) },
@@ -890,7 +907,7 @@ fun DownloadPageImplV2(
                 TextButton(
                     onClick = {
                         onBatchDismiss(target.id)
-                        PreferenceUtil.addDismissedBatch(target.id)
+                        PreferenceUtil.dismissBatch(target.id, liveBatchIds)
                         dismissedBatches = dismissedBatches + target.id
                         dismissTarget = null
                     }
