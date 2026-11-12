@@ -1346,6 +1346,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             progressPercentage,
                             _,
                             text ->
+                            TaskOutputLog.append(id, text)
                             val preState = downloadState
                             if (preState is Running) {
                                 applyTransition(
@@ -1362,6 +1363,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             if (throwable is YoutubeDL.CanceledException) {
                                 return@onFailure
                             }
+                            // A failed command usually dies before printing the
+                            // reason to stdout, so the log keeps the exception
+                            // itself. The card still shows the friendly text.
+                            TaskOutputLog.append(id, throwable.stackTraceToString())
                             val friendly = DownloadErrorMessages.asFriendly(throwable)
                             applyTransition(
                                 task,
@@ -1373,7 +1378,20 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 isThisAttempt,
                             )
                         }
-                        .onSuccess { applyTransition(task, Completed(null), isThisAttempt) }
+                        .onSuccess { response ->
+                            // yt-dlp printed nothing on this run (`--quiet`,
+                            // a cached file): keep the command's own reply so
+                            // the log is never silently empty.
+                            if (TaskOutputLog.isEmpty(id)) {
+                                TaskOutputLog.append(id, response.out + "\n" + response.err)
+                            }
+                            // The command lane talks to yt-dlp directly, so
+                            // nothing else tells the gallery about the file.
+                            preferences.commandDirectory
+                                .takeIf { it.isNotEmpty() }
+                                ?.let { FileUtil.scanDownloadDirectoryToMediaLibrary(it) }
+                            applyTransition(task, Completed(null), isThisAttempt)
+                        }
                 }
         // State before start: the worker only acts while this attempt is the
         // Running state, so a cancel that landed first leaves it untouched.

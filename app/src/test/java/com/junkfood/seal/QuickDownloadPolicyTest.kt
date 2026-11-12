@@ -150,17 +150,17 @@ class QuickDownloadPolicyTest {
     }
 
     /**
-     * Source tripwire for `--config-locations`: exactly the two template builders, and nothing
-     * else. Quick and metadata lanes never reach them because they never build a CustomCommand.
+     * Source tripwire for `--config-locations`: exactly one builder, and nothing else. Quick and
+     * metadata lanes never reach it because they never build a CustomCommand.
      */
     @Test
-    fun `template config flags live only in the two command builders`() {
+    fun `template config flags live only in the command builder`() {
         val text = downloadUtilSource()
         val needle = "\"--config-locations\""
 
         assertEquals(
-            "--config-locations must have exactly two producers",
-            2,
+            "--config-locations must have exactly one producer",
+            1,
             occurrences(text, needle),
         )
 
@@ -169,20 +169,33 @@ class QuickDownloadPolicyTest {
                 .findAll(text)
                 .map { enclosingFunction(text, it.range.first) }
                 .toList()
-        assertEquals(listOf("executeCustomCommandTask", "executeCommandInBackground"), builders)
+        assertEquals(listOf("executeCustomCommandTask"), builders)
     }
 
-    /** The only place a CustomCommand task can be born is the confirm sheet's runCommand. */
+    /**
+     * The only place a CustomCommand task can be born is the factory. Both user entry points (the
+     * configure sheet and the task list's new-task sheet) call it; quick and metadata lanes never
+     * name the type at all.
+     */
     @Test
     fun `custom command tasks have exactly one producer`() {
-        val text =
+        val factory =
+            sourceFile("src/main/java/com/junkfood/seal/download/TaskFactory.kt")
+        val needle = "TypeInfo.CustomCommand("
+
+        assertEquals(1, occurrences(factory, needle))
+        assertEquals("createCustomCommand", enclosingFunction(factory, factory.indexOf(needle)))
+
+        val configureSheet =
             sourceFile(
                 "src/main/java/com/junkfood/seal/ui/page/downloadv2/configure/DownloadDialogViewModel.kt"
             )
-        val needle = "TypeInfo.CustomCommand("
+        assertEquals(0, occurrences(configureSheet, needle))
+        assertTrue(configureSheet.contains("TaskFactory.createCustomCommand("))
 
-        assertEquals(1, occurrences(text, needle))
-        assertEquals("runCommand", enclosingFunction(text, text.indexOf(needle)))
+        val taskSheet = sourceFile("src/main/java/com/junkfood/seal/ui/page/command/TaskListPage.kt")
+        assertEquals(0, occurrences(taskSheet, needle))
+        assertTrue(taskSheet.contains("TaskFactory.createCustomCommand("))
     }
 
     @Test

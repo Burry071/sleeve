@@ -1,6 +1,7 @@
 package com.junkfood.seal.download
 
 import androidx.annotation.CheckResult
+import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.Task.DownloadState.Idle
 import com.junkfood.seal.download.Task.DownloadState.ReadyWithInfo
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
@@ -151,6 +152,23 @@ object TaskFactory {
             TaskWithState(task, state)
         }
     }
+
+    /**
+     * The one place a custom-command task is born. Both user entry points (the
+     * configure sheet and the task list's new-task sheet) run a template the
+     * user picked; quick and metadata lanes never reach this.
+     */
+    @CheckResult
+    fun createCustomCommand(
+        url: String,
+        template: CommandTemplate,
+        preferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
+    ): Task =
+        Task(
+            url = url,
+            type = Task.TypeInfo.CustomCommand(template = template),
+            preferences = preferences,
+        )
 
     /** Tag yt-dlp playlist entries with the batch they were launched as. */
     @CheckResult
