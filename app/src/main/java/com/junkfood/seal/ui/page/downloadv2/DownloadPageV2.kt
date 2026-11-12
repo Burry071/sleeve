@@ -79,6 +79,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
@@ -163,6 +164,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -374,15 +376,17 @@ fun DownloadPageV2(
 
     val selectionState = dialogViewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
-    var showDialog by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    // Composition has to outlive the hide animation, so it cannot simply follow
+    // the flow value. A latch used to do that and could stay composed forever if
+    // a hide completion was missed; this is an observation of what the sheet
+    // actually is: shown while the flow is expanded, then until it is gone.
+    val showDialog =
+        sheetValue == DownloadDialogViewModel.SheetValue.Expanded || sheetState.isVisible
+
     LaunchedEffect(sheetValue) {
-        if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
-            showDialog = true
-        } else {
-            launch { sheetState.hide() }.invokeOnCompletion { showDialog = false }
-        }
+        if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) sheetState.hide()
     }
 
     if (showNotificationDialog) {
@@ -523,10 +527,13 @@ fun DownloadPageImplV2(
         }
     }
 
-    LaunchedEffect(selectedTask, taskDownloadStateMap.size) {
-        if (!taskDownloadStateMap.contains(selectedTask)) {
-            selectedTask = null
-        }
+    // The sheet must close when its task leaves the queue. Watching the map's
+    // size missed a remove-then-add that kept the count, which left the sheet
+    // open on a task that no longer existed.
+    LaunchedEffect(selectedTask) {
+        val task = selectedTask ?: return@LaunchedEffect
+        snapshotFlow { taskDownloadStateMap.containsKey(task) }.first { present -> !present }
+        selectedTask = null
     }
 
     Scaffold(
