@@ -658,7 +658,7 @@ fun DownloadPageImplV2(
                             items(
                                 items =
                                     filteredMap.toList().sortedBy { (_, state) ->
-                                        state.downloadState
+                                        state.downloadState.displayRank
                                     },
                                 key = { (task, _) -> task.uiKey },
                             ) { (task, state) ->
@@ -724,7 +724,7 @@ fun DownloadPageImplV2(
                             items(
                                 items =
                                     filteredMap.toList().sortedBy { (_, state) ->
-                                        state.downloadState
+                                        state.downloadState.displayRank
                                     },
                                 key = { (task, _) -> task.uiKey },
                                 span = { GridItemSpan(maxLineSpan) },
