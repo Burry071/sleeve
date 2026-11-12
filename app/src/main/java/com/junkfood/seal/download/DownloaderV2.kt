@@ -205,6 +205,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     private val taskStateMap = mutableStateMapOf<Task, Task.State>()
     private val snapshotFlow = snapshotFlow { taskStateMap.toMap() }
 
+    /**
+     * Serialises every read-modify-write of a [Task.State]. Workers run on
+     * several dispatchers, so the transition guard and the copy it writes must
+     * be one critical section or a late result can clobber a cancel.
+     */
+    private val stateLock = Any()
+
     init {
         // Observation starts with the downloader. Idempotent: App.onCreate()
         // registers first, and this keeps a DownloaderV2 built in isolation
@@ -276,27 +283,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         val taskList =
             PreferenceUtil.decodeTaskListBackup()
                 .mapValues { (_, state) ->
-                    val preState = state.downloadState
-                    val downloadState =
-                        when (preState) {
-                            // Completed downloads keep their state and show
-                            // as Downloaded cards after a restart.
-                            is Completed -> preState
-                            is FetchingInfo,
-                            Idle -> {
-                                Canceled(action = FetchInfo)
-                            }
-                            is Running -> {
-                                Canceled(action = Download, progress = preState.progress)
-                            }
-
-                            ReadyWithInfo -> {
-                                Canceled(action = Download, progress = null)
-                            }
-                            else -> {
-                                preState
-                            }
-                        }
+                    val downloadState = TaskTransitions.restore(state.downloadState)
                     state.copy(
                         downloadState = downloadState,
                         // A pending swap is persisted, but the old path it
@@ -323,20 +310,13 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     override fun enqueue(task: Task) {
         // A second share/confirm for a task already in flight must not reset it
         // to Idle: the scheduler would start a duplicate transfer over the
-        // same output path while the first job keeps running.
-        when (
-            taskStateMap.entries
-                .firstOrNull { (queued, _) -> queued.isSameWork(task) }
-                ?.value
-                ?.downloadState
-        ) {
-            is FetchingInfo,
-            is Running,
-            ReadyWithInfo -> return
-            else -> {}
-        }
-        taskStateMap +=
-            task to Task.State(Idle, null, Task.ViewState(url = task.url, title = task.url))
+        // same output path while the first job keeps running. Terminal work is
+        // a new submission and starts over.
+        val existing =
+            taskStateMap.entries.firstOrNull { (queued, _) -> queued.isSameWork(task) }?.value
+        if (!TaskTransitions.enqueueReplaces(existing?.downloadState)) return
+        taskStateMap[task] =
+            Task.State(Idle, null, Task.ViewState(url = task.url, title = task.url))
         auditCookieState(task)
         // snapshotFlow only re-checks after an apply notification, and the
         // frame loop that sends them does not run when no UI is attached —
@@ -527,7 +507,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         task.match = match.withSelection(candidate)
         task.info = info
         task.viewState = Task.ViewState.fromVideoInfo(info)
-        task.downloadState = ReadyWithInfo
+        // The fetch took seconds; a cancel during it wins over the pick.
+        val queued =
+            applyTransition(task, ReadyWithInfo) { it == current.downloadState }
+        if (!queued) {
+            pendingSwapCleanup.remove(task.id)
+            task.match?.takeIf { it.pending }?.let { task.match = it.cancelPending() }
+            return swapResult(task, candidate, SwapOutcome.Busy)
+        }
         return swapResult(task, candidate, SwapOutcome.Queued)
     }
 
@@ -582,55 +569,144 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     // task used to throw (taskStateMap[this]!!) and could crash the scheduler
     // collector. Reads fall back to a fresh Idle state without writing; writes
     // to a removed task are dropped instead of resurrecting it in the map.
-    private var Task.state: Task.State
+    private val Task.state: Task.State
         get() = taskStateMap[this] ?: Task.State(Idle, null, Task.ViewState(url = url, title = url))
-        set(value) {
-            if (taskStateMap.containsKey(this)) {
-                taskStateMap[this] = value
-                Snapshot.sendApplyNotifications()
-            }
-        }
 
-    private var Task.downloadState: DownloadState
+    private val Task.downloadState: DownloadState
         get() = state.downloadState
-        set(value) {
-            if (taskStateMap.containsKey(this)) {
-                val prevState = state
-                taskStateMap[this] = prevState.copy(downloadState = value)
-                Snapshot.sendApplyNotifications()
-                batch?.let { updateBatchNotification(it) }
+
+    /**
+     * The one writer for [Task.DownloadState]. [accept] sees the state as it is
+     * under the lock, so a worker's late result is judged against the state a
+     * cancel actually left behind. A refused or illegal edge is dropped and
+     * logged; an accepted one notifies through [syncNotifications].
+     */
+    private fun applyTransition(
+        task: Task,
+        next: DownloadState,
+        accept: (DownloadState) -> Boolean,
+    ): Boolean {
+        synchronized(stateLock) {
+            val current = taskStateMap[task] ?: return false
+            val from = current.downloadState
+            if (!accept(from)) return false
+            if (!TaskTransitions.isLegal(from, next)) {
+                Log.w(TAG, "${task.id} illegal transition ${from.label} -> ${next.label}")
+                return false
             }
+            taskStateMap[task] = current.copy(downloadState = next)
         }
+        Snapshot.sendApplyNotifications()
+        runCatching { syncNotifications(task, next) }
+            .onFailure { Log.e(TAG, "notification sync failed", it) }
+        return true
+    }
+
+    /** Applies [transform] to the newest state under the lock, never a stale copy. */
+    private fun Task.updateState(transform: (Task.State) -> Task.State): Boolean {
+        synchronized(stateLock) {
+            val current = taskStateMap[this] ?: return false
+            taskStateMap[this] = transform(current)
+        }
+        Snapshot.sendApplyNotifications()
+        return true
+    }
 
     private var Task.info: VideoInfo?
         get() = state.videoInfo
         set(value) {
-            if (taskStateMap.containsKey(this)) {
-                val prevState = state
-                taskStateMap[this] = prevState.copy(videoInfo = value)
-                Snapshot.sendApplyNotifications()
-            }
+            updateState { it.copy(videoInfo = value) }
         }
 
     private var Task.viewState: Task.ViewState
         get() = state.viewState
         set(value) {
-            if (taskStateMap.containsKey(this)) {
-                val prevState = state
-                taskStateMap[this] = prevState.copy(viewState = value)
-                Snapshot.sendApplyNotifications()
-            }
+            updateState { it.copy(viewState = value) }
         }
 
     private var Task.match: MatchResult?
         get() = state.match
         set(value) {
-            if (taskStateMap.containsKey(this)) {
-                val prevState = state
-                taskStateMap[this] = prevState.copy(match = value)
-                Snapshot.sendApplyNotifications()
+            updateState { it.copy(match = value) }
+        }
+
+    /**
+     * Notifications are a projection of the state, not a side effect each
+     * writer must remember. One notification per task, one per batch.
+     */
+    private fun syncNotifications(task: Task, next: DownloadState) {
+        if (task.usesOwnNotification) {
+            when (next) {
+                is Running -> {
+                    val percent =
+                        if (next.progress < 0f) 0 else (next.progress * 100f).toInt()
+                    val template = (task.type as? TypeInfo.CustomCommand)?.template
+                    if (template != null) {
+                        NotificationUtil.makeNotificationForCustomCommand(
+                            notificationId = task.notificationId,
+                            taskId = task.id,
+                            progress = percent,
+                            text = next.progressText,
+                            templateName = template.name,
+                            taskUrl = task.url,
+                        )
+                    } else {
+                        NotificationUtil.notifyProgress(
+                            notificationId = task.notificationId,
+                            progress = percent,
+                            text = next.progressText,
+                            title = task.viewState.title,
+                            taskId = task.id,
+                        )
+                    }
+                }
+                is Completed -> {
+                    // The tap intent needs a suspend lookup; the state is final
+                    // here, so the notification may land a moment later.
+                    scope.launch {
+                        val tapIntent =
+                            PendingIntent.getActivity(
+                                appContext,
+                                0,
+                                FileUtil.createNotificationTapIntent(next.filePath),
+                                PendingIntent.FLAG_IMMUTABLE,
+                            )
+                        NotificationUtil.finishNotification(
+                            task.notificationId,
+                            title = task.viewState.title,
+                            text =
+                                appContext.getString(
+                                    if (next.filePath == null) R.string.status_completed
+                                    else R.string.download_finish_notification
+                                ),
+                            intent = tapIntent,
+                        )
+                    }
+                }
+                is Error -> {
+                    NotificationUtil.notifyError(
+                        title = task.viewState.title,
+                        textId =
+                            if (next.action == FetchInfo) R.string.fetch_info_error_msg
+                            else R.string.download_error_msg,
+                        notificationId = task.notificationId,
+                        // The friendly wrapper keeps the raw extractor failure
+                        // as its cause, so the report keeps full detail.
+                        report = next.throwable.stackTraceToString(),
+                        url = task.url,
+                        withCookieRetry =
+                            next.throwable is DownloadErrorMessages.LoginRequiredError,
+                    )
+                }
+                is Canceled ->
+                    // A cancel must clear the task's own notification; a stale
+                    // one would offer Cancel on work that no longer exists.
+                    NotificationUtil.cancelNotification(task.notificationId)
+                Idle, ReadyWithInfo, is FetchingInfo -> {}
             }
         }
+        task.batch?.let { updateBatchNotification(it) }
+    }
 
     /** Runtime evidence that the quick fence held (or that a user task uses cookies). */
     private fun auditCookieState(task: Task) {
@@ -793,7 +869,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         if (taskStateMap.countRunning() >= MAX_CONCURRENCY) return
 
         taskStateMap.entries
-            .sortedBy { (_, state) -> state.downloadState }
+            .sortedBy { (_, state) -> state.downloadState.schedulerRank }
             .firstOrNull { (_, state) ->
                 state.downloadState == ReadyWithInfo || state.downloadState == Idle
             }
@@ -848,6 +924,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             if (synth != null) {
                 val job =
                     scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                        val runJob = coroutineContext[Job]
                         info = synth
                         viewState = Task.ViewState.fromVideoInfo(synth)
                         // No explicit download() here: writing ReadyWithInfo
@@ -856,10 +933,21 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         // the same ReadyWithInfo state and ran downloadVideo
                         // twice per task (two concurrent Ghost transfers, one
                         // orphaned and uncancellable — observed on hardware).
-                        downloadState = ReadyWithInfo
+                        applyTransition(
+                            this@prepare,
+                            ReadyWithInfo,
+                        ) { it is FetchingInfo && it.job === runJob }
                     }
-                downloadState = FetchingInfo(job = job, taskId = id)
-                job.start()
+                // Only a task still waiting for its info may begin fetching;
+                // a cancel that landed first leaves it untouched.
+                if (
+                    applyTransition(
+                        this,
+                        FetchingInfo(job = job, taskId = id),
+                    ) { it == Idle }
+                ) {
+                    job.start()
+                }
                 return
             }
         }
@@ -871,8 +959,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         val task = this
         val taskInfo = task.type
         val playlistIndex = if (taskInfo is TypeInfo.Playlist) taskInfo.index else null
-        scope
-            .launch(Dispatchers.Default) {
+        val job =
+            scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                val runJob = coroutineContext[Job]
+                val isThisAttempt = { state: DownloadState ->
+                    state is FetchingInfo && state.job === runJob
+                }
                 DownloadUtil.fetchVideoInfoFromUrl(
                         url = url,
                         playlistIndex = playlistIndex,
@@ -881,8 +973,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     )
                     .onSuccess {
                         info = it
-                        downloadState = ReadyWithInfo
                         viewState = Task.ViewState.fromVideoInfo(it)
+                        // A cancel can land while extraction is finishing; the
+                        // cancel wins and the late result is dropped.
+                        applyTransition(task, ReadyWithInfo, isThisAttempt)
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) {
@@ -902,31 +996,25 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 // Same rule as prepare(): the ReadyWithInfo
                                 // write is the trigger — doYourWork starts the
                                 // download exactly once.
-                                downloadState = ReadyWithInfo
+                                applyTransition(task, ReadyWithInfo, isThisAttempt)
                                 return@onFailure
                             }
                         }
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        task.downloadState =
+                        applyTransition(
+                            task,
                             Error(
                                 throwable = friendly,
                                 action = FetchInfo,
                                 message = errorText(throwable, friendly),
-                            )
-                        if (usesOwnNotification) {
-                            NotificationUtil.notifyError(
-                                title = viewState.title,
-                                textId = R.string.fetch_info_error_msg,
-                                notificationId = notificationId,
-                                report = throwable.stackTraceToString(),
-                                url = url,
-                                withCookieRetry =
-                                    friendly is DownloadErrorMessages.LoginRequiredError,
-                            )
-                        }
+                            ),
+                            isThisAttempt,
+                        )
                     }
             }
-            .also { job -> downloadState = FetchingInfo(job = job, taskId = id) }
+        if (applyTransition(this, FetchingInfo(job = job, taskId = id)) { it == Idle }) {
+            job.start()
+        }
     }
 
     /**
@@ -939,6 +1027,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         val task = this
         val job =
             scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                val runJob = coroutineContext[Job]
+                val isThisAttempt = { state: DownloadState ->
+                    state is FetchingInfo && state.job === runJob
+                }
                 DownloadUtil.resolveMetadataTrack(
                         metadata = track,
                         taskKey = id,
@@ -946,42 +1038,35 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         // A cancel or removal flips this false, so matching stops
                         // before spawning another yt-dlp process.
                         isActive = {
-                            taskStateMap[task]?.downloadState is Task.DownloadState.FetchingInfo
+                            (taskStateMap[task]?.downloadState as? FetchingInfo)?.job === runJob
                         },
                     )
                     .onSuccess { resolved ->
-                        // A cancel can land while the search is finishing; the
-                        // cancel wins and the late result is dropped.
-                        if (downloadState !is FetchingInfo) return@onSuccess
                         info = resolved.videoInfo
                         viewState = Task.ViewState.fromVideoInfo(resolved.videoInfo)
                         match = resolved.match
                         // A held book finishes without ReadyWithInfo, so the
                         // scheduler never spends a byte on an unverified pick.
-                        downloadState = MatchOps.resolvedState(resolved.match)
+                        // A cancel that landed first wins and drops this.
+                        applyTransition(task, MatchOps.resolvedState(resolved.match), isThisAttempt)
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) return@onFailure
-                        if (downloadState !is FetchingInfo) return@onFailure
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        downloadState =
+                        applyTransition(
+                            task,
                             Error(
                                 throwable = friendly,
                                 action = FetchInfo,
                                 message = errorText(throwable, friendly),
-                            )
-                        if (usesOwnNotification) {
-                            NotificationUtil.notifyError(
-                                title = track.title,
-                                textId = R.string.fetch_info_error_msg,
-                                notificationId = notificationId,
-                                report = throwable.stackTraceToString(),
-                            )
-                        }
+                            ),
+                            isThisAttempt,
+                        )
                     }
             }
-        downloadState = FetchingInfo(job = job, taskId = id)
-        job.start()
+        if (applyTransition(this, FetchingInfo(job = job, taskId = id)) { it == Idle }) {
+            job.start()
+        }
     }
 
     /**
@@ -1029,6 +1114,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             execute()
             return
         }
+        val task = this
         // LAZY + state-before-start: with eager launch the download body can
         // begin (and its first progress write can trigger a snapshot emission)
         // while this task still reads as ReadyWithInfo, and doYourWork then
@@ -1049,27 +1135,20 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         onProcessStarted = { processId ->
                             val current = downloadState
                             if (current is Running && current.taskId != processId) {
-                                downloadState = current.copy(taskId = processId)
+                                applyTransition(task, current.copy(taskId = processId)) {
+                                    it is Running && it.job === runJob
+                                }
                             }
                         },
                         isActive = isActive,
                         progressCallback = { progressPercentage, _, text ->
                             val progress = progressPercentage / 100f
-                            when (val preState = downloadState) {
-                                is Running -> {
-                                    downloadState =
-                                        preState.copy(progress = progress, progressText = text)
-                                    if (usesOwnNotification) {
-                                        NotificationUtil.notifyProgress(
-                                            notificationId = notificationId,
-                                            progress = progressPercentage.toInt(),
-                                            text = text,
-                                            title = viewState.title,
-                                            taskId = id,
-                                        )
-                                    }
-                                }
-                                else -> {}
+                            val preState = downloadState
+                            if (preState is Running) {
+                                applyTransition(
+                                    task,
+                                    preState.copy(progress = progress, progressText = text),
+                                ) { it is Running && it.job === runJob }
                             }
                         },
                     )
@@ -1091,28 +1170,23 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 onProcessStarted = { processId ->
                                     val current = downloadState
                                     if (current is Running && current.taskId != processId) {
-                                        downloadState = current.copy(taskId = processId)
+                                        applyTransition(task, current.copy(taskId = processId)) {
+                                            it is Running && it.job === runJob
+                                        }
                                     }
                                 },
                                 isActive = isActive,
                                 progressCallback = { progressPercentage, _, text ->
                                     val progress = progressPercentage / 100f
-                                    when (val preState = downloadState) {
-                                        is Running -> {
-                                            downloadState =
-                                                preState.copy(progress = progress, progressText = text)
-                                            if (usesOwnNotification) {
-                                                NotificationUtil.notifyProgress(
-                                                    notificationId = notificationId,
-                                                    progress = progressPercentage.toInt(),
-                                                    text = text,
-                                                    title = viewState.title,
-                                                    taskId = id,
-                                                )
-                                            }
-                                        }
-
-                                        else -> {}
+                                    val preState = downloadState
+                                    if (preState is Running) {
+                                        applyTransition(
+                                            task,
+                                            preState.copy(
+                                                progress = progress,
+                                                progressText = text,
+                                            ),
+                                        ) { it is Running && it.job === runJob }
                                     }
                                 },
                             )
@@ -1147,33 +1221,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                     actualDurationMs = verify.actualMs,
                                     gateReason = verify.reason,
                                 )
-                            downloadState = Completed(keepPath, warning = warning)
+                            applyTransition(
+                                task,
+                                Completed(keepPath, warning = warning),
+                            ) { it is Running && it.job === runJob }
                         } else {
                             cleanupSwappedFile(id, newPath)
-                            downloadState = Completed(newPath)
-                        }
-
-                        if (usesOwnNotification) {
-                            val text =
-                                appContext.getString(
-                                    if (pathList.isEmpty()) R.string.status_completed
-                                    else R.string.download_finish_notification
-                                )
-                            // Never a dead notification: the tap opens the file
-                            // when possible and the app otherwise.
-                            val tapIntent =
-                                PendingIntent.getActivity(
-                                    appContext,
-                                    0,
-                                    FileUtil.createNotificationTapIntent(pathList.firstOrNull()),
-                                    PendingIntent.FLAG_IMMUTABLE,
-                                )
-                            NotificationUtil.finishNotification(
-                                notificationId,
-                                title = viewState.title,
-                                text = text,
-                                intent = tapIntent,
-                            )
+                            applyTransition(task, Completed(newPath)) {
+                                it is Running && it.job === runJob
+                            }
                         }
                     }
                     .onFailure { throwable ->
@@ -1187,106 +1243,86 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         // pending pick must not stay "Replacing…" forever.
                         abandonSwappedFile(id)
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        downloadState =
+                        applyTransition(
+                            task,
                             Error(
                                 throwable = friendly,
                                 action = Download,
                                 message = errorText(throwable, friendly),
-                            )
-                        if (usesOwnNotification) {
-                            NotificationUtil.notifyError(
-                                title = viewState.title,
-                                textId = R.string.download_error_msg,
-                                notificationId = notificationId,
-                                report = throwable.stackTraceToString(),
-                                url = url,
-                                withCookieRetry =
-                                    friendly is DownloadErrorMessages.LoginRequiredError,
-                            )
-                        }
+                            ),
+                        ) { it is Running && it.job === runJob }
                     }
             }
             .also { job ->
-                downloadState = Running(job = job, taskId = id)
-                job.start()
+                // Start only when this task is still waiting to download: a
+                // cancel that raced the pick must not launch a worker whose
+                // result the guard would then drop.
+                if (
+                    applyTransition(task, Running(job = job, taskId = id)) {
+                        it is ReadyWithInfo
+                    }
+                ) {
+                    job.start()
+                }
             }
     }
 
     private fun Task.cancelImpl(): Boolean {
-        when (val preState = downloadState) {
-            is DownloadState.Cancelable -> {
-                // Any of the three workers may own this task: a yt-dlp
-                // process, a Ghost engine transfer, or an N_m3u8DL-RE run.
-                // yt-dlp is keyed by the current attempt id; the embedded
-                // engines are keyed by the stable task id. Missing ones just
-                // report false; none may block the cancel.
-                val killed =
-                    YoutubeDL.destroyProcessById(preState.taskId) ||
-                        DownloadUtil.cancelGhostTask(id) ||
-                        DownloadUtil.cancelNm3u8DlRe(id)
-                preState.job.cancel()
-                if (usesOwnNotification) {
-                    NotificationUtil.cancelNotification(notificationId)
-                }
-                // If the worker finished between the snapshot above and now,
-                // keep its terminal state instead of overwriting it with
-                // Canceled. A still-cancelable state of the same run is ours
-                // even when its attempt id changed while the kill ran.
-                val current = downloadState
-                if (
-                    killed ||
-                        (current is DownloadState.Cancelable && current.job === preState.job)
-                ) {
-                    val progress = if (preState is Running) preState.progress else null
-                    downloadState =
-                        DownloadState.Canceled(action = preState.action, progress = progress)
-                }
-                return true
-            }
-            Idle -> {
-                downloadState = DownloadState.Canceled(action = FetchInfo)
-            }
-            ReadyWithInfo -> {
-                downloadState = DownloadState.Canceled(action = Download)
-            }
-
-            else -> {
-                return false
+        val preState = downloadState
+        val next = TaskTransitions.cancelTarget(preState) ?: return false
+        // Any of the three workers may own this task: a yt-dlp process, a
+        // Ghost engine transfer, or an N_m3u8DL-RE run. yt-dlp is keyed by the
+        // current attempt id; the embedded engines are keyed by the stable
+        // task id. Missing ones just report false; none may block the cancel.
+        val cancelable = preState as? DownloadState.Cancelable
+        val killed =
+            cancelable != null &&
+                (YoutubeDL.destroyProcessById(cancelable.taskId) ||
+                    DownloadUtil.cancelGhostTask(id) ||
+                    DownloadUtil.cancelNm3u8DlRe(id))
+        cancelable?.job?.cancel()
+        // Cancel every unfinished state, but keep what a worker already proved:
+        // a job that finished between the snapshot and the kill owns a terminal
+        // state the guard refuses to overwrite. A still-cancelable state of the
+        // same run is ours even when its attempt id changed while the kill ran.
+        applyTransition(this, next) { current ->
+            when (current) {
+                Idle, ReadyWithInfo -> true
+                is DownloadState.Cancelable ->
+                    killed || cancelable == null || current.job === cancelable.job
+                else -> false
             }
         }
         return true
     }
 
     private fun Task.restartImpl() {
-        when (val preState = downloadState) {
-            is DownloadState.Restartable -> {
-                // A held book has no verified full-length source. Restarting it
-                // would download the upload the gate refused, so the explicit
-                // pick in the review sheet is the only way out of a hold.
-                if (preState.action == Download && match?.held == true) {
-                    TaskAuditLog.append(
-                        id,
-                        "gate: restart refused — pick a candidate in Review matches",
-                    )
-                    // A silent no-op reads as a broken button; say where the
-                    // hold can be resolved.
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            appContext.makeToast(R.string.match_held_resume_hint)
-                        }
-                    }
-                    return
+        val preState = downloadState
+        // A held book has no verified full-length source. Restarting it would
+        // download the upload the gate refused, so the explicit pick in the
+        // review sheet is the only way out of a hold.
+        if (
+            preState is DownloadState.Restartable &&
+                preState.action == Download &&
+                match?.held == true
+        ) {
+            TaskAuditLog.append(
+                id,
+                "gate: restart refused — pick a candidate in Review matches",
+            )
+            // A silent no-op reads as a broken button; say where the hold can
+            // be resolved.
+            scope.launch {
+                withContext(Dispatchers.Main) {
+                    appContext.makeToast(R.string.match_held_resume_hint)
                 }
-                downloadState =
-                    when (preState.action) {
-                        Download -> ReadyWithInfo
-                        FetchInfo -> Idle
-                    }
             }
-            // A double-tap on restart can race the first state change; a
-            // stale second tap is a no-op, not a crash on the UI thread.
-            else -> {}
+            return
         }
+        // A double-tap on restart can race the first state change; the guard
+        // refuses the stale second tap instead of overwriting the new state.
+        val next = TaskTransitions.restartTarget(preState, type is TypeInfo.CustomCommand)
+        if (next != null) applyTransition(this, next) { it == preState }
     }
 
     /**
@@ -1298,60 +1334,51 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         if (downloadState != Idle) return
         check(type is TypeInfo.CustomCommand)
         val template = type.template
-        scope
-            .launch {
-                DownloadUtil.executeCustomCommandTask(url, id, template, preferences) {
-                        progressPercentage,
-                        _,
-                        text ->
-                        val progress = progressPercentage / 100f
-                        when (val preState = downloadState) {
-                            is Running -> {
-                                downloadState =
-                                    preState.copy(progress = progress, progressText = text)
-                                NotificationUtil.makeNotificationForCustomCommand(
-                                    notificationId = notificationId,
-                                    taskId = id,
-                                    progress = progressPercentage.toInt(),
-                                    templateName = template.name,
-                                    taskUrl = url,
-                                    text = text,
+        val task = this
+        val job =
+            scope
+                .launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                    val runJob = coroutineContext[Job]
+                    val isThisAttempt = { state: DownloadState ->
+                        state is Running && state.job === runJob
+                    }
+                    DownloadUtil.executeCustomCommandTask(url, id, template, preferences) {
+                            progressPercentage,
+                            _,
+                            text ->
+                            val preState = downloadState
+                            if (preState is Running) {
+                                applyTransition(
+                                    task,
+                                    preState.copy(
+                                        progress = progressPercentage / 100f,
+                                        progressText = text,
+                                    ),
+                                    isThisAttempt,
                                 )
                             }
-                            else -> {}
                         }
-                    }
-                    .onFailure { throwable ->
-                        if (throwable is YoutubeDL.CanceledException) {
-                            return@onFailure
-                        }
-                        val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        downloadState =
-                            Error(
-                                throwable = friendly,
-                                action = Download,
-                                message = errorText(throwable, friendly),
+                        .onFailure { throwable ->
+                            if (throwable is YoutubeDL.CanceledException) {
+                                return@onFailure
+                            }
+                            val friendly = DownloadErrorMessages.asFriendly(throwable)
+                            applyTransition(
+                                task,
+                                Error(
+                                    throwable = friendly,
+                                    action = Download,
+                                    message = errorText(throwable, friendly),
+                                ),
+                                isThisAttempt,
                             )
-                        NotificationUtil.notifyError(
-                            title = viewState.title,
-                            textId = R.string.download_error_msg,
-                            notificationId = notificationId,
-                            report = throwable.stackTraceToString(),
-                        )
-                    }
-                    .onSuccess {
-                        downloadState = Completed(null)
-
-                        val text = appContext.getString(R.string.status_completed)
-
-                        NotificationUtil.finishNotification(
-                            notificationId = notificationId,
-                            title = viewState.title,
-                            text = text,
-                            intent = null,
-                        )
-                    }
-            }
-            .also { downloadState = Running(job = it, taskId = id) }
+                        }
+                        .onSuccess { applyTransition(task, Completed(null), isThisAttempt) }
+                }
+        // State before start: the worker only acts while this attempt is the
+        // Running state, so a cancel that landed first leaves it untouched.
+        if (applyTransition(this, Running(job = job, taskId = id)) { it == Idle }) {
+            job.start()
+        }
     }
 }

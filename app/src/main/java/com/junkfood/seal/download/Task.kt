@@ -128,7 +128,7 @@ data class Task(
     )
 
     @Serializable
-    sealed interface DownloadState : Comparable<DownloadState> {
+    sealed interface DownloadState {
 
         interface Cancelable {
             val job: Job
@@ -139,6 +139,45 @@ data class Task(
         interface Restartable {
             val action: RestartableAction
         }
+
+        /**
+         * Scheduler preference between the two runnable states only. A
+         * [ReadyWithInfo] task already has its info and can start at once, so it
+         * goes before a fresh [Idle] one. Every other state is not picked.
+         */
+        val schedulerRank: Int
+            get() =
+                when (this) {
+                    ReadyWithInfo -> 0
+                    Idle -> 1
+                    else -> 2
+                }
+
+        /** Card order in the downloads list: active first, finished last. */
+        val displayRank: Int
+            get() =
+                when (this) {
+                    is Running -> 0
+                    ReadyWithInfo -> 1
+                    is FetchingInfo -> 2
+                    Idle -> 3
+                    is Canceled -> 4
+                    is Error -> 5
+                    is Completed -> 6
+                }
+
+        /** Short name for audit lines; never shown to the user. */
+        val label: String
+            get() =
+                when (this) {
+                    is Running -> "running"
+                    ReadyWithInfo -> "ready"
+                    is FetchingInfo -> "fetching"
+                    Idle -> "idle"
+                    is Canceled -> "canceled"
+                    is Error -> "error"
+                    is Completed -> "completed"
+                }
 
         @Serializable data object Idle : DownloadState
 
@@ -184,22 +223,6 @@ data class Task(
              */
             val warning: String = "",
         ) : DownloadState
-
-        override fun compareTo(other: DownloadState): Int {
-            return ordinal - other.ordinal
-        }
-
-        private val ordinal: Int
-            get() =
-                when (this) {
-                    is Canceled -> 4
-                    is Error -> 5
-                    is Completed -> 6
-                    Idle -> 3
-                    is FetchingInfo -> 2
-                    ReadyWithInfo -> 1
-                    is Running -> 0
-                }
     }
 
     @Serializable
