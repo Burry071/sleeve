@@ -74,32 +74,25 @@ class UpdateDownloadService : Service() {
                             }
                         }
                     }
+                var terminal: AppUpdateManager.State? = null
                 try {
-                    AppUpdateManager.download(
-                        this@UpdateDownloadService,
-                        version,
-                        apkUrl,
-                        digest,
-                    )
+                    terminal =
+                        AppUpdateManager.download(
+                            this@UpdateDownloadService,
+                            version,
+                            apkUrl,
+                            digest,
+                        )
                 } finally {
                     progress.cancel()
                     // Leave the foreground before posting the terminal state:
                     // stopForeground(REMOVE) would delete those notifications.
                     stopForeground(STOP_FOREGROUND_REMOVE)
-                    when (val state = AppUpdateManager.state.value) {
-                        is AppUpdateManager.State.Ready ->
-                            NotificationUtil.notifyUpdateReady(
-                                state.version,
-                                state.file.absolutePath,
-                            )
-                        is AppUpdateManager.State.Failed ->
-                            NotificationUtil.notifyUpdateFailed(
-                                version,
-                                state.message,
-                                apkUrl,
-                                digest,
-                            )
-                        else -> NotificationUtil.cancelUpdateNotifications()
+                    // The state this transfer ended in, not whatever the shared
+                    // flow says now; a duplicate start that lost the claim
+                    // returns null and announces nothing.
+                    terminal?.let {
+                        AppUpdateManager.postTerminalNotification(it, version, apkUrl, digest)
                     }
                     stopSelf(startId)
                 }
