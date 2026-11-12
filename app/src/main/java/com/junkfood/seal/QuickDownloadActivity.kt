@@ -61,11 +61,10 @@ const val EXTRA_QUICK_DOWNLOAD = "quick"
 private const val NOTIFICATION_PERMISSION_REQUEST = 1001
 
 class QuickDownloadActivity : ComponentActivity() {
-    private var sharedUrlCached: String = ""
 
     /** Wired in onCreate once the ViewModel exists; singleInstance delivers
      * later shares here instead of a fresh activity, so they must re-route. */
-    private var onNewIntentHandler: ((Intent) -> Unit)? = null
+    private var onNewIntentHandler: ((List<String>?) -> Unit)? = null
 
     /** Android 10+ refuses clipboard reads until this window has focus, and the
      * shortcut tap starts us before focus arrives. */
@@ -81,15 +80,17 @@ class QuickDownloadActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == ACTION_QUICK_CLIPBOARD) {
-            when {
-                !intent.isTrustedQuick() -> showConfigureSheet(null)
-                hasWindowFocus() -> handleClipboardQuickDownload()
-                else -> awaitingClipboardQuickDownload = true
-            }
-            return
+        when (val launch = intent.quickLaunch()) {
+            null -> Unit
+            QuickLaunch.Clipboard ->
+                if (hasWindowFocus()) handleClipboardQuickDownload()
+                else awaitingClipboardQuickDownload = true
+
+            // A warm launch never enqueues silently: the user shared something
+            // while the sheet was already open, so show them what arrived.
+            is QuickLaunch.Silent,
+            is QuickLaunch.Confirm -> onNewIntentHandler?.invoke(launch.urlList)
         }
-        onNewIntentHandler?.invoke(intent)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -150,34 +151,70 @@ class QuickDownloadActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (intent.action == ACTION_QUICK_CLIPBOARD) {
-            requestNotificationPermissionIfNeeded()
-            App.startService()
-            if (intent.isTrustedQuick()) awaitingClipboardQuickDownload = true
-            else showConfigureSheet(null)
-            return
+        when (val launch = intent.quickLaunch()) {
+            null -> {
+                finish()
+                return
+            }
+
+            is QuickLaunch.Clipboard -> {
+                requestNotificationPermissionIfNeeded()
+                App.startService()
+                awaitingClipboardQuickDownload = true
+            }
+
+            is QuickLaunch.Silent -> {
+                requestNotificationPermissionIfNeeded()
+                App.startService()
+                quickDownload(launch.url)
+            }
+
+            is QuickLaunch.Confirm -> {
+                requestNotificationPermissionIfNeeded()
+                App.startService()
+                showConfigureSheet(launch.urlList)
+            }
+        }
+    }
+
+    /**
+     * What one launch asks for, decided once per intent.
+     *
+     * Trust used to be recomputed in two entry paths with slightly different
+     * preconditions; one classifier means a launch can only be silent when the
+     * whole rule says so.
+     */
+    private sealed interface QuickLaunch {
+        /** URLs to pre-fill the configure sheet with, when there are any. */
+        val urlList: List<String>?
+
+        /** Trusted nonce-carrying request: enqueue without showing the sheet. */
+        data class Silent(val url: String) : QuickLaunch {
+            override val urlList: List<String>
+                get() = listOf(url)
         }
 
-        intent.getSharedURL()?.let { sharedUrlCached = it }
-
-        val isQuickDownload = intent.getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)
-
-        if (sharedUrlCached.isEmpty() && !isQuickDownload) {
-            finish()
-            return
+        /** Trusted clipboard shortcut: read it once the window has focus. */
+        data object Clipboard : QuickLaunch {
+            override val urlList: List<String>?
+                get() = null
         }
 
-        requestNotificationPermissionIfNeeded()
-        App.startService()
+        /** Everything else, including a forged or stale shortcut: ask first. */
+        data class Confirm(override val urlList: List<String>?) : QuickLaunch
+    }
 
-        if (intent.isTrustedQuick() && sharedUrlCached.isNotEmpty()) {
-            // Silent quick mode needs a nonce-carrying, non-share launch; the
-            // launcher shortcut is a share, so it opens the sheet instead.
-            quickDownload(sharedUrlCached)
-            return
+    /** One pass over action, URL, and nonce — the only place trust is read. */
+    private fun Intent.quickLaunch(): QuickLaunch? {
+        if (action == ACTION_QUICK_CLIPBOARD) {
+            return if (isTrustedQuick()) QuickLaunch.Clipboard else QuickLaunch.Confirm(null)
         }
-
-        showConfigureSheet(if (sharedUrlCached.isEmpty()) null else listOf(sharedUrlCached))
+        val url = getSharedURL()?.takeIf { it.isNotBlank() }
+        if (url == null && !getBooleanExtra(EXTRA_QUICK_DOWNLOAD, false)) return null
+        // Silent quick mode needs a nonce-carrying, non-share launch; the
+        // launcher shortcut is a share, so it opens the sheet instead.
+        return if (isTrustedQuick() && url != null) QuickLaunch.Silent(url)
+        else QuickLaunch.Confirm(url?.let(::listOf))
     }
 
     private fun handleClipboardQuickDownload() {
@@ -278,12 +315,9 @@ class QuickDownloadActivity : ComponentActivity() {
             }
         }
 
-        onNewIntentHandler = { newIntent ->
-            newIntent.getSharedURL()?.takeIf { it.isNotBlank() }?.let { url ->
-                sharedUrlCached = url
-                viewModel.postAction(Action.Reset)
-                viewModel.postAction(Action.ShowSheet(listOf(url)))
-            }
+        onNewIntentHandler = { urlList ->
+            viewModel.postAction(Action.Reset)
+            viewModel.postAction(Action.ShowSheet(urlList))
         }
 
         setContent {
@@ -305,30 +339,30 @@ class QuickDownloadActivity : ComponentActivity() {
                     val selectionState =
                         viewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
-                    var showDialog by remember { mutableStateOf(false) }
+                    // Composition has to outlive the hide animation, so this is
+                    // an observation of the sheet itself rather than a latch that
+                    // a missed completion could leave stuck on.
+                    val showDialog =
+                        sheetValue == DownloadDialogViewModel.SheetValue.Expanded ||
+                            sheetState.isVisible
 
                     LaunchedEffect(sheetValue) {
-                        if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
-                            showDialog = true
-                        } else if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) {
-                            launch { sheetState.hide() }
-                                .invokeOnCompletion {
-                                    showDialog = false
-                                    // Read the flows, not the composed snapshot: a
-                                    // fast fetch sets FormatSelection and hides the
-                                    // sheet in the same frame, and the stale
-                                    // snapshot used to finish the activity before
-                                    // FormatPage could render.
-                                    val live =
-                                        dialogScreen(
-                                            viewModel.sheetValueFlow.value,
-                                            viewModel.sheetStateFlow.value,
-                                            viewModel.selectionStateFlow.value,
-                                        )
-                                    if (live == DialogScreen.Hidden) {
-                                        this@QuickDownloadActivity.finish()
-                                    }
-                                }
+                        if (sheetValue != DownloadDialogViewModel.SheetValue.Hidden) {
+                            return@LaunchedEffect
+                        }
+                        sheetState.hide()
+                        // Read the flows, not the composed snapshot: a fast fetch
+                        // sets FormatSelection and hides the sheet in the same
+                        // frame, and the stale snapshot used to finish the
+                        // activity before FormatPage could render.
+                        val live =
+                            dialogScreen(
+                                viewModel.sheetValueFlow.value,
+                                viewModel.sheetStateFlow.value,
+                                viewModel.selectionStateFlow.value,
+                            )
+                        if (live == DialogScreen.Hidden) {
+                            this@QuickDownloadActivity.finish()
                         }
                     }
 

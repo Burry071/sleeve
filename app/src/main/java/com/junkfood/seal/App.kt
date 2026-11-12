@@ -155,37 +155,56 @@ class App : Application() {
         lateinit var connectivityManager: ConnectivityManager
         lateinit var packageInfo: PackageInfo
 
-        var isServiceRunning = false
-
-        /** Tracks the STARTED half of the service: a bound-only service dies
+        /** The service's two lifetimes in one record. A bound-only service dies
          * with its binder, which froze the process mid-download whenever the
          * quick-download overlay closed before the transfer finished. */
-        private var isServiceStarted = false
+        private class ServiceState {
+            /** A binding registration is outstanding. */
+            @Volatile var bound = false
+
+            /** Started mode: the process outlives every UI client. */
+            @Volatile var started = false
+        }
+
+        private val serviceState = ServiceState()
 
         private val connection =
             object : ServiceConnection {
                 override fun onServiceConnected(className: ComponentName, service: IBinder) {
                     val binder = service as DownloadService.DownloadServiceBinder
-                    isServiceRunning = true
+                    serviceState.bound = true
                 }
 
-                override fun onServiceDisconnected(arg0: ComponentName) {}
+                // The binder died but our registration did not: drop both, so
+                // the next startService binds again instead of trusting a
+                // connection that no longer exists.
+                override fun onServiceDisconnected(arg0: ComponentName) {
+                    serviceState.bound = false
+                    runCatching { context.applicationContext.unbindService(this) }
+                }
             }
 
         fun startService() {
             val intent = Intent(context.applicationContext, DownloadService::class.java)
-            if (!isServiceRunning) {
-                context.applicationContext.bindService(
-                    intent,
-                    connection,
-                    Context.BIND_AUTO_CREATE,
-                )
+            if (!serviceState.bound) {
+                // The flag is the registration, not the connection: claiming it
+                // here means a second call in the same window cannot bind the
+                // same connection twice.
+                serviceState.bound =
+                    runCatching {
+                            context.applicationContext.bindService(
+                                intent,
+                                connection,
+                                Context.BIND_AUTO_CREATE,
+                            )
+                        }
+                        .getOrDefault(false)
             }
-            if (!isServiceStarted) {
+            if (!serviceState.started) {
                 // Started + foreground: the process stays alive with no
                 // activity on screen while tasks are in the queue.
                 context.applicationContext.startService(intent)
-                isServiceStarted = true
+                serviceState.started = true
             }
         }
 
@@ -273,15 +292,16 @@ class App : Application() {
         /**
          * The service was destroyed for good (not merely unbound): a later
          * [startService] must start it again instead of trusting a stale flag.
-         * `isServiceRunning` is left to [stopService]/[connection].
+         * The binding half is owned by [connection], which clears it when the
+         * registration actually goes away.
          */
         fun onDownloadServiceDestroyed() {
-            isServiceStarted = false
+            serviceState.started = false
         }
 
         fun stopService() {
-            if (isServiceStarted) {
-                isServiceStarted = false
+            if (serviceState.started) {
+                serviceState.started = false
                 try {
                     context.applicationContext.stopService(
                         Intent(context.applicationContext, DownloadService::class.java),
@@ -290,9 +310,9 @@ class App : Application() {
                     e.printStackTrace()
                 }
             }
-            if (!isServiceRunning) return
+            if (!serviceState.bound) return
+            serviceState.bound = false
             try {
-                isServiceRunning = false
                 context.applicationContext.run { unbindService(connection) }
             } catch (e: Exception) {
                 e.printStackTrace()
