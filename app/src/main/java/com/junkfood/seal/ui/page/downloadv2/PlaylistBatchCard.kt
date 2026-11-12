@@ -44,9 +44,12 @@ import com.junkfood.seal.R
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.MatchOps
+import com.junkfood.seal.download.MatchPhase
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Running
+import com.junkfood.seal.download.isOpen
+import com.junkfood.seal.download.phase
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
 
@@ -226,6 +229,7 @@ private fun SongRow(
     onAction: (UiAction) -> Unit,
 ) {
     val progress = (state.downloadState as? Running)?.progress?.takeIf { it >= 0f }
+    val phase = state.match.phase
     Row(
         modifier =
             Modifier.fillMaxWidth()
@@ -242,12 +246,11 @@ private fun SongRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (MatchOps.reviewable(state)) {
+            if (phase.isOpen) {
                 val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
                 // A pending replacement is already downloading: say so, and keep
                 // the amber pair for "this pick may be wrong" only.
-                val pending = state.match?.pending == true
-                val held = state.match?.held == true
+                val pending = phase == MatchPhase.SwapPending
                 Surface(
                     color =
                         if (pending) MaterialTheme.colorScheme.primaryContainer
@@ -276,7 +279,7 @@ private fun SongRow(
                                 stringResource(
                                     when {
                                         pending -> R.string.match_pending
-                                        held -> R.string.match_held_badge
+                                        phase == MatchPhase.Held -> R.string.match_held_badge
                                         else -> R.string.match_badge_short
                                     }
                                 ),
@@ -317,10 +320,15 @@ private fun SongRow(
                 )
             }
         }
-        CardStateIndicator(modifier = Modifier, downloadState = state.downloadState)
+        CardStateIndicator(
+            modifier = Modifier,
+            downloadState = state.downloadState,
+            matchPhase = phase,
+        )
         ActionButton(
             modifier = Modifier,
             downloadState = state.downloadState,
+            matchPhase = phase,
             onActionPost = onAction,
         )
     }

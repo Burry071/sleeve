@@ -71,6 +71,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.junkfood.seal.R
+import com.junkfood.seal.download.MatchPhase
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
@@ -495,16 +496,23 @@ private fun statePillColors(downloadState: Task.DownloadState): Pair<Color, Colo
 }
 
 @Composable
-fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.DownloadState) {
+fun CardStateIndicator(
+    modifier: Modifier = Modifier,
+    downloadState: Task.DownloadState,
+    matchPhase: MatchPhase = MatchPhase.None,
+) {
+    // A held pick is stored as Canceled, but nothing was cancelled: the state
+    // slot must say what the row needs, not borrow the cancel copy.
+    val held = matchPhase == MatchPhase.Held
     AnimatedContent(
-        targetState = downloadState,
+        targetState = downloadState to held,
         transitionSpec = {
             materialSharedAxisY(initialOffsetY = { it / 4 }, targetOffsetY = { -it / 4 })
         },
-        contentKey = { it::class.simpleName },
+        contentKey = { (state, isHeld) -> "${state::class.simpleName}:$isHeld" },
         label = "cardStatePill",
         modifier = modifier,
-    ) { state ->
+    ) { (state, isHeld) ->
         val (container, content) = statePillColors(state)
         Surface(
             modifier = Modifier.padding(vertical = 12.dp, horizontal = 10.dp),
@@ -539,7 +547,9 @@ fun CardStateIndicator(modifier: Modifier = Modifier, downloadState: Task.Downlo
                     else -> Unit
                 }
                 Text(
-                    text = statePillText(state),
+                    text =
+                        if (isHeld) stringResource(R.string.match_held_badge)
+                        else statePillText(state),
                     style =
                         MaterialTheme.typography.labelSmall.copy(
                             fontFeatureSettings = "tnum",
@@ -706,6 +716,7 @@ fun ErrorFooter(
 fun ActionButton(
     modifier: Modifier = Modifier,
     downloadState: Task.DownloadState,
+    matchPhase: MatchPhase = MatchPhase.None,
     onActionPost: (UiAction) -> Unit,
 ) =
     when (downloadState) {
@@ -713,7 +724,13 @@ fun ActionButton(
             RestartButton(modifier = modifier) { onActionPost(UiAction.Resume) }
         }
         is Canceled -> {
-            ResumeButton(modifier = modifier, downloadState.progress) {
+            // A held book has no verified source: Resume would only earn a
+            // refusal, and the pick is made in the review sheet, not here.
+            ResumeButton(
+                modifier = modifier,
+                progress = downloadState.progress,
+                enabled = matchPhase != MatchPhase.Held,
+            ) {
                 onActionPost(UiAction.Resume)
             }
         }
@@ -738,9 +755,14 @@ fun ActionButton(
 private fun ResumeButton(
     modifier: Modifier = Modifier,
     progress: Float? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    val background = ActionButtonContainerColor
+    val background =
+        if (enabled) ActionButtonContainerColor
+        else ActionButtonContainerColor.copy(alpha = 0.32f)
+    val contentColor =
+        if (enabled) ActionButtonContentColor else ActionButtonContentColor.copy(alpha = 0.38f)
 
     Box(
         modifier =
@@ -748,13 +770,17 @@ private fun ResumeButton(
                 .size(IconButtonSize)
                 .clip(CircleShape)
                 .drawBehind { drawCircle(background) }
-                .clickable(onClickLabel = stringResource(R.string.cancel), onClick = onClick)
+                .clickable(
+                    enabled = enabled,
+                    onClickLabel = stringResource(R.string.cancel),
+                    onClick = onClick,
+                )
     ) {
         if (progress != null) {
             CircularWavyProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.size(IconButtonSize).align(Alignment.Center),
-                color = ActionButtonContentColor,
+                color = contentColor,
                 trackColor = Color.Transparent,
             )
         }
@@ -762,7 +788,7 @@ private fun ResumeButton(
             imageVector = Icons.Rounded.Download,
             contentDescription = stringResource(R.string.restart),
             modifier = Modifier.size(IconSize).align(Alignment.Center),
-            tint = ActionButtonContentColor,
+            tint = contentColor,
         )
     }
 }

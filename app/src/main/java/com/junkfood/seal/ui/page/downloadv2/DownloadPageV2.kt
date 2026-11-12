@@ -118,6 +118,7 @@ import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.phase
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
@@ -706,6 +707,7 @@ fun DownloadPageImplV2(
                                             ActionButton(
                                                 modifier = Modifier,
                                                 downloadState = state.downloadState,
+                                                matchPhase = state.match.phase,
                                             ) {
                                                 onActionPost(task, it)
                                             }
@@ -714,6 +716,7 @@ fun DownloadPageImplV2(
                                             CardStateIndicator(
                                                 modifier = Modifier,
                                                 downloadState = state.downloadState,
+                                                matchPhase = state.match.phase,
                                             )
                                         },
                                         onButtonClick = { showActionSheet(task) },
