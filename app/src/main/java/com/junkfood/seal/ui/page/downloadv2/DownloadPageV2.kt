@@ -137,21 +137,22 @@ import com.junkfood.seal.ui.component.SelectionGroupRow
 import com.junkfood.seal.ui.component.UpdateBanner
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
 import com.junkfood.seal.ui.page.downloadv2.configure.Config
+import com.junkfood.seal.ui.page.downloadv2.configure.DialogScreen
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
 import com.junkfood.seal.ui.page.downloadv2.configure.FormatPage
 import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMetered
+import com.junkfood.seal.ui.page.downloadv2.configure.PendingMeteredDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
+import com.junkfood.seal.ui.page.downloadv2.configure.dialogScreen
 import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
-import com.junkfood.seal.ui.page.download.MeteredNetworkDialog
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
-import com.junkfood.seal.util.CELLULAR_DOWNLOAD
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
-import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NOTIFICATION
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -275,7 +276,7 @@ fun DownloadPageV2(
             }
         } else null
 
-    var pendingMeteredAction by remember { mutableStateOf<Action?>(null) }
+    val metered = remember { PendingMetered() }
 
     fun enqueueAction(action: Action) {
         if (
@@ -291,11 +292,7 @@ fun DownloadPageV2(
     fun postAction(action: Action) {
         // One gate for both hosts: only actions that hand work to the pipeline
         // are parked, and "Don't allow" drops them without queueing.
-        if (action.startsDownload() && !NetworkPolicy.canStartDownloads()) {
-            pendingMeteredAction = action
-            return
-        }
-        enqueueAction(action)
+        metered.post(action) { enqueueAction(action) }
     }
 
     DownloadPageImplV2(
@@ -395,21 +392,9 @@ fun DownloadPageV2(
         )
     }
 
-    pendingMeteredAction?.let { action ->
-        MeteredNetworkDialog(
-            onDismissRequest = { pendingMeteredAction = null },
-            onAllowOnceConfirm = {
-                NetworkPolicy.allowMeteredOnce()
-                pendingMeteredAction = null
-                enqueueAction(action)
-            },
-            onAllowAlwaysConfirm = {
-                CELLULAR_DOWNLOAD.updateBoolean(true)
-                pendingMeteredAction = null
-                enqueueAction(action)
-            },
-        )
-    }
+    PendingMeteredDialog(pending = metered)
+
+    val screen = dialogScreen(sheetValue, state, selectionState)
 
     if (showDialog) {
 
@@ -422,28 +407,27 @@ fun DownloadPageV2(
             onActionPost = { postAction(it) },
         )
     }
-    when (selectionState) {
-        is DownloadDialogViewModel.SelectionState.FormatSelection ->
+    when (screen) {
+        DialogScreen.Hidden, is DialogScreen.Sheet -> {}
+
+        is DialogScreen.Format ->
             FormatPage(
-                state = selectionState,
+                state = screen.state,
                 onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
             )
 
-        is DownloadDialogViewModel.SelectionState.MetadataTracks ->
+        is DialogScreen.Metadata ->
             MetadataTracksPage(
-                state = selectionState,
+                state = screen.state,
                 onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
                 onActionPost = { postAction(it) },
             )
 
-        is DownloadDialogViewModel.SelectionState.PlaylistSelection -> {
+        is DialogScreen.Playlist ->
             PlaylistSelectionPage(
-                state = selectionState,
+                state = screen.state,
                 onDismissRequest = { dialogViewModel.postAction(Action.Reset) },
             )
-        }
-
-        DownloadDialogViewModel.SelectionState.Idle -> {}
     }
 }
 
