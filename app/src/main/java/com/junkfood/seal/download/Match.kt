@@ -43,6 +43,43 @@ data class MatchCandidate(
 }
 
 /**
+ * Where a catalogue match sits in the review lifecycle, derived once from
+ * [MatchResult] so no caller re-implements the precedence of `pending`,
+ * `held`, `flagged` and `acknowledged`.
+ *
+ * [MatchResult.held] remains readable on its own: it describes the pick the
+ * gate refused, and it stays true while a replacement is [SwapPending] so the
+ * hold cannot be waved through by resuming.
+ */
+enum class MatchPhase {
+    /** No catalogue match recorded for this task. */
+    None,
+    /** A pick that may download without the user looking at it. */
+    Confirmed,
+    /** A low-confidence pick waiting in the review sheet. */
+    NeedsReview,
+    /** The gate refused the pick; only an explicit selection may download it. */
+    Held,
+    /** A replacement pick is downloading; the review entry stays open. */
+    SwapPending,
+}
+
+/** The review lifecycle of this match; `null` means no catalogue match. */
+val MatchResult?.phase: MatchPhase
+    get() =
+        when {
+            this == null -> MatchPhase.None
+            pending -> MatchPhase.SwapPending
+            held -> MatchPhase.Held
+            flagged && !acknowledged -> MatchPhase.NeedsReview
+            else -> MatchPhase.Confirmed
+        }
+
+/** True while the review sheet still has something to say about this pick. */
+val MatchPhase.isOpen: Boolean
+    get() = this == MatchPhase.NeedsReview || this == MatchPhase.Held || this == MatchPhase.SwapPending
+
+/**
  * Everything the queue keeps about one catalogue match.
  *
  * A new pick is [pending] until the replacement file is verified: the review

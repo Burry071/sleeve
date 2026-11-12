@@ -40,10 +40,12 @@ import com.junkfood.seal.R
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
+import com.junkfood.seal.download.MatchPhase
 import com.junkfood.seal.download.SwapOutcome
 import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Completed
+import com.junkfood.seal.download.phase
 import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.util.toDurationText
 import java.util.Locale
@@ -92,13 +94,14 @@ fun MatchReviewSheet(
     var applyFailed by remember { mutableStateOf(false) }
     var pastedUrl by remember { mutableStateOf("") }
     // A single held book is the one case where a pasted full-book link is
-    // unambiguous. Multi-book batches stay on the candidate rows.
+    // unambiguous. Multi-book batches stay on the candidate rows. Once a
+    // replacement is pending the phase leaves Held, so a second swap cannot be
+    // queued on top of the first.
     val singleHeld =
         flagged
             .singleOrNull()
             ?.takeIf { (_, state) ->
-                val match = state.match
-                match?.held == true && match.parts.isEmpty()
+                state.match.phase == MatchPhase.Held && state.match?.parts?.isEmpty() == true
             }
     val pastedUrlValid =
         pastedUrl.trim().let { it.startsWith("http://") || it.startsWith("https://") }
@@ -194,7 +197,7 @@ fun MatchReviewSheet(
         ) {
             items(flagged, key = { it.first.uiKey }) { (task, state) ->
                 val match = state.match ?: return@items
-                val pending = match.pending
+                val pending = state.match.phase == MatchPhase.SwapPending
                 val requestedMs = (task.type as? Task.TypeInfo.MetadataTrack)?.durationMs ?: 0L
                 val warning = (state.downloadState as? Completed)?.warning.orEmpty()
                 Column(modifier = Modifier.padding(vertical = 10.dp)) {
@@ -470,11 +473,14 @@ fun MatchReviewSheet(
         ) {
             TextButton(
                 onClick = onAcceptAll,
+                // Accept all closes plain low-confidence picks only: a held
+                // book needs an explicit pick, and a pending swap is unfinished
+                // work, so neither may be waved through here.
                 enabled =
                     swaps.isEmpty() &&
                         !running &&
-                        flagged.none { (_, state) ->
-                            state.match?.let { it.held || it.pending } == true
+                        flagged.all { (_, state) ->
+                            state.match.phase == MatchPhase.NeedsReview
                         },
             ) {
                 Text(stringResource(R.string.accept_all))
