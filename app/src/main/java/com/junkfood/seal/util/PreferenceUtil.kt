@@ -465,8 +465,23 @@ object PreferenceUtil {
 
     fun getDismissedBatches(): Set<String> = kv.decodeStringSet(BATCH_DISMISSED) ?: emptySet()
 
-    fun addDismissedBatch(batchId: String) {
-        kv.encode(BATCH_DISMISSED, getDismissedBatches() + batchId)
+    /**
+     * Hide a dismissed batch, and forget tombstones whose songs already left
+     * the queue: a batch id is unique per playlist, so a tombstone with no
+     * songs left hides nothing and would accumulate forever.
+     */
+    fun dismissBatch(batchId: String, liveBatchIds: Set<String>) {
+        val kept =
+            getDismissedBatches()
+                .filterTo(mutableSetOf()) { it != batchId && it in liveBatchIds }
+        kv.encode(BATCH_DISMISSED, kept.apply { add(batchId) })
+    }
+
+    /** Drop tombstones for batches whose songs are all gone from the queue. */
+    fun pruneDismissedBatches(liveBatchIds: Set<String>) {
+        val stored = getDismissedBatches()
+        val kept = stored.filterTo(mutableSetOf()) { it in liveBatchIds }
+        if (kept != stored) kv.encode(BATCH_DISMISSED, kept)
     }
 
     private const val TAG = "PreferenceUtil"
