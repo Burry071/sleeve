@@ -11,6 +11,7 @@ import com.junkfood.seal.UpdateDownloadService
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,6 +72,11 @@ object AppUpdateManager {
     @Volatile private var lastCheckAt = 0L
     @Volatile private var lastNotifiedVersion: String? = null
     @Volatile private var downloadCancelled = false
+
+    /** A transient service (e.g. a duplicate start while the first is still
+     * tearing down) must not run — or announce — a second transfer for the
+     * same tap. Whoever claims this owns both. */
+    private val transferClaimed = AtomicBoolean(false)
 
     private data class VersionTuple(
         val major: Long,
@@ -352,60 +358,110 @@ object AppUpdateManager {
         ContextCompat.startForegroundService(context, intent)
     }
 
-    suspend fun download(context: Context, version: String, apkUrl: String, digest: String? = null) {
-        downloadCancelled = false
-        mutableState.value = State.Downloading(version, 0)
-        withContext(Dispatchers.IO) {
-            // Download to a temp name: a failure or cancel must never leave a
-            // truncated file where a finished installable APK lives, and the
-            // finished file is version-named so Ready survives restarts.
-            val dir = File(context.getExternalFilesDir(null), "updates").apply { mkdirs() }
-            val target = File(dir, "Sleeve-$version-release.apk")
-            val part = File(dir, target.name + ".part")
-            runCatching {
-                val conn = URL(apkUrl).openConnection() as HttpURLConnection
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 30_000
-                conn.instanceFollowRedirects = true
-                val total = conn.contentLengthLong
-                conn.inputStream.use { input ->
-                    part.outputStream().use { output ->
-                        val buf = ByteArray(64 * 1024)
-                        var read = 0L
-                        while (true) {
-                            if (downloadCancelled) error("update download cancelled")
-                            val n = input.read(buf)
-                            if (n == -1) break
-                            output.write(buf, 0, n)
-                            read += n
-                            if (total > 0) {
-                                val pct = ((read * 100) / total).toInt()
-                                val prev = (mutableState.value as? State.Downloading)?.progress ?: -1
-                                if (pct != prev) mutableState.value = State.Downloading(version, pct)
+    /**
+     * Runs one transfer and returns the state it ended in, or null when another
+     * transfer already holds the claim. The terminal state is returned rather
+     * than read back from the shared flow afterwards: a check or a second
+     * transfer may have moved it on by the time the caller posts.
+     */
+    suspend fun download(
+        context: Context,
+        version: String,
+        apkUrl: String,
+        digest: String? = null,
+    ): State? {
+        if (!transferClaimed.compareAndSet(false, true)) return null
+        try {
+            downloadCancelled = false
+            mutableState.value = State.Downloading(version, 0)
+            val terminal =
+                withContext(Dispatchers.IO) {
+                    // Download to a temp name: a failure or cancel must never leave
+                    // a truncated file where a finished installable APK lives.
+                    val dir =
+                        File(context.getExternalFilesDir(null), "updates").apply { mkdirs() }
+                    val target = File(dir, "Sleeve-$version-release.apk")
+                    val part = File(dir, target.name + ".part")
+                    runCatching {
+                            val conn = URL(apkUrl).openConnection() as HttpURLConnection
+                            conn.connectTimeout = 15_000
+                            conn.readTimeout = 30_000
+                            conn.instanceFollowRedirects = true
+                            val total = conn.contentLengthLong
+                            conn.inputStream.use { input ->
+                                part.outputStream().use { output ->
+                                    val buf = ByteArray(64 * 1024)
+                                    var read = 0L
+                                    while (true) {
+                                        if (downloadCancelled) {
+                                            error("update download cancelled")
+                                        }
+                                        val n = input.read(buf)
+                                        if (n == -1) break
+                                        output.write(buf, 0, n)
+                                        read += n
+                                        if (total > 0) {
+                                            val pct = ((read * 100) / total).toInt()
+                                            val prev =
+                                                (mutableState.value
+                                                        as? State.Downloading)
+                                                    ?.progress
+                                                    ?: -1
+                                            if (pct != prev) {
+                                                mutableState.value =
+                                                    State.Downloading(version, pct)
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                            part.renameTo(target)
+                            // Gate the install: a tampered or corrupted APK must
+                            // never reach the installer, and must not be left on
+                            // disk for the next cold-start scan to resurrect.
+                            UpdateVerifier.verify(context, target, digest)?.let { error(it) }
+                            // Older finished APKs are superseded once a new one
+                            // is complete.
+                            dir
+                                .listFiles { f ->
+                                    f.name.startsWith("Sleeve-") &&
+                                        f.name.endsWith("-release.apk")
+                                }
+                                ?.filter { it != target }
+                                ?.forEach { it.delete() }
+                            State.Ready(version, target)
                         }
-                    }
+                        .onFailure {
+                            part.delete()
+                            target.delete()
+                        }
+                        .getOrElse {
+                            if (downloadCancelled) State.Idle
+                            else State.Failed(it.message ?: "download failed")
+                        }
                 }
-                part.renameTo(target)
-                // Gate the install: a tampered or corrupted APK must never reach
-                // the installer, and must not be left on disk for the next
-                // cold-start scan to resurrect as a finished update.
-                UpdateVerifier.verify(context, target, digest)?.let { error(it) }
-                // Older finished APKs are superseded once a new one is complete.
-                dir.listFiles { f -> f.name.startsWith("Sleeve-") && f.name.endsWith("-release.apk") }
-                    ?.filter { it != target }
-                    ?.forEach { it.delete() }
-                mutableState.value = State.Ready(version, target)
-                // The service owning this call posts the install notification
-                // after it leaves the foreground; posting it here would be
-                // wiped by stopForeground(STOP_FOREGROUND_REMOVE).
-            }.onFailure {
-                part.delete()
-                target.delete()
-                mutableState.value =
-                    if (downloadCancelled) State.Idle
-                    else State.Failed(it.message ?: "download failed")
-            }
+            mutableState.value = terminal
+            return terminal
+        } finally {
+            transferClaimed.set(false)
+        }
+    }
+
+    /**
+     * The one place a finished transfer becomes a notification. Callers pass
+     * the state their own transfer ended in; a service that lost the transfer
+     * claim announces nothing, so the shade still gets exactly one card.
+     */
+    fun postTerminalNotification(
+        terminal: State,
+        version: String,
+        apkUrl: String,
+        digest: String?,
+    ) {
+        when (terminal) {
+            is State.Ready -> NotificationUtil.notifyUpdateReady(terminal.version, terminal.file.absolutePath)
+            is State.Failed -> NotificationUtil.notifyUpdateFailed(version, terminal.message, apkUrl, digest)
+            else -> NotificationUtil.cancelUpdateNotifications()
         }
     }
 
