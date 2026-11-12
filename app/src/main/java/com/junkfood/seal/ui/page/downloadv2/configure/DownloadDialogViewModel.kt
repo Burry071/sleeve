@@ -291,13 +291,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         template: CommandTemplate,
         preferences: DownloadUtil.DownloadPreferences,
     ) {
-        val task =
-            Task(
-                url = url,
-                type = Task.TypeInfo.CustomCommand(template = template),
-                preferences = preferences,
-            )
-        downloader.enqueue(task)
+        downloader.enqueue(TaskFactory.createCustomCommand(url, template, preferences))
     }
 
     private fun hideDialog() {

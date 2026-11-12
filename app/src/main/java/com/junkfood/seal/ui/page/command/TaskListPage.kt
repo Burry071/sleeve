@@ -52,15 +52,19 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.junkfood.seal.Downloader
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
+import com.junkfood.seal.download.DownloaderV2
+import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskFactory
+import com.junkfood.seal.download.TaskOutputLog
 import com.junkfood.seal.ui.common.HapticFeedback.slightHapticFeedback
 import com.junkfood.seal.ui.common.intState
 import com.junkfood.seal.ui.component.BackButton
@@ -78,13 +82,19 @@ import com.junkfood.seal.ui.page.settings.command.CommandTemplateDialog
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.TEMPLATE_ID
+import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.matchUrlFromString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun TaskListPage(onNavigateBack: () -> Unit, onNavigateToDetail: (Int) -> Unit) {
+fun TaskListPage(
+    onNavigateBack: () -> Unit,
+    onNavigateToDetail: (Int) -> Unit,
+    downloader: DownloaderV2 = koinInject(),
+) {
     val scope = rememberCoroutineScope()
     val view = LocalView.current
 
@@ -127,33 +137,53 @@ fun TaskListPage(onNavigateBack: () -> Unit, onNavigateToDetail: (Int) -> Unit) 
         },
     ) { paddings ->
         val clipboardManager = LocalClipboardManager.current
+        // The queue is the only custom-command machine; this page is a view of
+        // the tasks it holds, not a second list that has to be kept in sync.
+        val taskStateMap = downloader.getTaskStateMap()
         LazyColumn(
             modifier = Modifier.padding(paddings),
             contentPadding = PaddingValues(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(
-                Downloader.mutableTaskList.values.toList().sortedBy { it.state.toStatus() },
-                key = { it.toKey() },
-            ) {
-                it.run {
-                    CustomCommandTaskItem(
-                        status = state.toStatus(),
-                        progress =
-                            if (state is Downloader.CustomCommandTask.State.Running)
-                                state.progress / 100f
-                            else 0f,
-                        progressText = currentLine,
-                        url = url,
-                        templateName = template.name,
-                        onCancel = { onCancel() },
-                        onCopyError = { onCopyError(clipboardManager) },
-                        onRestart = { onRestart() },
-                        onCopyLog = { onCopyLog(clipboardManager) },
-                        onShowLog = { onNavigateToDetail(hashCode()) },
-                        modifier = Modifier.animateItem(),
-                    )
-                }
+                taskStateMap.entries
+                    .filter { it.key.type is Task.TypeInfo.CustomCommand }
+                    .sortedBy { it.value.downloadState.displayRank }
+                    .map { it.key to it.value },
+                key = { it.first.id },
+            ) { (task, state) ->
+                val downloadState = state.downloadState
+                CustomCommandTaskItem(
+                    status = downloadState.toStatus(),
+                    progress = (downloadState as? Task.DownloadState.Running)?.progress ?: 0f,
+                    progressText =
+                        when (downloadState) {
+                            is Task.DownloadState.Running -> downloadState.progressText
+                            is Task.DownloadState.Error -> downloadState.message
+                            // A finished card keeps the command's last line, the
+                            // way the legacy list did.
+                            is Task.DownloadState.Completed -> TaskOutputLog.lastLine(task.id)
+                            else -> ""
+                        },
+                    url = task.url,
+                    templateName = (task.type as Task.TypeInfo.CustomCommand).template.name,
+                    onCancel = { downloader.cancel(task) },
+                    onCopyError = {
+                        val report =
+                            (downloadState as? Task.DownloadState.Error)
+                                ?.throwable
+                                ?.stackTraceToString()
+                                .orEmpty()
+                        clipboardManager.setText(AnnotatedString(report))
+                        ToastUtil.makeToast(R.string.error_copied)
+                    },
+                    onRestart = { downloader.restart(task) },
+                    onCopyLog = {
+                        clipboardManager.setText(AnnotatedString(TaskOutputLog.read(task.id)))
+                    },
+                    onShowLog = { onNavigateToDetail(task.id.hashCode()) },
+                    modifier = Modifier.animateItem(),
+                )
             }
         }
     }
@@ -214,7 +244,9 @@ fun TaskListPage(onNavigateBack: () -> Unit, onNavigateToDetail: (Int) -> Unit) 
                             FilledButtonWithIcon(
                                 onClick = {
                                     view.slightHapticFeedback()
-                                    Downloader.executeCommandWithUrl(url)
+                                    downloader.enqueue(
+                                        TaskFactory.createCustomCommand(url, template)
+                                    )
                                     onDismissRequest()
                                 },
                                 icon = Icons.Outlined.DownloadDone,
@@ -242,12 +274,16 @@ fun TaskListPage(onNavigateBack: () -> Unit, onNavigateToDetail: (Int) -> Unit) 
         )
 }
 
-private fun Downloader.CustomCommandTask.State.toStatus(): TaskStatus =
+private fun Task.DownloadState.toStatus(): TaskStatus =
     when (this) {
-        Downloader.CustomCommandTask.State.Canceled -> TaskStatus.CANCELED
-        Downloader.CustomCommandTask.State.Completed -> TaskStatus.FINISHED
-        is Downloader.CustomCommandTask.State.Error -> TaskStatus.ERROR
-        is Downloader.CustomCommandTask.State.Running -> TaskStatus.RUNNING
+        is Task.DownloadState.Completed -> TaskStatus.FINISHED
+        is Task.DownloadState.Canceled -> TaskStatus.CANCELED
+        is Task.DownloadState.Error -> TaskStatus.ERROR
+        // Queued and starting still read as "in the queue" on this page.
+        Task.DownloadState.Idle,
+        Task.DownloadState.ReadyWithInfo,
+        is Task.DownloadState.FetchingInfo,
+        is Task.DownloadState.Running -> TaskStatus.RUNNING
     }
 
 @Composable
