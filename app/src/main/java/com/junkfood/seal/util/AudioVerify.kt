@@ -77,20 +77,68 @@ object AudioVerify {
                 reason = "downloaded file is missing or empty",
             )
         }
-        val actualMs =
-            runCatching {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(context, Uri.fromFile(file))
-                        retriever
-                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            ?.toLongOrNull()
-                            ?: 0L
-                    } finally {
-                        retriever.release()
-                    }
+        val actualMs = durationMs(context, file)
+        if (actualMs <= 0L) {
+            return VerifyResult(
+                ok = false,
+                actualMs = 0L,
+                expectedMs = expectedMs,
+                reason = "could not measure the downloaded file",
+            )
+        }
+        return if (withinTolerance(actualMs, expectedMs)) {
+            VerifyResult(ok = true, actualMs = actualMs, expectedMs = expectedMs, reason = "")
+        } else {
+            VerifyResult(
+                ok = false,
+                actualMs = actualMs,
+                expectedMs = expectedMs,
+                reason = mismatchReason(actualMs, expectedMs),
+            )
+        }
+    }
+
+    /**
+     * Reads [MediaMetadataRetriever.METADATA_KEY_DURATION] from [file]; 0 when
+     * the file is missing, empty, or the container cannot be read. Blocking.
+     */
+    fun durationMs(context: Context, file: File): Long {
+        if (!file.isFile || file.length() <= 0L) return 0L
+        return runCatching {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, Uri.fromFile(file))
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?: 0L
+                } finally {
+                    retriever.release()
                 }
-                .getOrDefault(0L)
+            }
+            .getOrDefault(0L)
+    }
+
+    /**
+     * Whether an export may take the source's place. A file within two seconds
+     * of the source is the same audio; a shorter one lost content (and a
+     * longer one — only possible with a bad measurement — is not trusted here).
+     */
+    fun canReplaceSource(sourceMs: Long, outputMs: Long): Boolean =
+        sourceMs > 0L && outputMs > 0L && outputMs + 2_000L >= sourceMs
+
+    /**
+     * [verifyDuration]'s comparison without any file access, for callers that
+     * already measured the file (the export measures its own scratch).
+     */
+    fun verifyMeasured(actualMs: Long, expectedMs: Long): VerifyResult {
+        if (expectedMs <= 0L) {
+            return VerifyResult(
+                ok = false,
+                actualMs = 0L,
+                expectedMs = expectedMs,
+                reason = "catalogue runtime unknown",
+            )
+        }
         if (actualMs <= 0L) {
             return VerifyResult(
                 ok = false,

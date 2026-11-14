@@ -570,6 +570,13 @@
     <string name="merge_to_mkv_wins">Merge to MKV wins when both are on</string>
     <string name="container_format">%1$s container</string>
     <string name="converted_to">Converted to %1$s</string>
+    <plurals name="chapter_summary_count">
+        <item quantity="one">%d chapter</item>
+        <item quantity="other">%d chapters</item>
+    </plurals>
+    <string name="export_m4b">Export audiobooks as .m4b</string>
+    <string name="export_m4b_desc">When the source has chapters, save one chaptered audiobook file. The downloaded audio is kept if the export fails.</string>
+    <string name="m4b_not_exported">Audiobook export failed; the audio file was kept</string>
     <string name="merge_space_hint">About %1$s of free space is needed while the container is rewritten</string>
     <string name="output_template_preview">Preview</string>
     <string name="output_template_issue_basename">The template must include %1$s</string>

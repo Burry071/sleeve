@@ -737,6 +737,7 @@ fun DownloadPageImplV2(
                                                 ?: (state.downloadState as? Completed)
                                                     ?.warning
                                                     ?.takeIf { it.isNotBlank() }
+                                                ?: completedNoteLine(state.downloadState)
                                                 // A live capture says what it is
                                                 // while it runs; the line goes
                                                 // once the file is finished.

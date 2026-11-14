@@ -31,6 +31,7 @@ import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.LiveGate
+import com.junkfood.seal.util.M4bTagOverrides
 import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
@@ -1207,14 +1208,28 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      * A mismatch writes the measured duration, re-opens the review entry through
      * the columns phase 1a already renders, and keeps the file: a short book the
      * user can still play beats deleting a download they waited for.
+     *
+     * [localDurationMs] is the measurement the finish line already took while
+     * the file was local — the only one possible for an SD-card task, whose
+     * published path is a `content://` URI no retriever can open.
      */
-    private suspend fun Task.verifyAudibleDuration(path: String): VerifyResult? {
+    private suspend fun Task.verifyAudibleDuration(
+        path: String,
+        localDurationMs: Long,
+    ): VerifyResult? {
         val track = type as? TypeInfo.MetadataTrack ?: return null
         if (!track.provider.equals(AUDIBLE_PROVIDER, ignoreCase = true)) return null
         if (track.durationMs <= 0L) return null
         val result =
-            withContext(Dispatchers.IO) {
-                AudioVerify.verifyDuration(appContext, File(path), track.durationMs)
+            when {
+                localDurationMs > 0L -> AudioVerify.verifyMeasured(localDurationMs, track.durationMs)
+                // Moved to the SD card and never measured there: nothing left
+                // this process can read, so no verdict is better than a false one.
+                path.startsWith("content://") -> return null
+                else ->
+                    withContext(Dispatchers.IO) {
+                        AudioVerify.verifyDuration(appContext, File(path), track.durationMs)
+                    }
             }
         val verdict = if (result.ok) "ok" else "mismatch"
         val measured = "${result.actualMs / 1000L}s of ${result.expectedMs / 1000L}s"
@@ -1238,6 +1253,21 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         return result
     }
 
+    /**
+     * Catalogue tags for the export, when the file came from a matched metadata
+     * track. A blank field stays blank: an absent album is never filled with the
+     * provider's name.
+     */
+    private fun TypeInfo.MetadataTrack.toM4bTagOverrides(): M4bTagOverrides =
+        M4bTagOverrides(
+            artist = artist.trim().ifBlank { null },
+            albumArtist = authors.trim().ifBlank { null },
+            album = album.trim().ifBlank { null },
+            // The catalogue carries no track number; the position in the batch is
+            // the only number there is. A lone book is not "track 1".
+            track = if (index > 0) index + 1 else null,
+        )
+
     private fun Task.download() {
         if (downloadState != ReadyWithInfo || info == null) return
         if (type is TypeInfo.CustomCommand) {
@@ -1257,6 +1287,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 val isActive = {
                     runJob?.isActive == true && (downloadState as? Running)?.job === runJob
                 }
+                // The finish line reports two things back before the card is
+                // written: one local duration measurement (the Audible check
+                // needs it) and any rider on an otherwise successful download.
+                var localDurationMs = 0L
+                val completedNotes = mutableListOf<CompletedNote>()
+                val m4bTagOverrides = (type as? TypeInfo.MetadataTrack)?.toM4bTagOverrides()
                 DownloadUtil.downloadVideo(
                         videoInfo = info,
                         taskId = id,
@@ -1271,6 +1307,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             }
                         },
                         isActive = isActive,
+                        m4bTagOverrides = m4bTagOverrides,
+                        onNote = { completedNotes += it },
+                        onLocalDurationMs = { localDurationMs = it },
                         progressCallback = { progressPercentage, _, text ->
                             val progress = progressPercentage / 100f
                             val preState = downloadState
@@ -1306,6 +1345,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                     }
                                 },
                                 isActive = isActive,
+                                m4bTagOverrides = m4bTagOverrides,
+                                onNote = { completedNotes += it },
+                                onLocalDurationMs = { localDurationMs = it },
                                 progressCallback = { progressPercentage, _, text ->
                                     val progress = progressPercentage / 100f
                                     val preState = downloadState
@@ -1342,7 +1384,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         // pick, this proves the file that actually landed. A
                         // failed check must not delete the old file/row a swap
                         // was about to replace.
-                        val verify = newPath?.let { verifyAudibleDuration(it) }
+                        val verify = newPath?.let { verifyAudibleDuration(it, localDurationMs) }
                         if (verify != null && !verify.ok) {
                             // Keep the old pick/file/row; drop the parked path
                             // and make the short replacement a reviewable warning.
@@ -1366,7 +1408,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 )
                             applyTransition(
                                 task,
-                                Completed(keepPath, warning = warning),
+                                Completed(
+                                    keepPath,
+                                    warning = warning,
+                                    notes = completedNotes.distinct(),
+                                ),
                             ) { it is Running && it.job === runJob }
                         } else {
                             cleanupSwappedFile(id, newPath)
@@ -1378,9 +1424,14 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                         (expectedMs / 1000L).toInt().toDurationText(),
                                     )
                                 }.orEmpty()
-                            applyTransition(task, Completed(newPath, warning = warning)) {
-                                it is Running && it.job === runJob
-                            }
+                            applyTransition(
+                                task,
+                                Completed(
+                                    newPath,
+                                    warning = warning,
+                                    notes = completedNotes.distinct(),
+                                ),
+                            ) { it is Running && it.job === runJob }
                         }
                     }
                     .onFailure { throwable ->

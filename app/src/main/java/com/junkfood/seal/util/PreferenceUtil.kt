@@ -35,6 +35,7 @@ import kotlinx.serialization.json.Json
 const val CUSTOM_COMMAND = "custom_command"
 const val CONCURRENT = "concurrent_fragments"
 const val EXTRACT_AUDIO = "extract_audio"
+const val EXPORT_M4B = "export_m4b"
 const val THUMBNAIL = "create_thumbnail"
 const val YT_DLP_VERSION = "yt-dlp_init"
 const val YT_DLP_AUTO_UPDATE = "yt-dlp_update"
@@ -235,6 +236,7 @@ private val BooleanPreferenceDefaults =
         USE_CUSTOM_AUDIO_PRESET to false,
         PLAYLIST_NUMBERING to false,
         PREFER_MP4 to false,
+        EXPORT_M4B to false,
     )
 
 private val IntPreferenceDefaults =

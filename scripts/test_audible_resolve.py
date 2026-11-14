@@ -93,6 +93,26 @@ class AsinExtractionTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertIn("keywords=Dune", self.api.calls[0])
 
+    def test_track_carries_no_invented_album(self):
+        # The catalogue has no album field; the old "Audible" placeholder would
+        # be written into every exported .m4b as if it were real metadata.
+        result = json.loads(sleeve_audible.resolve("B08G9PRS1K"))
+        self.assertTrue(result["ok"], result)
+        track = result["tracks"][0]
+        self.assertNotIn("album", track)
+        self.assertEqual(track["artist"], "Author (narrated by Narrator)")
+        self.assertEqual(track["authors"], "Author")
+
+    def test_queries_are_unchanged_by_the_tag_work(self):
+        sleeve_audible.resolve("B08G9PRS1K")
+        self.assertEqual(
+            self.api.calls,
+            [
+                "https://api.audible.com/1.0/catalog/products/B08G9PRS1K"
+                "?response_groups=product_attrs,contributors,product_desc"
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

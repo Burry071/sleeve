@@ -20,7 +20,7 @@ import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-const val AUDIO_REGEX = "(mp3|aac|opus|m4a)$"
+const val AUDIO_REGEX = "(mp3|m4a|m4b|aac|opus)$"
 const val THUMBNAIL_REGEX = "\\.(jpg|png)$"
 const val SUBTITLE_REGEX = "\\.(lrc|vtt|srt|ass|json3|srv.|ttml)$"
 private const val PRIVATE_DIRECTORY_SUFFIX = ".Seal"

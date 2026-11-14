@@ -14,6 +14,7 @@ import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.database.objects.DownloadedVideoInfo
+import com.junkfood.seal.download.CompletedNote
 import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.MatchResult
@@ -40,6 +41,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -676,6 +678,9 @@ object DownloadUtil {
         // items). Instagram CDN hosts 403 without it. Default keeps backups
         // written before this field decodable.
         val referer: String = "",
+        // Chaptered audio becomes one .m4b beside the audio switch. Defaulted
+        // so backups written before this field still decode.
+        val exportM4b: Boolean = false,
     ) {
         companion object {
             val EMPTY =
@@ -732,6 +737,7 @@ object DownloadUtil {
                     mergeToMkv = false,
                     useCustomAudioPreset = false,
                     galleryDirect = false,
+                    exportM4b = false,
                 )
 
             fun createFromPreferences(): DownloadPreferences {
@@ -792,6 +798,7 @@ object DownloadUtil {
                     mergeToMkv =
                         (downloadSubtitle && embedSubtitle) || MERGE_OUTPUT_MKV.getBoolean(),
                     galleryDirect = false,
+                    exportM4b = EXPORT_M4B.getBoolean(),
                 )
             }
         }
@@ -1229,11 +1236,14 @@ object DownloadUtil {
      *
      * @return null when this download was NOT handled (caller falls back).
      */
-    private fun runNm3u8DlReIfEligible(
+    private suspend fun runNm3u8DlReIfEligible(
         videoInfo: VideoInfo,
         preferences: DownloadPreferences,
         taskId: String,
         progressCallback: ((Float, Long, String) -> Unit)?,
+        isActive: () -> Boolean = { true },
+        onNote: (CompletedNote) -> Unit = {},
+        onLocalDurationMs: (Long) -> Unit = {},
     ): Result<List<String>>? {
         if (!GHOST_ENGINE.getBoolean()) return null
         val bin =
@@ -1385,6 +1395,10 @@ object DownloadUtil {
             downloadPath = downloadDir,
             sdcardUri = preferences.sdcardUri,
             startedAtMs = nreStartedAtMs,
+            produced = target,
+            isActive = isActive,
+            onNote = onNote,
+            onLocalDurationMs = onLocalDurationMs,
         )
     }
 
@@ -1396,11 +1410,14 @@ object DownloadUtil {
      *
      * @return null when this download was NOT handled (caller falls back to yt-dlp).
      */
-    private fun runGhostDownloadIfEligible(
+    private suspend fun runGhostDownloadIfEligible(
         videoInfo: VideoInfo,
         preferences: DownloadPreferences,
         taskId: String,
         progressCallback: ((Float, Long, String) -> Unit)?,
+        isActive: () -> Boolean = { true },
+        onNote: (CompletedNote) -> Unit = {},
+        onLocalDurationMs: (Long) -> Unit = {},
     ): Result<List<String>>? {
         if (!GHOST_ENGINE.getBoolean() && !preferences.galleryDirect) {
             Log.d(TAG, "Ghost handoff skipped: engine disabled")
@@ -1592,32 +1609,31 @@ object DownloadUtil {
                     preferences = preferences,
                 )
             }
+            return onFinishDownloading(
+                preferences = preferences,
+                videoInfo = videoInfo,
+                downloadPath = downloadDir,
+                sdcardUri = preferences.sdcardUri,
+                startedAtMs = engineStartedAtMs,
+                produced = produced,
+                isActive = isActive,
+                onNote = onNote,
+                onLocalDurationMs = onLocalDurationMs,
+            )
         }
 
-        return when (outcome?.state) {
-            TaskState.COMPLETED ->
-                onFinishDownloading(
-                    preferences = preferences,
-                    videoInfo = videoInfo,
-                    downloadPath = downloadDir,
-                    sdcardUri = preferences.sdcardUri,
-                    startedAtMs = engineStartedAtMs,
-                )
-            else -> {
-                val reason =
-                    outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
-                Log.w(TAG, "Ghost engine failed for $taskId: $reason")
-                // A failed transfer leaves either a single-stream partial, the
-                // staging file, or the segment directory; none is media, and a
-                // later retry would scan them as output. Drop them now.
-                File(downloadDir).listFiles()?.forEach { file ->
-                    if (file.name == fileName || file.name.startsWith("$fileName.")) {
-                        file.deleteRecursively()
-                    }
-                }
-                Result.failure(YoutubeDLException("Ghost engine: $reason"))
+        val reason =
+            outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
+        Log.w(TAG, "Ghost engine failed for $taskId: $reason")
+        // A failed transfer leaves either a single-stream partial, the
+        // staging file, or the segment directory; none is media, and a
+        // later retry would scan them as output. Drop them now.
+        File(downloadDir).listFiles()?.forEach { file ->
+            if (file.name == fileName || file.name.startsWith("$fileName.")) {
+                file.deleteRecursively()
             }
         }
+        return Result.failure(YoutubeDLException("Ghost engine: $reason"))
     }
 
     /**
@@ -1701,7 +1717,7 @@ object DownloadUtil {
     }
 
     @CheckResult
-    fun downloadVideo(
+    suspend fun downloadVideo(
         videoInfo: VideoInfo? = null,
         playlistUrl: String = "",
         playlistItem: Int = 0,
@@ -1719,6 +1735,12 @@ object DownloadUtil {
         onProcessStarted: (String) -> Unit = {},
         /** False once the task was canceled; checked before every attempt. */
         isActive: () -> Boolean = { true },
+        /** Catalogue fields for the .m4b export, when the task has them. */
+        m4bTagOverrides: M4bTagOverrides? = null,
+        /** A secondary remark the card should carry on success. */
+        onNote: (CompletedNote) -> Unit = {},
+        /** Duration of the first published local file, measured before any move. */
+        onLocalDurationMs: (Long) -> Unit = {},
     ): Result<List<String>> {
         if (videoInfo == null)
             return Result.failure(Throwable(context.getString(R.string.fetch_info_error_msg)))
@@ -1754,6 +1776,9 @@ object DownloadUtil {
                 preferences = downloadPreferences,
                 taskId = taskId,
                 progressCallback = progressCallback,
+                isActive = isActive,
+                onNote = onNote,
+                onLocalDurationMs = onLocalDurationMs,
             )?.let { return it }
 
             // Ghost engine handoff: when the embedded engine can transfer this
@@ -1767,6 +1792,9 @@ object DownloadUtil {
                     preferences = downloadPreferences,
                     taskId = taskId,
                     progressCallback = progressCallback,
+                    isActive = isActive,
+                    onNote = onNote,
+                    onLocalDurationMs = onLocalDurationMs,
                 )
                 ?.let { ghostResult ->
                     if (ghostResult.isSuccess) return ghostResult
@@ -1789,6 +1817,16 @@ object DownloadUtil {
                     "tv",
                 )
             val downloadStartedAtMs = System.currentTimeMillis()
+            // The export needs the exact file THIS attempt wrote, not a guess
+            // from the folder. Asking yt-dlp for it is additive; the report is
+            // a cache file read once and removed. Reports a crashed run left
+            // behind are stale by definition.
+            val m4bPlanned = M4bPlan.applies(videoInfo, downloadPreferences)
+            if (m4bPlanned) {
+                context.cacheDir?.listFiles()?.forEach { stale ->
+                    if (stale.name.startsWith("m4b_path_${taskId}_")) stale.delete()
+                }
+            }
             for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
                 if (!isActive()) return Result.failure(CancellationException("task canceled"))
                 val processId = processIdFactory()
@@ -1802,6 +1840,10 @@ object DownloadUtil {
                 }
                 val pathBuilder = StringBuilder()
                 val outputBuilder = StringBuilder()
+                val pathReport =
+                    if (m4bPlanned) File(context.cacheDir, "m4b_path_${taskId}_$processId.txt")
+                    else null
+                pathReport?.delete()
 
                 val attemptFailure =
                     request
@@ -1954,6 +1996,16 @@ object DownloadUtil {
 
                         addOption("-o", outputBuilder.append(output).toString())
 
+                        if (pathReport != null) {
+                            addCommands(
+                                listOf(
+                                    "--print-to-file",
+                                    "after_move:filepath",
+                                    pathReport.absolutePath,
+                                )
+                            )
+                        }
+
                         for (s in request.buildCommand()) Log.d(TAG, s)
                     }
                     .runCatching {
@@ -1965,6 +2017,14 @@ object DownloadUtil {
                             )
                     }
                     .exceptionOrNull()
+                val produced =
+                    pathReport?.let { report ->
+                        val outDir =
+                            if (sdcard) context.getSdcardTempDir(videoInfo.id)
+                            else File(pathBuilder.toString())
+                        M4bPlan.producedFrom(report, outDir)
+                    }
+                pathReport?.delete()
                 if (attemptFailure == null) {
                     return onFinishDownloading(
                         preferences = this,
@@ -1972,6 +2032,11 @@ object DownloadUtil {
                         downloadPath = pathBuilder.toString(),
                         sdcardUri = sdcardUri,
                         startedAtMs = downloadStartedAtMs,
+                        produced = produced,
+                        m4bTagOverrides = m4bTagOverrides,
+                        isActive = isActive,
+                        onNote = onNote,
+                        onLocalDurationMs = onLocalDurationMs,
                     )
                 }
                 val failureMessage = attemptFailure.message.orEmpty()
@@ -2000,6 +2065,11 @@ object DownloadUtil {
                         downloadPath = pathBuilder.toString(),
                         sdcardUri = sdcardUri,
                         startedAtMs = downloadStartedAtMs,
+                        produced = produced,
+                        m4bTagOverrides = m4bTagOverrides,
+                        isActive = isActive,
+                        onNote = onNote,
+                        onLocalDurationMs = onLocalDurationMs,
                     )
                 }
                 Log.e(
@@ -2014,69 +2084,162 @@ object DownloadUtil {
         }
     }
 
-    private fun onFinishDownloading(
+    /**
+     * The single finish line every lane goes through. Runs under
+     * [NonCancellable]: once a lane has reported its file, the export, the
+     * scratch rename, the source removal, the media scan and the insert form
+     * one publish decision that a cancel must not tear in half.
+     */
+    private suspend fun onFinishDownloading(
         preferences: DownloadPreferences,
         videoInfo: VideoInfo,
         downloadPath: String,
         sdcardUri: String,
         startedAtMs: Long? = null,
+        /** The exact file this lane wrote; null when the lane cannot name it. */
+        produced: File? = null,
+        m4bTagOverrides: M4bTagOverrides? = null,
+        isActive: () -> Boolean = { true },
+        onNote: (CompletedNote) -> Unit = {},
+        onLocalDurationMs: (Long) -> Unit = {},
     ): Result<List<String>> =
-        preferences.run {
-            val fileName =
-                (preferences.newTitle.ifEmpty {
-                    videoInfo.filename
-                        ?: videoInfo.requestedDownloads?.firstOrNull()?.filename
-                        ?: videoInfo.title
-                }).substringBefore('?').take(150)
+        withContext(NonCancellable) {
+            preferences.run {
+                val fileName =
+                    (preferences.newTitle.ifEmpty {
+                        videoInfo.filename
+                            ?: videoInfo.requestedDownloads?.firstOrNull()?.filename
+                            ?: videoInfo.title
+                    }).substringBefore('?').take(150)
 
-            Log.d(TAG, "onFinishDownloading: $fileName")
-            val savedFiles =
-                if (sdcard) {
-                    moveFilesToSdcard(
-                        sdcardUri = sdcardUri,
-                        tempPath = context.getSdcardTempDir(videoInfo.id),
-                    )
-                } else {
-                    Result.success(
-                        FileUtil.scanFileToMediaLibraryPostDownload(
-                            title = fileName,
-                            downloadDir = downloadPath,
-                            // The disk filename can fail the title match
-                            // (--trim-filenames 80, sanitized quick-download
-                            // titles): a title-only scan returns an empty list
-                            // and the history insert never runs, silently
-                            // dropping the completed task from Downloads.
-                            // Files modified since the download started are
-                            // the real match.
-                            modifiedAfterMs = startedAtMs,
-                            // Gallery/photo items are pictures, not thumbnail
-                            // sidecars: keep them in the completed set.
-                            keepImages = galleryDirect,
-                        )
-                    )
-                }
-            savedFiles.fold(
-                onSuccess = { paths ->
-                    Log.d(TAG, "history insert: ${paths.size} file(s) $paths")
+                Log.d(TAG, "onFinishDownloading: $fileName")
+
+                val source = produced?.takeIf { it.isFile && it.length() > 0L }
+                var exported: File? = null
+                var exportPlan: M4bPlan? = null
+                if (M4bPlan.applies(videoInfo, preferences)) {
                     when {
-                        // Private mode deliberately keeps files out of history.
-                        privateMode -> Result.success(emptyList())
-                        // No output means the transfer did not really finish.
-                        // Reporting success here would render the card as
-                        // "Downloaded" with no file behind it.
-                        paths.isEmpty() ->
-                            Result.failure(
-                                IllegalStateException(
-                                    context.getString(R.string.download_error_msg)
+                        // Planned, but the lane could not name its file: there
+                        // is nothing to feed ffmpeg, and what landed is not the
+                        // .m4b the user asked for.
+                        source == null -> onNote(CompletedNote.M4B_NOT_EXPORTED)
+                        source.extension.equals("m4b", ignoreCase = true) -> Unit
+                        else -> {
+                            val plan =
+                                M4bPlan(
+                                    source = source,
+                                    chapters = videoInfo.chapters.orEmpty(),
+                                    tags =
+                                        M4bTags.from(videoInfo, m4bTagOverrides).let { tags ->
+                                            tags.copy(title = newTitle.ifEmpty { tags.title })
+                                        },
+                                    copyAudio =
+                                        source.extension.lowercase() == "m4a" ||
+                                            source.extension.lowercase() == "mp4",
+                                    ownedDir = sdcard,
+                                )
+                            val result = exportToM4b(context, plan, isActive)
+                            result.noteOnFailure()?.let(onNote)
+                            when (result) {
+                                is M4bExportResult.Verified -> {
+                                    exportPlan = plan
+                                    exported = result.out
+                                }
+                                M4bExportResult.Cancelled ->
+                                    return@run Result.failure(
+                                        CancellationException("m4b export cancelled"),
+                                    )
+                                M4bExportResult.Failed -> Unit
+                            }
+                        }
+                    }
+                }
+
+                // (b)+(c) The verified scratch becomes the published name, and
+                // the source it replaces goes away. A rename that fails keeps
+                // the source and downgrades the whole export to a note.
+                val plan = exportPlan
+                if (plan != null && exported != null) {
+                    if (plan.scratch.isFile && !plan.scratch.renameTo(exported)) {
+                        Log.w(TAG, "m4b: could not rename ${plan.scratch.name}")
+                        plan.scratch.delete()
+                        exported = null
+                    }
+                    if (exported != null && !exported.isFile) exported = null
+                    if (exported != null) {
+                        source?.delete()
+                    } else {
+                        onNote(CompletedNote.M4B_NOT_EXPORTED)
+                    }
+                }
+
+                // One local measurement, before any SD move: the Audible check
+                // compares this instead of re-reading a file that the move may
+                // already have taken away.
+                val local = exported ?: source
+                onLocalDurationMs(local?.let { AudioVerify.durationMs(context, it) } ?: 0L)
+
+                val savedFiles =
+                    if (sdcard) {
+                        var exportUri: String? = null
+                        moveFilesToSdcard(
+                                sdcardUri = sdcardUri,
+                                tempPath = context.getSdcardTempDir(videoInfo.id),
+                                onCopied = { copiedName, destUri ->
+                                    if (copiedName == exported?.name) exportUri = destUri
+                                },
+                            )
+                            .map { paths ->
+                                val uri = exportUri
+                                if (uri != null) listOf(uri) + paths.filter { it != uri } else paths
+                            }
+                    } else {
+                        Result.success(
+                                FileUtil.scanFileToMediaLibraryPostDownload(
+                                    title = fileName,
+                                    downloadDir = downloadPath,
+                                    // The disk filename can fail the title match
+                                    // (--trim-filenames 80, sanitized quick-download
+                                    // titles): a title-only scan returns an empty list
+                                    // and the history insert never runs, silently
+                                    // dropping the completed task from Downloads.
+                                    // Files modified since the download started are
+                                    // the real match.
+                                    modifiedAfterMs = startedAtMs,
+                                    // Gallery/photo items are pictures, not thumbnail
+                                    // sidecars: keep them in the completed set.
+                                    keepImages = galleryDirect,
                                 )
                             )
-                        splitByChapter ->
-                            Result.success(insertSplitChapterIntoHistory(videoInfo, paths))
-                        else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
+                            .map { paths ->
+                                val target = exported?.absolutePath
+                                if (target != null) listOf(target) + paths.filter { it != target }
+                                else paths
+                            }
                     }
-                },
-                onFailure = { Result.failure(it) },
-            )
+                savedFiles.fold(
+                    onSuccess = { paths ->
+                        Log.d(TAG, "history insert: ${paths.size} file(s) $paths")
+                        when {
+                            // Private mode deliberately keeps files out of history.
+                            privateMode -> Result.success(emptyList())
+                            // No output means the transfer did not really finish.
+                            // Reporting success here would render the card as
+                            // "Downloaded" with no file behind it.
+                            paths.isEmpty() ->
+                                Result.failure(
+                                    IllegalStateException(
+                                        context.getString(R.string.download_error_msg)
+                                    )
+                                )
+                            splitByChapter ->
+                                Result.success(insertSplitChapterIntoHistory(videoInfo, paths))
+                            else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
+                        }
+                    },
+                    onFailure = { Result.failure(it) },
+                )
+            }
         }
 
     /**
