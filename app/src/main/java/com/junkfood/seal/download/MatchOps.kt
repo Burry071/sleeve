@@ -1,5 +1,9 @@
 package com.junkfood.seal.download
 
+import com.junkfood.seal.util.DownloadErrorMessages
+import com.junkfood.seal.util.LiveGate
+import com.junkfood.seal.util.DownloadErrorMessages.NotReadyError
+
 /**
  * Pure rules for catalogue matches: low-confidence flags and the audible
  * pre-download gate.
@@ -83,11 +87,24 @@ object MatchOps {
      * as "start downloading", and the whole point of the gate is to spend zero
      * bytes on an unverified pick. `Canceled` counts as finished, which is what
      * surfaces the existing review entry.
+     *
+     * A live gate refusal arrives here instead of at fetch time only when the
+     * match itself resolves the metadata; it must land on `Error` before the
+     * media request, so the pick can be retried once the stream is ready.
      */
-    fun resolvedState(match: MatchResult): Task.DownloadState =
-        if (match.held) {
-            Task.DownloadState.Canceled(Task.RestartableAction.Download)
-        } else {
-            Task.DownloadState.ReadyWithInfo
+    fun resolvedState(match: MatchResult, liveStatus: String? = null): Task.DownloadState =
+        when (val live = LiveGate.decide(liveStatus)) {
+            is LiveGate.Decision.Refuse ->
+                Task.DownloadState.Error(
+                    NotReadyError(live.reasonRes),
+                    Task.RestartableAction.FetchInfo,
+                    reason = DownloadErrorMessages.errorReasonOf(NotReadyError(live.reasonRes)),
+                )
+            is LiveGate.Decision.Allow ->
+                if (match.held) {
+                    Task.DownloadState.Canceled(Task.RestartableAction.Download)
+                } else {
+                    Task.DownloadState.ReadyWithInfo
+                }
         }
 }

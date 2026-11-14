@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -27,8 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.junkfood.seal.App
 import com.junkfood.seal.R
+import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.ui.common.Route
 import com.junkfood.seal.ui.common.booleanState
 import com.junkfood.seal.ui.component.PreferenceInfo
@@ -38,22 +39,26 @@ import com.junkfood.seal.ui.component.PreferenceSwitch
 import com.junkfood.seal.ui.component.PreferencesGroupCard
 import com.junkfood.seal.ui.page.settings.BasePreferencePage
 import com.junkfood.seal.ui.page.settings.general.YtdlpUpdateChannelDialog
+import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.RESTRICT_FILENAMES
+import com.junkfood.seal.util.UpdateOutcome
 import com.junkfood.seal.util.UpdateUtil
-import com.junkfood.seal.util.YT_DLP_VERSION
+import com.junkfood.seal.util.UpdaterPolicy
+import com.junkfood.seal.util.YT_DLP_LAST_FAILURE_REASON
+import com.junkfood.seal.util.YT_DLP_UPDATE_FAILURES
 import com.junkfood.seal.util.makeToast
 import com.yausername.youtubedl_android.YoutubeDL
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
 
 @Composable
 fun TroubleShootingPage(
     modifier: Modifier = Modifier,
     onNavigateTo: (String) -> Unit,
     onBack: () -> Unit,
+    downloader: DownloaderV2 = koinInject(),
 ) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
@@ -101,15 +106,33 @@ fun TroubleShootingPage(
                 var isUpdating by remember { mutableStateOf(false) }
                 var showYtdlpDialog by remember { mutableStateOf(false) }
 
-                var ytdlpVersion by remember {
-                    mutableStateOf(
+                // Bumped after every attempt so the engine version and the
+                // failure suffix are re-read once the outcome is known.
+                var versionTick by remember { mutableIntStateOf(0) }
+                val engineVersion =
+                    remember(versionTick) {
                         YoutubeDL.getInstance().version(context.applicationContext)
-                            ?: context.getString(R.string.ytdlp_update)
-                    )
+                    }
+                val versionLine = engineVersion ?: context.getString(R.string.ytdlp_update)
+                val failureCount = remember(versionTick) { YT_DLP_UPDATE_FAILURES.getInt() }
+                val failureReason = remember(versionTick) {
+                    YT_DLP_LAST_FAILURE_REASON.getString()
                 }
+                // The suffix only ever sits next to a real version string, and
+                // only from the second consecutive failure.
+                val description =
+                    if (engineVersion != null && failureCount >= 2 && failureReason.isNotBlank()) {
+                        stringResource(
+                            R.string.ytdlp_update_failed_suffix,
+                            engineVersion,
+                            failureReason,
+                        )
+                    } else {
+                        versionLine
+                    }
                 PreferenceItem(
                     title = stringResource(id = R.string.ytdlp_update_action),
-                    description = ytdlpVersion,
+                    description = description,
                     leadingIcon = {
                         if (isUpdating) {
                             CircularProgressIndicator(
@@ -128,29 +151,37 @@ fun TroubleShootingPage(
                         }
                     },
                     onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            runCatching {
-                                    isUpdating = true
-                                    UpdateUtil.updateYtDlp()
-                                    ytdlpVersion = YT_DLP_VERSION.getString()
-                                }
-                                .onFailure { th ->
-                                    th.printStackTrace()
-                                    withContext(Dispatchers.Main) {
-                                        context.makeToast(
-                                            App.context.getString(R.string.yt_dlp_update_fail)
-                                        )
+                        when {
+                            isUpdating -> Unit
+                            !UpdaterPolicy.canAttempt(downloader.activeTransfers()) ->
+                                context.makeToast(R.string.ytdlp_update_finish_downloads)
+                            else -> {
+                                UpdateUtil.beginManualAttempt()
+                                isUpdating = true
+                                versionTick++
+                                scope.launch {
+                                    val outcome = UpdateUtil.updateYtDlp()
+                                    isUpdating = false
+                                    versionTick++
+                                    when (outcome) {
+                                        is UpdateOutcome.Succeeded ->
+                                            context.makeToast(
+                                                context.getString(R.string.yt_dlp_up_to_date) +
+                                                    (outcome.version?.let { " ($it)" } ?: "")
+                                            )
+                                        is UpdateOutcome.Failed -> {
+                                            outcome.cause.printStackTrace()
+                                            context.makeToast(
+                                                context.getString(R.string.yt_dlp_update_fail)
+                                            )
+                                        }
+                                        UpdateOutcome.Busy ->
+                                            context.makeToast(
+                                                context.getString(R.string.ytdlp_update_busy)
+                                            )
                                     }
                                 }
-                                .onSuccess {
-                                    withContext(Dispatchers.Main) {
-                                        context.makeToast(
-                                            context.getString(R.string.yt_dlp_up_to_date) +
-                                                " (${YT_DLP_VERSION.getString()})"
-                                        )
-                                    }
-                                }
-                            isUpdating = false
+                            }
                         }
                     },
                     onClickLabel = stringResource(id = R.string.update),

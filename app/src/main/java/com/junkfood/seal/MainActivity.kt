@@ -65,6 +65,11 @@ class MainActivity : AppCompatActivity() {
     // Single-instance launch mode delivers a cold-start share intent to
     // onCreate, so both entry points must route through the same handler.
     private fun handleIntent(intent: Intent) {
+        intent.getStringExtra(NotificationUtil.EXTRA_OPEN_ROUTE)?.let { route ->
+            intent.removeExtra(NotificationUtil.EXTRA_OPEN_ROUTE)
+            dialogViewModel.requestRoute(route)
+            return
+        }
         intent.getStringExtra(NotificationUtil.EXTRA_REVIEW_BATCH_ID)?.let { batchId ->
             intent.removeExtra(NotificationUtil.EXTRA_REVIEW_BATCH_ID)
             dialogViewModel.openMatchReview(batchId)

@@ -164,6 +164,18 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mMatchReviewBatchFlow.value = null
     }
 
+    /** A destination the shell should open at once; set by notification actions. */
+    private val mRouteRequestFlow = MutableStateFlow<String?>(null)
+    val routeRequestFlow = mRouteRequestFlow.asStateFlow()
+
+    fun requestRoute(route: String) {
+        mRouteRequestFlow.value = route
+    }
+
+    fun consumeRouteRequest() {
+        mRouteRequestFlow.value = null
+    }
+
     private val sheetState
         get() = sheetStateFlow.value
 

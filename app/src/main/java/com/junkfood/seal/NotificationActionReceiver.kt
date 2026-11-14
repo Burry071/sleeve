@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.util.AppUpdateManager
@@ -26,6 +27,7 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
         const val ACTION_ERROR_REPORT = 1
         const val ACTION_INSTALL_UPDATE = 2
         const val ACTION_CANCEL_UPDATE = 3
+        const val ACTION_UPDATE_YTDLP = 4
 
         const val ACTION_KEY = PACKAGE_NAME_PREFIX + "action"
         const val TASK_ID_KEY = PACKAGE_NAME_PREFIX + "taskId"
@@ -58,7 +60,38 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
             }
 
             ACTION_CANCEL_UPDATE -> AppUpdateManager.cancelDownload()
+
+            ACTION_UPDATE_YTDLP -> updateYtdlp(notificationId, intent.getStringExtra(TASK_ID_KEY))
         }
+    }
+
+    private fun updateYtdlp(notificationId: Int, taskId: String?) {
+        val ctx = context ?: return
+        // Replacing the engine while a transfer is mid-flight pulls the binary
+        // out from under it; the failure stays put until the queue drains.
+        if (downloader.activeTransfers() > 0) {
+            ToastUtil.makeToastSuspend(ctx.getString(R.string.ytdlp_update_finish_downloads))
+            return
+        }
+        NotificationUtil.cancelNotification(notificationId)
+        // A startForegroundService() that throws leaves the user with no
+        // feedback at all; say so instead.
+        runCatching {
+            ContextCompat.startForegroundService(
+                ctx,
+                Intent(ctx, UpdateDownloadService::class.java)
+                    .putExtra(UpdateDownloadService.EXTRA_ENGINE_UPDATE, true)
+                    .putExtra(TASK_ID_KEY, taskId),
+            )
+        }
+            .onFailure {
+                Log.w(TAG, "engine update could not start", it)
+                NotificationUtil.finishNotification(
+                    notificationId = NotificationUtil.YTDLP_UPDATE_NOTIFICATION_ID,
+                    title = ctx.getString(R.string.ytdlp_update_action),
+                    text = ctx.getString(R.string.ytdlp_update_could_not_start),
+                )
+            }
     }
 
     private fun cancelTask(taskId: String?, notificationId: Int) {

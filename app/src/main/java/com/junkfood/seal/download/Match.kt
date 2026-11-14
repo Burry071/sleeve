@@ -185,6 +185,9 @@ enum class SwapOutcome {
     Busy,
     Missing,
     FetchFailed,
+
+    /** The pick resolves to a stream that cannot produce a file yet. */
+    Refused,
 }
 
 /** One user-safe status line for the review sheet; never carries a stack trace. */

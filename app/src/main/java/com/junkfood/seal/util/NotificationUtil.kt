@@ -22,15 +22,32 @@ import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_CANCEL_UPDA
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_ERROR_REPORT
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_INSTALL_UPDATE
 import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_KEY
+import com.junkfood.seal.NotificationActionReceiver.Companion.ACTION_UPDATE_YTDLP
 import com.junkfood.seal.NotificationActionReceiver.Companion.APK_PATH_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.ERROR_REPORT_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.NOTIFICATION_ID_KEY
 import com.junkfood.seal.NotificationActionReceiver.Companion.TASK_ID_KEY
 import com.junkfood.seal.R
 import com.junkfood.seal.UpdateDownloadService
+import com.junkfood.seal.ui.common.Route
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 
 private const val TAG = "NotificationUtil"
+
+/**
+ * PendingIntents are matched by request code *and* intent contents, and a
+ * notification's actions often differ only in an extra. One id per action
+ * keeps them from replacing each other.
+ */
+internal const val REQUEST_CODE_STRIDE = 10
+
+internal fun pendingIntentRequestCode(notificationId: Int, action: Int): Int =
+    notificationId * REQUEST_CODE_STRIDE + action
+
+private const val REQUEST_REPORT = 0
+private const val REQUEST_RETRY = 1
+private const val REQUEST_ADD_COOKIES = 2
+private const val REQUEST_UPDATE_YTDLP = 3
 
 @SuppressLint("StaticFieldLeak")
 object NotificationUtil {
@@ -45,9 +62,13 @@ object NotificationUtil {
     private const val DEFAULT_NOTIFICATION_ID = 100
     const val SERVICE_NOTIFICATION_ID = 123
     const val UPDATE_NOTIFICATION_ID = 200
+    const val YTDLP_UPDATE_NOTIFICATION_ID = 202
 
     /** Deep-link payload: the batch whose match review should open. */
     const val EXTRA_REVIEW_BATCH_ID = "extra_review_batch_id"
+
+    /** Deep-link payload: a destination the shell should open at once. */
+    const val EXTRA_OPEN_ROUTE = "extra_open_route"
     private lateinit var serviceNotification: Notification
 
     //    private var builder =
@@ -128,6 +149,21 @@ object NotificationUtil {
                 )
                 .build()
         notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
+        return notification
+    }
+
+    /** Foreground notification for the engine update started from a failure. */
+    fun notifyYtdlpUpdating(): Notification {
+        val notification =
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_seal)
+                .setContentTitle(context.getString(R.string.ytdlp_update_action))
+                .setProgress(0, 0, true)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setForegroundServiceBehavior(FOREGROUND_SERVICE_IMMEDIATE)
+                .build()
+        notificationManager.notify(YTDLP_UPDATE_NOTIFICATION_ID, notification)
         return notification
     }
 
@@ -401,9 +437,11 @@ object NotificationUtil {
     }
 
     /**
-     * A login-walled extraction is recoverable once the user signs in, so the
-     * failure notification offers a one-tap route back into the confirm sheet
-     * with the same URL instead of forcing them to re-share the link.
+     * A failure notification whose actions match the recovery that applies:
+     * retry with the cookies already imported, import cookies first, or update
+     * the engine when the extractor itself broke. Every action gets its own
+     * PendingIntent request code — two actions sharing one on the same
+     * notification would silently replace each other.
      */
     fun notifyError(
         title: String,
@@ -412,10 +450,13 @@ object NotificationUtil {
         report: String,
         url: String? = null,
         withCookieRetry: Boolean = false,
+        withAddCookies: Boolean = false,
+        withExtractorRetry: Boolean = false,
+        retryTaskId: String? = null,
     ) {
         if (!NOTIFICATION.getBoolean()) return
 
-        val intent =
+        val reportIntent =
             Intent()
                 .setClass(context, NotificationActionReceiver::class.java)
                 .putExtra(NOTIFICATION_ID_KEY, notificationId)
@@ -425,32 +466,60 @@ object NotificationUtil {
         val pendingIntent =
             PendingIntent.getBroadcast(
                 context,
-                notificationId,
-                intent,
+                pendingIntentRequestCode(notificationId, REQUEST_REPORT),
+                reportIntent,
                 PendingIntent.FLAG_ONE_SHOT or
                     PendingIntent.FLAG_IMMUTABLE or
                     PendingIntent.FLAG_UPDATE_CURRENT,
             )
 
-        val retryIntent =
-            url
-                ?.takeIf { withCookieRetry }
-                ?.let {
-                    PendingIntent.getActivity(
-                        context,
-                        notificationId,
-                        Intent(context, MainActivity::class.java)
-                            .setAction(Intent.ACTION_VIEW)
-                            .setData(Uri.parse(it))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                    )
-                }
+        val shellIntent: (String?, Int) -> PendingIntent = { route, action ->
+            PendingIntent.getActivity(
+                context,
+                pendingIntentRequestCode(notificationId, action),
+                Intent(context, MainActivity::class.java)
+                    .apply {
+                        if (route != null) {
+                            putExtra(EXTRA_OPEN_ROUTE, route)
+                        } else {
+                            setAction(Intent.ACTION_VIEW)
+                            setData(Uri.parse(url ?: ""))
+                        }
+                    }
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        val retryIntent = url?.takeIf { withCookieRetry }?.let { shellIntent(null, REQUEST_RETRY) }
+        val addCookiesIntent =
+            shellIntent(Route.COOKIE_PROFILE, REQUEST_ADD_COOKIES).takeIf { withAddCookies }
+        val updateIntent =
+            PendingIntent.getBroadcast(
+                context,
+                pendingIntentRequestCode(notificationId, REQUEST_UPDATE_YTDLP),
+                Intent()
+                    .setClass(context, NotificationActionReceiver::class.java)
+                    .putExtra(NOTIFICATION_ID_KEY, notificationId)
+                    .apply { retryTaskId?.let { putExtra(TASK_ID_KEY, it) } }
+                    .putExtra(ACTION_KEY, ACTION_UPDATE_YTDLP),
+                PendingIntent.FLAG_ONE_SHOT or
+                    PendingIntent.FLAG_IMMUTABLE or
+                    PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+                .takeIf { withExtractorRetry }
+
+        val actionHint =
+            when {
+                retryIntent != null -> R.string.retry_with_cookies
+                addCookiesIntent != null -> R.string.add_cookies
+                updateIntent != null -> R.string.ytdlp_update_action
+                else -> null
+            }
 
         val text =
             context.getString(textId) +
-                if (retryIntent != null) " → " + context.getString(R.string.retry_with_cookies)
-                else ""
+                if (actionHint != null) " → " + context.getString(actionHint) else ""
 
         NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_seal)
@@ -464,9 +533,19 @@ object NotificationUtil {
             )
             .run {
                 retryIntent?.let {
+                    addAction(R.drawable.outline_restart_alt_24, context.getString(R.string.retry_with_cookies), it)
+                }
+                addCookiesIntent?.let {
                     addAction(
                         R.drawable.outline_restart_alt_24,
-                        context.getString(R.string.retry_with_cookies),
+                        context.getString(R.string.add_cookies),
+                        it,
+                    )
+                }
+                updateIntent?.let {
+                    addAction(
+                        R.drawable.outline_restart_alt_24,
+                        context.getString(R.string.ytdlp_update_action),
                         it,
                     )
                 }

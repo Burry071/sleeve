@@ -506,6 +506,7 @@ private fun SwapStatusLine(result: SwapResult) {
                 SwapOutcome.Queued -> R.string.match_swap_queued
                 SwapOutcome.Busy -> R.string.match_swap_busy
                 SwapOutcome.Missing -> R.string.match_swap_missing
+                SwapOutcome.Refused -> R.string.match_swap_refused
                 SwapOutcome.FetchFailed -> R.string.match_swap_fetch_failed
             }
         )

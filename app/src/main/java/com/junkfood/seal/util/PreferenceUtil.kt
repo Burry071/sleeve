@@ -119,6 +119,10 @@ private const val DOWNLOAD_TYPE = "download_type"
 const val YT_DLP_UPDATE_CHANNEL = "yt-dlp_update_channel"
 const val YT_DLP_UPDATE_TIME = "yt-dlp_last_update"
 const val YT_DLP_UPDATE_INTERVAL = "yt-dlp_update_interval"
+const val YT_DLP_UPDATE_BUILD = "yt-dlp_update_build"
+const val YT_DLP_UPDATE_FAILURES = "yt-dlp_update_failures"
+const val YT_DLP_LAST_FAILURE = "yt-dlp_last_failure"
+const val YT_DLP_LAST_FAILURE_REASON = "yt-dlp_last_failure_reason"
 
 private const val INTERVAL_DAY = 86_400_000L
 private const val INTERVAL_WEEK = 86_400_000L * 7
@@ -245,10 +249,16 @@ private val IntPreferenceDefaults =
         CONVERT_SUBTITLE to NOT_SPECIFIED,
         DOWNLOAD_TYPE_INITIALIZATION to USE_PREVIOUS_SELECTION,
         YT_DLP_UPDATE_CHANNEL to YT_DLP_NIGHTLY,
+        YT_DLP_UPDATE_BUILD to 0,
+        YT_DLP_UPDATE_FAILURES to 0,
         DOWNLOAD_TYPE to DownloadType.Video.ordinal,
     )
 
-private val LongPreferenceDefaults = mapOf(YT_DLP_UPDATE_INTERVAL to DEFAULT_INTERVAL)
+private val LongPreferenceDefaults =
+    mapOf(
+        YT_DLP_UPDATE_INTERVAL to DEFAULT_INTERVAL,
+        YT_DLP_LAST_FAILURE to 0L,
+    )
 
 fun String.getStringDefault() = StringPreferenceDefaults.getOrElse(this) { "" }
 
@@ -288,6 +298,9 @@ object PreferenceUtil {
     fun encodeString(key: String, string: String) = key.updateString(string)
 
     fun containsKey(key: String) = kv.containsKey(key)
+
+    /** MMKV has no null write; a cleared key is removed outright. */
+    fun remove(key: String) = kv.removeValueForKey(key)
 
     fun getAudioConvertFormat(): Int = AUDIO_CONVERSION_FORMAT.getInt()
 

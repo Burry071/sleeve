@@ -35,6 +35,7 @@
     <string name="ytdlp_version">Yt-dlp version</string>
     <string name="ytdlp_update">Click to install the latest yt-dlp version</string>
     <string name="ytdlp_update_action">Update yt-dlp</string>
+    <string name="ytdlp_update_done">yt-dlp updated</string>
     <string name="delete_info">Remove?</string>
     <string name="delete_info_msg">Remove \"%1$s\" from your download history for good?
     </string>
@@ -172,6 +173,19 @@
     <string name="status_enqueued">Enqueued</string>
     <string name="status_completed">Finished</string>
     <string name="status_incomplete">Incomplete</string>
+    <string name="status_live_stream">Live stream — saving what has aired so far</string>
+    <string name="error_stream_just_ended">This stream just ended and isn\'t ready to download yet.</string>
+    <string name="error_stream_upcoming">This stream hasn\'t started yet.</string>
+    <string name="warning_truncated_capture">Possible truncated capture (%1$s of %2$s)</string>
+    <string name="cookies_row_missing">No cookies imported</string>
+    <string name="cookies_row_unparseable">Cookie file isn\'t a Netscape export — retry stays off</string>
+    <string name="cookies_row_entries">%1$d cookies in the file</string>
+    <string name="cookies_row_stale_hint">The cookie file is rewritten at every app start. A cookie download that still fails means the stored cookies are stale — import them again.</string>
+    <string name="ytdlp_update_busy">An update is already running</string>
+    <string name="ytdlp_update_finish_downloads">Finish or stop downloads first</string>
+    <string name="ytdlp_update_failed_suffix">%1$s — last update failed: %2$s</string>
+    <string name="ytdlp_update_action_failed">Couldn\'t update yt-dlp</string>
+    <string name="ytdlp_update_could_not_start">Couldn\'t start the updater — use Settings → Troubleshooting</string>
     <string name="status_downloading">Downloading</string>
     <string name="status_canceled">Canceled</string>
     <string name="status_fetching_video_info">Fetching info</string>
@@ -186,6 +200,7 @@
     <string name="site_login_required">This site requires a logged-in account. Sign in to it in Settings → Cookies &amp; profiles, then enable Cookies for the download and retry.</string>
     <string name="format_unavailable_hint">The selected format is not available for this media. Use the default preset (Format preference) and retry.</string>
     <string name="site_rate_limited">The site is rate-limiting requests. Wait a moment, then retry.</string>
+    <string name="extractor_broken_hint">The download engine couldn\'t read this site. Update yt-dlp, then retry.</string>
     <string name="quick_download_label">Quick download</string>
     <string name="quick_clipboard_label">Download clipboard link</string>
     <string name="clipboard_quick_download">Clipboard quick download</string>
@@ -492,6 +507,7 @@
     <string name="match_swap_busy">Busy, try again later</string>
     <string name="match_swap_missing">No longer in the queue</string>
     <string name="match_swap_fetch_failed">Couldn\'t start</string>
+    <string name="match_swap_refused">Not ready to download yet</string>
     <string name="match_accept_all_hint">Accept all is off while picks differ — apply them, or pick the original again.</string>
     <string name="review_matches">Review matches (%1$d)</string>
     <string name="batch_notification_review">%1$d pick(s) need a review</string>

@@ -79,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -106,6 +107,7 @@ import com.junkfood.seal.ui.page.command.TemplatePickerDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.Download
 import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.FetchInfo
 import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.StartTask
+import com.junkfood.seal.ui.page.downloadv2.cookieRowRes
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SelectionState
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SheetState.Configure
@@ -123,6 +125,7 @@ import com.junkfood.seal.util.AUDIO_FORMAT
 import com.junkfood.seal.util.AUDIO_QUALITY
 import com.junkfood.seal.util.COOKIES
 import com.junkfood.seal.util.CUSTOM_COMMAND
+import com.junkfood.seal.util.CookieFileStatus
 import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadType
 import com.junkfood.seal.util.DownloadType.Audio
@@ -132,6 +135,7 @@ import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadType.entries
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FORMAT_SELECTION
+import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -144,7 +148,9 @@ import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.USE_CUSTOM_AUDIO_PRESET
 import com.junkfood.seal.util.VIDEO_FORMAT
 import com.junkfood.seal.util.VIDEO_QUALITY
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 private fun DownloadType.label(): String =
@@ -756,25 +762,30 @@ private fun AdditionalSettings(
     onNavigateToCookieGeneratorPage: (String) -> Unit = {},
     onPreferenceUpdate: () -> Unit,
 ) {
+    val context = LocalContext.current
     val cookiesProfiles by DatabaseUtil.getCookiesFlow().collectAsStateWithLifecycle(emptyList())
     var showCookiesDialog by rememberSaveable { mutableStateOf(false) }
+    var cookieStatus by remember { mutableStateOf<CookieFileStatus?>(null) }
+    LaunchedEffect(Unit) {
+        cookieStatus = withContext(Dispatchers.IO) { with(FileUtil) { context.readCookieStatus() } }
+    }
 
     with(preference) {
         Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            if (cookiesProfiles.isNotEmpty()) {
-                VideoFilterChip(
-                    selected = preference.cookies,
-                    onClick = {
-                        if (isQuickDownload) {
-                            COOKIES.updateBoolean(!cookies)
-                            onPreferenceUpdate()
-                        } else {
-                            showCookiesDialog = true
-                        }
-                    },
-                    label = stringResource(id = R.string.cookies),
-                )
-            }
+            // Always present, profile rows or not: the file's state decides
+            // whether a cookie retry can work, so hiding the row hid the answer.
+            VideoFilterChip(
+                selected = preference.cookies,
+                onClick = {
+                    if (isQuickDownload) {
+                        COOKIES.updateBoolean(!cookies)
+                        onPreferenceUpdate()
+                    } else {
+                        showCookiesDialog = true
+                    }
+                },
+                label = stringResource(id = R.string.cookies),
+            )
 
             VideoFilterChip(
                 selected = downloadSubtitle,
@@ -796,7 +807,25 @@ private fun AdditionalSettings(
             )
         }
 
-        if (showCookiesDialog && cookiesProfiles.isNotEmpty()) {
+        cookieStatus?.let { status ->
+            Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp)) {
+                Text(
+                    text = stringResource(cookieRowRes(status), status.entryCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = stringResource(R.string.cookies_row_stale_hint),
+                    modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        if (showCookiesDialog) {
             CookiesQuickSettingsDialog(
                 onDismissRequest = { showCookiesDialog = false },
                 onConfirm = {},

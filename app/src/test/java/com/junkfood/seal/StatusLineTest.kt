@@ -42,6 +42,8 @@ class StatusLineTest {
             statusLine(error(ErrorReason.ALREADY_DOWNLOADED)),
         )
         assertEquals(R.string.status_login_required, statusLine(error(ErrorReason.LOGIN_REQUIRED)))
+        assertEquals(R.string.error_stream_just_ended, statusLine(error(ErrorReason.STREAM_ENDED)))
+        assertEquals(R.string.error_stream_upcoming, statusLine(error(ErrorReason.STREAM_UPCOMING)))
     }
 
     @Test

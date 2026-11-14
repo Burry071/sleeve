@@ -69,13 +69,17 @@ import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
 import com.junkfood.seal.ui.theme.ErrorTonalPalettes
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.CookieFileStatus
+import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.toBitrateText
 import com.junkfood.seal.util.toDurationText
 import com.junkfood.seal.util.toFileSizeText
 import com.junkfood.seal.util.toLocalizedString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 private fun ShareButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -256,6 +260,20 @@ fun SheetContent(
     onActionPost: (Task, UiAction) -> Unit,
 ) {
 
+    // The cookie affordance is decided from the file as it is right now: a
+    // login-walled task can only be offered "Retry with cookies" when that
+    // file can actually un-block it. Null means "not answered yet" — the
+    // button stays hidden until the read lands.
+    val context = LocalContext.current
+    var cookieStatus by remember(downloadState) { mutableStateOf<CookieFileStatus?>(null) }
+    LaunchedEffect(downloadState) {
+        cookieStatus = null
+        if (downloadState is Error) {
+            cookieStatus =
+                withContext(Dispatchers.IO) { with(FileUtil) { context.readCookieStatus() } }
+        }
+    }
+
     LazyColumn {
         item {
             Title(
@@ -275,9 +293,27 @@ fun SheetContent(
                     task = task,
                     downloadState = downloadState,
                     viewState = viewState,
+                    cookieStatus = cookieStatus,
                     onDismissRequest = onDismissRequest,
                     onActionPost = onActionPost,
                 )
+            }
+        }
+
+        cookieStatus?.takeIf { downloadState is Error && hasCookieAction(downloadState) }?.let {
+            if (!it.usable) {
+                item(key = "CookieStatusNote") {
+                    Text(
+                        text =
+                            stringResource(
+                                cookieRowRes(it),
+                                it.entryCount,
+                            ),
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -291,6 +327,7 @@ fun LazyListScope.ActionButtons(
     viewState: ViewState,
     onDismissRequest: () -> Unit,
     onActionPost: (Task, UiAction) -> Unit,
+    cookieStatus: CookieFileStatus? = null,
 ) {
     when (downloadState) {
         is Canceled -> {
@@ -321,7 +358,10 @@ fun LazyListScope.ActionButtons(
                     onDismissRequest()
                 }
             }
-            if (hasCookieAction(downloadState)) {
+            // Two gates: the error type says cookies could help, the file says
+            // they can. Without the second, a user with no cookie file is
+            // offered an action that cannot work.
+            if (hasCookieAction(downloadState) && cookieStatus?.usable == true) {
                 val retryUrl =
                     viewState.url.ifBlank { task.url }.takeIf { !it.startsWith("metadata://") }
                 if (retryUrl != null) {
