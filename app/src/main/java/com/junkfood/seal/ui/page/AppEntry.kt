@@ -87,6 +87,7 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val windowWidth = LocalWindowWidthState.current
     val sheetState by dialogViewModel.sheetStateFlow.collectAsStateWithLifecycle()
+    val routeRequest by dialogViewModel.routeRequestFlow.collectAsStateWithLifecycle()
     val cookiesViewModel: CookiesViewModel = koinViewModel()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -103,6 +104,15 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
     if (sheetState is DownloadDialogViewModel.SheetState.Configure) {
         if (navController.currentDestination?.route != Route.HOME) {
             navController.popBackStack(route = Route.HOME, inclusive = false, saveState = true)
+        }
+    }
+
+    LaunchedEffect(routeRequest) {
+        val route = routeRequest ?: return@LaunchedEffect
+        dialogViewModel.consumeRouteRequest()
+        navController.navigate(route) {
+            launchSingleTop = true
+            popUpTo(route = Route.HOME)
         }
     }
 

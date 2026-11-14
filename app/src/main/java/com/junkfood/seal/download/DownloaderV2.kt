@@ -3,6 +3,7 @@ package com.junkfood.seal.download
 import android.app.PendingIntent
 import android.content.Context
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshotFlow
@@ -26,12 +27,15 @@ import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.LiveGate
 import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.PreferenceUtil
+import com.junkfood.seal.util.Truncation
 import com.junkfood.seal.util.VerifyResult
 import com.junkfood.seal.util.VideoInfo
 import com.junkfood.seal.util.makeToast
+import com.junkfood.seal.util.toDurationText
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -82,6 +86,12 @@ interface DownloaderV2 {
     }
 
     fun remove(task: Task): Boolean
+
+    /** Transfers an engine update would pull the binary out from under. */
+    fun activeTransfers(): Int =
+        getTaskStateMap().values.count {
+            it.downloadState is Running || it.downloadState is FetchingInfo
+        }
 
     /**
      * Replace a held catalogue book with one task per verified part, all in the
@@ -496,6 +506,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             return swapResult(task, candidate, SwapOutcome.FetchFailed, shortReason(failure))
         }
         val info = fetched.getOrThrow()
+        // A pick that resolves to a stream with nothing to save is refused
+        // before anything is parked or overwritten: the previous pick, its
+        // file and a pending flag all stay exactly as they were.
+        val refusal = liveRefusal(info.liveStatus)
+        if (refusal != null) return swapResult(task, candidate, SwapOutcome.Refused, refusal.message)
         // Park the file this pick replaces before the new state can let the
         // scheduler overwrite history. An empty path means there was nothing on
         // disk to delete on success.
@@ -507,6 +522,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         task.match = match.withSelection(candidate)
         task.info = info
         task.viewState = Task.ViewState.fromVideoInfo(info)
+        task.setLiveNotice(info.liveStatus)
         // The fetch took seconds; a cancel during it wins over the pick.
         val queued =
             applyTransition(task, ReadyWithInfo) { it == current.downloadState }
@@ -693,19 +709,34 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     }
                 }
                 is Error -> {
-                    NotificationUtil.notifyError(
-                        title = task.viewState.title,
-                        textId =
-                            if (next.action == FetchInfo) R.string.fetch_info_error_msg
-                            else R.string.download_error_msg,
-                        notificationId = task.notificationId,
-                        // The friendly wrapper keeps the raw extractor failure
-                        // as its cause, so the report keeps full detail.
-                        report = next.throwable.stackTraceToString(),
-                        url = task.url,
-                        withCookieRetry =
-                            next.throwable is DownloadErrorMessages.LoginRequiredError,
-                    )
+                    scope.launch {
+                        // The cookie file is measured off the main thread. The
+                        // status is never cached: importing cookies while this
+                        // task keeps its error must flip the action to Retry.
+                        val cookies =
+                            withContext(Dispatchers.IO) { with(FileUtil) { appContext.readCookieStatus() } }
+                        // A restart can replace the error while the file is
+                        // read; the newer state posts its own notification.
+                        if (taskStateMap[task]?.downloadState !is Error) return@launch
+                        val loginWalled =
+                            next.throwable is DownloadErrorMessages.LoginRequiredError
+                        NotificationUtil.notifyError(
+                            title = task.viewState.title,
+                            textId =
+                                if (next.action == FetchInfo) R.string.fetch_info_error_msg
+                                else R.string.download_error_msg,
+                            notificationId = task.notificationId,
+                            // The friendly wrapper keeps the raw extractor failure
+                            // as its cause, so the report keeps full detail.
+                            report = next.throwable.stackTraceToString(),
+                            url = task.url,
+                            withCookieRetry = loginWalled && cookies.usable,
+                            withAddCookies = loginWalled && !cookies.usable,
+                            withExtractorRetry =
+                                next.throwable is DownloadErrorMessages.ExtractorBrokenError,
+                            retryTaskId = task.id,
+                        )
+                    }
                 }
                 is Canceled ->
                     // A cancel must clear the task's own notification; a stale
@@ -825,32 +856,53 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      * so duration and exact size are unknown up to this point. Once the file
      * exists they are measurable — fill them in instead of leaving the card
      * on a "0.00 MB · 00:00" placeholder.
+     *
+     * @return the measured length in whole seconds, 0 when it could not be read
      */
-    private fun Task.enrichWithCompletedFile(path: String) {
-        val file = File(path)
-        if (!file.isFile) return
-        val length = file.length()
-        val probedDuration =
-            runCatching {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(file.absolutePath)
-                        retriever
-                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            ?.toLongOrNull()
-                            ?.div(1000L)
-                            ?.toInt()
-                    } finally {
-                        retriever.release()
+    private fun Task.enrichWithCompletedFile(path: String): Int {
+        // A SAF-folder finish line names a document, not a file path: probing
+        // it through the resolver keeps the duration fill working there too.
+        val isDocument = path.startsWith("content://")
+        val length =
+            if (isDocument) {
+                runCatching {
+                        appContext.contentResolver
+                            .openAssetFileDescriptor(Uri.parse(path), "r")
+                            ?.use { it.length }
                     }
-                }
-                .getOrNull() ?: 0
+                    .getOrNull()
+                    ?.takeIf { it > 0 } ?: 0L
+            } else {
+                File(path).takeIf { it.isFile }?.length() ?: return 0
+            }
+        val probedDuration = probeSeconds(path, isDocument)
         viewState =
             viewState.copy(
                 duration = viewState.duration.takeIf { it > 0 } ?: probedDuration,
                 fileSizeApprox = length.takeIf { it > 0 }?.toDouble() ?: viewState.fileSizeApprox,
             )
+        return probedDuration
     }
+
+    private fun probeSeconds(path: String, isDocument: Boolean): Int =
+        runCatching {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    if (isDocument) {
+                        retriever.setDataSource(appContext, Uri.parse(path))
+                    } else {
+                        retriever.setDataSource(File(path).absolutePath)
+                    }
+                    retriever
+                        .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.div(1000L)
+                        ?.toInt()
+                } finally {
+                    retriever.release()
+                }
+            }
+            .getOrNull() ?: 0
 
     /**
      * Wakes the scheduler when a network becomes usable again. Calling
@@ -963,6 +1015,28 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         fetchInfo()
     }
 
+    /**
+     * A stream that cannot produce a file yet as a task state; null when the
+     * item may proceed. Refused before any media request: the retry that
+     * succeeds is the ordinary Error action, not a special one.
+     */
+    private fun liveRefusal(liveStatus: String?): Error? {
+        val refuse = LiveGate.decide(liveStatus) as? LiveGate.Decision.Refuse ?: return null
+        val error = DownloadErrorMessages.NotReadyError(refuse.reasonRes)
+        return Error(
+            throwable = error,
+            action = FetchInfo,
+            message = appContext.getString(refuse.reasonRes),
+            reason = DownloadErrorMessages.errorReasonOf(error),
+        )
+    }
+
+    /** The one-line notice a live capture carries while it saves what has aired. */
+    private fun Task.setLiveNotice(liveStatus: String?) {
+        val allow = LiveGate.decide(liveStatus) as? LiveGate.Decision.Allow ?: return
+        allow.warningRes?.let { res -> updateState { it.copy(notice = appContext.getString(res)) } }
+    }
+
     private fun Task.fetchInfo() {
         if (downloadState != Idle) return
         val task = this
@@ -989,9 +1063,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     .onSuccess {
                         info = it
                         viewState = Task.ViewState.fromVideoInfo(it)
-                        // A cancel can land while extraction is finishing; the
-                        // cancel wins and the late result is dropped.
-                        applyTransition(task, ReadyWithInfo, isThisAttempt)
+                        val refusal = liveRefusal(it.liveStatus)
+                        if (refusal != null) {
+                            applyTransition(task, refusal, isThisAttempt)
+                        } else {
+                            setLiveNotice(it.liveStatus)
+                            // A cancel can land while extraction is finishing; the
+                            // cancel wins and the late result is dropped.
+                            applyTransition(task, ReadyWithInfo, isThisAttempt)
+                        }
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) {
@@ -1061,10 +1141,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         info = resolved.videoInfo
                         viewState = Task.ViewState.fromVideoInfo(resolved.videoInfo)
                         match = resolved.match
+                        setLiveNotice(resolved.videoInfo.liveStatus)
                         // A held book finishes without ReadyWithInfo, so the
                         // scheduler never spends a byte on an unverified pick.
                         // A cancel that landed first wins and drops this.
-                        applyTransition(task, MatchOps.resolvedState(resolved.match), isThisAttempt)
+                        applyTransition(
+                            task,
+                            MatchOps.resolvedState(resolved.match, resolved.videoInfo.liveStatus),
+                            isThisAttempt,
+                        )
                     }
                     .onFailure { throwable ->
                         if (throwable is YoutubeDL.CanceledException) return@onFailure
@@ -1211,7 +1296,20 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     }
                     .onSuccess { pathList ->
                         val newPath = pathList.firstOrNull()
-                        newPath?.let { enrichWithCompletedFile(it) }
+                        // Read before enrichment: it replaces an unknown (0)
+                        // duration with the probe, which is the short number
+                        // the comparison would then measure against itself.
+                        val expectedMs = info?.duration?.toLong()?.times(1000L) ?: 0L
+                        val live = state.notice != null
+                        val probed = newPath?.let { enrichWithCompletedFile(it) } ?: 0
+                        val truncation =
+                            Truncation.warningRes(
+                                probedSeconds = probed.toLong(),
+                                expectedMs = expectedMs,
+                                live = live,
+                                clips = preferences.videoClips.isNotEmpty(),
+                                split = preferences.splitByChapter,
+                            )
                         // Post-download safety net first: the gate proves the
                         // pick, this proves the file that actually landed. A
                         // failed check must not delete the old file/row a swap
@@ -1244,7 +1342,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             ) { it is Running && it.job === runJob }
                         } else {
                             cleanupSwappedFile(id, newPath)
-                            applyTransition(task, Completed(newPath)) {
+                            val warning =
+                                truncation?.let {
+                                    appContext.getString(
+                                        it,
+                                        probed.toDurationText(),
+                                        (expectedMs / 1000L).toInt().toDurationText(),
+                                    )
+                                }.orEmpty()
+                            applyTransition(task, Completed(newPath, warning = warning)) {
                                 it is Running && it.job === runJob
                             }
                         }

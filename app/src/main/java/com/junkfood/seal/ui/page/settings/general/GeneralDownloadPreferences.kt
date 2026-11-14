@@ -52,6 +52,7 @@ import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +73,7 @@ import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
 import com.junkfood.seal.App
 import com.junkfood.seal.R
+import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.ui.common.booleanState
 import com.junkfood.seal.ui.component.BackButton
 import com.junkfood.seal.ui.component.ConfirmButton
@@ -103,16 +105,22 @@ import com.junkfood.seal.util.SPONSORBLOCK
 import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.THUMBNAIL
 import com.junkfood.seal.util.ToastUtil
+import com.junkfood.seal.util.UpdateOutcome
 import com.junkfood.seal.util.UpdateUtil
-import com.junkfood.seal.util.YT_DLP_VERSION
+import com.junkfood.seal.util.UpdaterPolicy
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: () -> Unit) {
+fun GeneralDownloadPreferences(
+    onNavigateBack: () -> Unit,
+    downloader: DownloaderV2 = koinInject(),
+    navigateToTemplate: () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val hapticFeedback = LocalHapticFeedback.current
@@ -186,12 +194,14 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                     }
                 item {
                     PreferencesGroupCard {
-                    var ytdlpVersion by remember {
-                        mutableStateOf(
+                    // Re-read on every outcome: YT_DLP_VERSION is written only
+                    // on DONE, so it goes stale after ALREADY_UP_TO_DATE.
+                    var versionTick by remember { mutableIntStateOf(0) }
+                    val ytdlpVersion =
+                        remember(versionTick) {
                             YoutubeDL.getInstance().version(context.applicationContext)
                                 ?: context.getString(R.string.ytdlp_update)
-                        )
-                    }
+                        }
                     PreferenceItem(
                         title = stringResource(id = R.string.ytdlp_update_action),
                         description = ytdlpVersion,
@@ -208,25 +218,41 @@ fun GeneralDownloadPreferences(onNavigateBack: () -> Unit, navigateToTemplate: (
                             }
                         },
                         onClick = {
-                            scope.launch {
-                                runCatching {
-                                        isUpdating = true
-                                        UpdateUtil.updateYtDlp()
-                                        ytdlpVersion = YT_DLP_VERSION.getString()
+                            when {
+                                isUpdating -> Unit
+                                !UpdaterPolicy.canAttempt(downloader.activeTransfers()) ->
+                                    ToastUtil.makeToastSuspend(
+                                        context.getString(R.string.ytdlp_update_finish_downloads)
+                                    )
+                                else -> {
+                                    UpdateUtil.beginManualAttempt()
+                                    isUpdating = true
+                                    versionTick++
+                                    scope.launch {
+                                        val outcome = UpdateUtil.updateYtDlp()
+                                        isUpdating = false
+                                        versionTick++
+                                        when (outcome) {
+                                            is UpdateOutcome.Succeeded ->
+                                                ToastUtil.makeToastSuspend(
+                                                    context.getString(R.string.yt_dlp_up_to_date) +
+                                                        (outcome.version?.let { " ($it)" } ?: "")
+                                                )
+                                            is UpdateOutcome.Failed -> {
+                                                outcome.cause.printStackTrace()
+                                                ToastUtil.makeToastSuspend(
+                                                    context.getString(R.string.yt_dlp_update_fail)
+                                                )
+                                            }
+                                            UpdateOutcome.Busy ->
+                                                ToastUtil.makeToastSuspend(
+                                                    context.getString(
+                                                        R.string.ytdlp_update_busy
+                                                    )
+                                                )
+                                        }
                                     }
-                                    .onFailure { th ->
-                                        th.printStackTrace()
-                                        ToastUtil.makeToastSuspend(
-                                            App.context.getString(R.string.yt_dlp_update_fail)
-                                        )
-                                    }
-                                    .onSuccess {
-                                        ToastUtil.makeToastSuspend(
-                                            context.getString(R.string.yt_dlp_up_to_date) +
-                                                " (${YT_DLP_VERSION.getString()})"
-                                        )
-                                    }
-                                isUpdating = false
+                                }
                             }
                         },
                         onClickLabel = stringResource(id = R.string.update),

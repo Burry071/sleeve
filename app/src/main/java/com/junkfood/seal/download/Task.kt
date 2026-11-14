@@ -48,6 +48,8 @@ enum class ErrorReason {
     PLAYLIST_SHIFTED,
     ALREADY_DOWNLOADED,
     LOGIN_REQUIRED,
+    STREAM_ENDED,
+    STREAM_UPCOMING,
 }
 
 @Serializable
@@ -142,6 +144,13 @@ data class Task(
          * by index. Appended last with a default so older backups decode.
          */
         val expectedVideoId: String? = null,
+        /**
+         * A one-line notice about the item itself (a live capture is saving
+         * what has aired so far). Set at the ReadyWithInfo transition; null
+         * for every ordinary item. Appended last with a default so older
+         * backups decode.
+         */
+        val notice: String? = null,
     )
 
     @Serializable

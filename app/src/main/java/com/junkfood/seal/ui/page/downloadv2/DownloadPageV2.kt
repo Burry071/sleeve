@@ -717,7 +717,18 @@ fun DownloadPageImplV2(
                                                 ?.progress
                                                 ?.takeIf { it >= 0f },
                                         statusLine = statusLine(state.downloadState),
-                                        statusText = statusText(state.downloadState),
+                                        statusText =
+                                            statusText(state.downloadState)
+                                                ?: (state.downloadState as? Completed)
+                                                    ?.warning
+                                                    ?.takeIf { it.isNotBlank() }
+                                                // A live capture says what it is
+                                                // while it runs; the line goes
+                                                // once the file is finished.
+                                                ?: state.notice?.takeIf {
+                                                    state.downloadState is Running ||
+                                                        state.downloadState is ReadyWithInfo
+                                                },
                                         footerContent =
                                             if (state.downloadState is Error) {
                                                 {

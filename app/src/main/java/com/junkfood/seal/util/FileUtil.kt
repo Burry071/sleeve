@@ -41,6 +41,48 @@ enum class FileAction {
     SHARE,
 }
 
+/**
+ * What the app knows about cookies.txt without exposing a single cookie value.
+ * [usable] is the only question the recovery copy asks: a file that exists but
+ * cannot be read as Netscape cookies cannot un-block a login wall.
+ */
+data class CookieFileStatus(
+    val exists: Boolean,
+    val entryCount: Int,
+    val parseable: Boolean,
+) {
+    val usable: Boolean get() = exists && parseable && entryCount > 0
+
+    companion object {
+        /** No file at all: neither readable nor countable. */
+        val Missing = CookieFileStatus(exists = false, entryCount = 0, parseable = false)
+
+        /**
+         * Pure: one pass over the file's lines. Netscape rows have exactly
+         * seven tab-separated fields. Blank lines and comments are skipped,
+         * `#HttpOnly_` is a domain prefix rather than a comment, and any other
+         * malformed row makes the whole file unparseable — a file with one bad
+         * row is one yt-dlp refuses.
+         */
+        fun fromLines(lines: List<String>): CookieFileStatus {
+            var entries = 0
+            var malformed = false
+            for (raw in lines) {
+                val line = raw.removePrefix("\uFEFF").trimEnd('\r')
+                if (line.isBlank()) continue
+                if (line.startsWith("#") && !line.startsWith("#HttpOnly_")) continue
+                val fields = line.split('\t')
+                if (fields.size == 7 && fields[0].isNotBlank()) entries++ else malformed = true
+            }
+            return CookieFileStatus(
+                exists = true,
+                entryCount = entries,
+                parseable = !malformed && entries > 0,
+            )
+        }
+    }
+}
+
 object FileUtil {
     suspend fun openFileFromResult(downloadResult: Result<List<String>>) {
         val filePaths = downloadResult.getOrNull()
@@ -452,6 +494,19 @@ object FileUtil {
         migrateLegacyCookieFile(legacy, target)
         // A failed copy keeps the old location working for this run.
         return if (target.exists() || !legacy.exists()) target else legacy
+    }
+
+    /**
+     * Reads the cookie file as it is right now. Never cached: the file is
+     * rewritten at every start and replaced whenever profiles are saved, so a
+     * cached answer would outlive the file it describes. Safe to call off the
+     * main thread only.
+     */
+    fun Context.readCookieStatus(): CookieFileStatus {
+        val file = getCookieFile()
+        if (!file.isFile) return CookieFileStatus.Missing
+        return runCatching { CookieFileStatus.fromLines(file.readLines()) }
+            .getOrElse { CookieFileStatus(exists = true, entryCount = 0, parseable = false) }
     }
 
     fun getExternalTempDir() =
