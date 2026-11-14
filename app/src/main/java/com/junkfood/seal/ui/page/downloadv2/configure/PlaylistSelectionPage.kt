@@ -72,7 +72,9 @@ import com.junkfood.seal.util.AUDIO_QUALITY
 import com.junkfood.seal.util.DownloadType.Audio
 import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.PLAYLIST_NUMBERING
 import com.junkfood.seal.util.PlaylistResult
+import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.USE_CUSTOM_AUDIO_PRESET
@@ -163,7 +165,12 @@ fun PlaylistSelectionPage(
                             provider = state.result.extractorKey ?: "Playlist",
                         )
                     TaskFactory
-                        .stampBatch(taskList, downloadPreferences, batch)
+                        .stampBatch(
+                            tasks = taskList,
+                            preferences = downloadPreferences,
+                            batch = batch,
+                            numbering = PLAYLIST_NUMBERING.getBoolean(),
+                        )
                         .forEach(downloader::enqueue)
                     onDismissConfigurationSheet()
                     onBack()

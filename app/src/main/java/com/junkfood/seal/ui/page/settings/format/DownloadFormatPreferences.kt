@@ -60,6 +60,7 @@ import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.FORMAT_SORTING
 import com.junkfood.seal.util.MERGE_MULTI_AUDIO_STREAM
 import com.junkfood.seal.util.MERGE_OUTPUT_MKV
+import com.junkfood.seal.util.PREFER_MP4
 import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -87,6 +88,7 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
     val downloadSubtitle by SUBTITLE.booleanState
     val embedSubtitle by EMBED_SUBTITLE.booleanState
     var remuxToMkv by MERGE_OUTPUT_MKV.booleanState
+    var preferMp4 by remember { mutableStateOf(PREFER_MP4.getBoolean()) }
     var embedMetadata by EMBED_METADATA.booleanState
 
     var showAudioFormatDialog by remember { mutableStateOf(false) }
@@ -217,12 +219,26 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
                                 MERGE_OUTPUT_MKV.updateBoolean(remuxToMkv)
                             },
                         )
+                        PreferenceSwitch(
+                            title = stringResource(id = R.string.prefer_mp4_container),
+                            description = stringResource(id = R.string.prefer_mp4_container_desc),
+                            isChecked = preferMp4,
+                            icon = Icons.Outlined.VideoFile,
+                            enabled = !isCustomCommandEnabled && !audioSwitch,
+                            onClick = {
+                                preferMp4 = !preferMp4
+                                PREFER_MP4.updateBoolean(preferMp4)
+                            },
+                        )
                     }
                 }
                 if (downloadSubtitle && embedSubtitle) {
                     item {
                         PreferenceInfo(text = stringResource(id = R.string.embed_subtitles_mkv_msg))
                     }
+                }
+                if (remuxToMkv && preferMp4) {
+                    item { PreferenceInfo(text = stringResource(id = R.string.merge_to_mkv_wins)) }
                 }
 
                 item { PreferenceSubtitle(text = stringResource(id = R.string.advanced_settings)) }

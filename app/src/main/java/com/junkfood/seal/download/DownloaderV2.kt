@@ -5,7 +5,10 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -86,6 +89,15 @@ interface DownloaderV2 {
     }
 
     fun remove(task: Task): Boolean
+
+    /**
+     * True when this process restored a task that was cut off mid-transfer by the
+     * system, not by the user. Memory only: a later occurrence in a new process is
+     * still explained.
+     */
+    val interruptedRestore: Boolean get() = false
+
+    fun dismissInterruptedRestore() {}
 
     /** Transfers an engine update would pull the binary out from under. */
     fun activeTransfers(): Int =
@@ -213,6 +225,14 @@ internal val TypeInfo.MetadataTrack.needsSearch: Boolean
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val taskStateMap = mutableStateMapOf<Task, Task.State>()
+
+    override var interruptedRestore by mutableStateOf(false)
+        private set
+
+    override fun dismissInterruptedRestore() {
+        interruptedRestore = false
+    }
+
     private val snapshotFlow = snapshotFlow { taskStateMap.toMap() }
 
     /**
@@ -307,7 +327,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     )
                 }
         taskList.forEach { (task, state) -> enqueue(task, state) }
+        // Only a restore of Running keeps progress above zero (and a user cancel
+        // is recorded), so this cannot fire on a state that was already terminal.
+        if (taskList.values.any { (it.downloadState as? Canceled)?.interrupted == true }) {
+            interruptedRestore = true
+        }
     }
+
+    private val Canceled.interrupted: Boolean
+        get() = progress != null && progress > 0f && progress <= 1f && !byUser
 
     private fun Map<Task, Task.State>.countRunning(): Int = count { (_, state) ->
         state.downloadState is Running || state.downloadState is FetchingInfo

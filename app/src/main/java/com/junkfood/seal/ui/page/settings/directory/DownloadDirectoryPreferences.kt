@@ -100,6 +100,8 @@ import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getConfigDirectory
 import com.junkfood.seal.util.FileUtil.getExternalTempDir
 import com.junkfood.seal.util.OUTPUT_TEMPLATE
+import com.junkfood.seal.util.OutputTemplate
+import com.junkfood.seal.util.PLAYLIST_NUMBERING
 import com.junkfood.seal.util.PRIVATE_DIRECTORY
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -489,9 +491,11 @@ fun DownloadDirectoryPreferences(onNavigateBack: () -> Unit) {
             onDismissRequest = { showSubdirectoryDialog = false },
             isWebsiteSelected = SUBDIRECTORY_EXTRACTOR.getBoolean(),
             isPlaylistTitleSelected = SUBDIRECTORY_PLAYLIST_TITLE.getBoolean(),
-            onConfirm = { isWebsiteSelected, isPlaylistTitleSelected ->
+            isNumberingSelected = PLAYLIST_NUMBERING.getBoolean(),
+            onConfirm = { isWebsiteSelected, isPlaylistTitleSelected, isNumberingSelected ->
                 SUBDIRECTORY_EXTRACTOR.updateBoolean(isWebsiteSelected)
                 SUBDIRECTORY_PLAYLIST_TITLE.updateBoolean(isPlaylistTitleSelected)
+                PLAYLIST_NUMBERING.updateBoolean(isNumberingSelected)
             },
         )
     }
@@ -517,12 +521,14 @@ fun OutputTemplateDialog(
         )
     }
 
-    var error by remember { mutableIntStateOf(0) }
+    // Seeded from the saved value so an already-invalid custom template cannot be re-saved.
+    var issues by remember { mutableStateOf(OutputTemplate.validate(editingTemplate)) }
+    val hasBlock = issues.any { it.severity == OutputTemplate.Severity.BLOCK }
 
     SealDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = {
-            ConfirmButton(enabled = error == 0) {
+            ConfirmButton(enabled = selectedItem != 3 || !hasBlock) {
                 onConfirm(
                     when (selectedItem) {
                         1 -> DownloadUtil.OUTPUT_TEMPLATE_DEFAULT
@@ -577,17 +583,10 @@ fun OutputTemplateDialog(
                             OutlinedTextField(
                                 value = editingTemplate,
                                 onValueChange = {
-                                    error =
-                                        if (!it.contains(DownloadUtil.BASENAME)) {
-                                            1
-                                        } else if (!it.endsWith(DownloadUtil.EXTENSION)) {
-                                            2
-                                        } else {
-                                            0
-                                        }
+                                    issues = OutputTemplate.validate(it)
                                     editingTemplate = it
                                 },
-                                isError = error != 0,
+                                isError = hasBlock,
                                 supportingText = {
                                     Text(
                                         "Required: ${DownloadUtil.BASENAME}, ${DownloadUtil.EXTENSION}",
@@ -596,6 +595,42 @@ fun OutputTemplateDialog(
                                 },
                                 label = { Text(text = stringResource(id = R.string.custom)) },
                             )
+                        }
+                        if (selectedItem == 3) {
+                            OutputTemplate.preview(editingTemplate)?.let { preview ->
+                                Text(
+                                    text =
+                                        stringResource(R.string.output_template_preview) +
+                                            ": $preview",
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            issues.forEach { issue ->
+                                val argument =
+                                    when {
+                                        issue.length > 0 ->
+                                            editingTemplate.substring(
+                                                issue.start,
+                                                (issue.start + issue.length)
+                                                    .coerceAtMost(editingTemplate.length),
+                                            )
+                                        issue.messageRes ==
+                                            R.string.output_template_issue_basename ->
+                                            DownloadUtil.BASENAME
+                                        else -> DownloadUtil.EXTENSION
+                                    }
+                                Text(
+                                    text = stringResource(issue.messageRes, argument),
+                                    modifier = Modifier.padding(horizontal = 24.dp),
+                                    color =
+                                        if (issue.severity == OutputTemplate.Severity.BLOCK)
+                                            MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                 }
