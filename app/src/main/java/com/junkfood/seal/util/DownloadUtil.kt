@@ -1217,7 +1217,7 @@ object DownloadUtil {
      * Download/Sleeve survive re-installs, and a name owned by another app UID
      * cannot be replaced (EPERM), so never plan to overwrite one.
      */
-    private fun uniqueFileName(dir: String, name: String): String {
+    internal fun uniqueFileName(dir: String, name: String): String {
         if (!File(dir, name).exists()) return name
         val stem = name.substringBeforeLast('.', name)
         val suffix = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
@@ -1306,7 +1306,15 @@ object DownloadUtil {
                 .let { sanitizeSegment(it) }
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
-        val fileName = "$baseName.mp4" // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
+        // The copy below overwrites, but Scoped Storage refuses a replace that
+        // crosses app ownership (a file left by another install): copyTo then
+        // throws EPERM and the lane falls back to yt-dlp for nothing. Land
+        // beside the existing file instead, like every other lane does.
+        val fileName =
+            uniqueFileName(
+                downloadDir,
+                "$baseName.mp4", // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
+            )
 
         val workDir =
             File(App.context.cacheDir, "nm3re_$taskId").apply { mkdirs() }
@@ -1446,7 +1454,6 @@ object DownloadUtil {
                         aria2c ||
                         rateLimit ||
                         cookies ||
-                        sdcard ||
                         useDownloadArchive ||
                         videoClips.isNotEmpty() ||
                         splitByChapter

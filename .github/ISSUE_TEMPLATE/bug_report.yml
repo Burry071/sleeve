@@ -24,6 +24,21 @@ body:
         - label: I have included the task log from the failed download.
           required: true
 
+  - type: dropdown
+    id: source-engine
+    attributes:
+      label: Source / Engine
+      description: Which part of the download pipeline handled the link?
+      options:
+        - YouTube / Video (yt-dlp)
+        - Spotify
+        - Audible
+        - Gallery (gallery-dl)
+        - HLS/DASH (N_m3u8DL-RE)
+        - Direct File (Ghost)
+    validations:
+      required: true
+
   - type: textarea
     attributes:
       label: Describe the bug

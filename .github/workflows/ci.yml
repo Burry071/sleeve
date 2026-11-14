@@ -30,10 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Unit tests for the release scripts (offline)
         run: python -m unittest discover -s scripts -p "test_*.py"
@@ -54,6 +54,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Run JVM unit tests
+        run: ./gradlew :app:testGenericDebugUnitTest --stacktrace
 
       - name: Build debug APK
         run: |
@@ -96,10 +99,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Require signing secrets (an unsigned APK must never be published)
         env:
@@ -209,8 +212,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Beta tags stay non-prerelease on purpose: /releases/latest serves
-          # the direct APK link printed in the README.
+          # Prerelease tags are marked as such; a stable tag becomes the
+          # /releases/latest target. release_guard.py and verify_release.py
+          # do not read this flag: both key off the tag name.
+          case "$GITHUB_REF_NAME" in
+            *-alpha*|*-beta*|*-rc*) channel_flag=(--prerelease) ;;
+            *) channel_flag=(--latest) ;;
+          esac
           cat > release-notes.md <<'NOTES'
           ## Which APK do I download?
 
@@ -243,7 +251,8 @@ jobs:
             SHA256SUMS \
             --title "Sleeve $GITHUB_REF_NAME" \
             --notes "$(cat ../release-notes.md)" \
-            --generate-notes
+            --generate-notes \
+            "${channel_flag[@]}"
 
       - name: Download the published assets and compare SHA-256
         env:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import socket
 import ssl
 import threading
 import time
@@ -77,6 +78,8 @@ class SegmentedHttpStep:
         self._lock = threading.RLock()
         self._samples = []
         self._cancel = threading.Event()
+        # Live connections, so cancel() can close them and unblock a reader.
+        self._conns = set()
 
     # -- progress bookkeeping -------------------------------------------------
 
@@ -109,10 +112,29 @@ class SegmentedHttpStep:
 
     def _connect(self, parsed):
         if parsed.scheme == "https":
-            return http.client.HTTPSConnection(
+            conn = http.client.HTTPSConnection(
                 parsed.hostname, parsed.port or 443, context=ssl.create_default_context(), timeout=30
             )
-        return http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
+        else:
+            conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
+        with self._lock:
+            self._conns.add(conn)
+        return conn
+
+    def _release(self, conn, resp=None):
+        """Close a tracked connection (and its response) exactly once."""
+        with self._lock:
+            self._conns.discard(conn)
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _resolve(self):
         """Follow redirects, returning (connection, path_with_query, final_url)."""
@@ -123,18 +145,22 @@ class SegmentedHttpStep:
             if parsed.query:
                 target += "?" + parsed.query
             conn = self._connect(parsed)
-            conn.request("HEAD", target, headers=self.headers)
-            resp = conn.getresponse()
-            resp.read()
-            print(f"[engine] head {parsed.netloc} -> {resp.status}")
-            if resp.status in (301, 302, 303, 307, 308):
-                location = resp.getheader("Location")
-                conn.close()
-                if not location:
-                    raise IOError("redirect without Location")
-                url = urllib.parse.urljoin(url, location)
-                continue
-            return conn, target, url, resp
+            try:
+                conn.request("HEAD", target, headers=self.headers)
+                resp = conn.getresponse()
+                resp.read()
+                print(f"[engine] head {parsed.netloc} -> {resp.status}")
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.getheader("Location")
+                    self._release(conn, resp)
+                    if not location:
+                        raise IOError("redirect without Location")
+                    url = urllib.parse.urljoin(url, location)
+                    continue
+                return conn, target, url, resp
+            except Exception:
+                self._release(conn)
+                raise
         raise IOError("too many redirects")
 
     def probe(self):
@@ -143,13 +169,13 @@ class SegmentedHttpStep:
         self._final_url = url
         accept_ranges = (resp.getheader("Accept-Ranges") or "").lower() == "bytes"
         length = resp.getheader("Content-Length")
-        conn.close()
+        self._release(conn, resp)
         print(f"[engine] probe final={urllib.parse.urlsplit(url).netloc} status={resp.status} ranges={accept_ranges} len={length}")
         if not accept_ranges or length is None:
             conn2, target2, url2, resp2 = self._request_range(url, 0, 0)
             cr = resp2.getheader("Content-Range") or ""
             resp2.read()
-            conn2.close()
+            self._release(conn2, resp2)
             if cr.rpartition("/")[2].isdigit():
                 accept_ranges = True
                 length = cr.rpartition("/")[2]
@@ -168,19 +194,24 @@ class SegmentedHttpStep:
             conn = self._connect(parsed)
             headers = dict(self.headers)
             headers["Range"] = f"bytes={start}-{end}" if end else f"bytes={start}-"
-            conn.request("GET", target, headers=headers)
-            resp = conn.getresponse()
-            if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
-                resp.read()
-                conn.close()
-                redirects += 1
-                if redirects >= _MAX_REDIRECTS:
-                    raise IOError("too many redirects during range request")
-                print(f"[engine] range GET redirect {redirects} -> {resp.getheader('Location')[:120]}")
-                url = urllib.parse.urljoin(url, resp.getheader("Location"))
-                continue
-            print(f"[engine] range GET {parsed.netloc} -> {resp.status}")
-            return conn, target, url, resp
+            try:
+                conn.request("GET", target, headers=headers)
+                resp = conn.getresponse()
+                if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
+                    location = resp.getheader("Location")
+                    resp.read()
+                    self._release(conn, resp)
+                    redirects += 1
+                    if redirects >= _MAX_REDIRECTS:
+                        raise IOError("too many redirects during range request")
+                    print(f"[engine] range GET redirect {redirects} -> {location[:120]}")
+                    url = urllib.parse.urljoin(url, location)
+                    continue
+                print(f"[engine] range GET {parsed.netloc} -> {resp.status}")
+                return conn, target, url, resp
+            except Exception:
+                self._release(conn)
+                raise
 
     def _fetch_range(self, url, start, end, part_path):
         """Fetch [start, end] into part_path; resume if a shorter part exists."""
@@ -203,7 +234,7 @@ class SegmentedHttpStep:
                     fh.write(chunk)
                     self._add_bytes(len(chunk))
         finally:
-            conn.close()
+            self._release(conn, resp)
         got = os.path.getsize(part_path)
         if got != expected:
             raise IOError(f"segment truncated: {got}/{expected}")
@@ -228,7 +259,7 @@ class SegmentedHttpStep:
             # writable directory.
             os.replace(tmp, self.output_path)
         finally:
-            conn.close()
+            self._release(conn, resp)
             if os.path.exists(tmp):
                 try:
                     os.remove(tmp)
@@ -285,11 +316,34 @@ class SegmentedHttpStep:
         except Cancelled:
             self.state = CANCELLED
         except Exception as exc:  # noqa: BLE001 - surfaced to Kotlin as step error
-            self.error = str(exc)
-            self.state = ERROR
+            if self._cancel.is_set():
+                # The read failure is the cancel landing: cancel() shuts the
+                # socket down under a blocked read. Reporting ERROR here would
+                # turn a user cancel into a failure card.
+                self.state = CANCELLED
+            else:
+                self.error = str(exc)
+                self.state = ERROR
 
     def cancel(self):
         self._cancel.set()
+        # A thread blocked in resp.read() only notices on the next chunk.
+        # Shutting the tracked sockets down makes that read fail now; run()
+        # maps the failure back to CANCELLED.
+        with self._lock:
+            conns = list(self._conns)
+            self._conns.clear()
+        for conn in conns:
+            sock = getattr(conn, "sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _java_to_dict(m):
@@ -342,6 +396,18 @@ class Task:
 _ENGINE_LOCK = threading.Lock()
 _GALLERY_LOCK = threading.Lock()
 _TASKS: dict[str, Task] = {}
+# Final verdicts of settled tasks, so a late poll still gets its answer after
+# the live Task is evicted. Oldest entries fall out past _TASK_HISTORY_MAX.
+_TASK_HISTORY: dict[str, dict] = {}
+_TASK_HISTORY_MAX = 8
+
+
+def _remember_terminal(task_id, snap):
+    """Record a settled snapshot, oldest first. Call under _ENGINE_LOCK."""
+    _TASK_HISTORY.pop(task_id, None)
+    _TASK_HISTORY[task_id] = snap
+    while len(_TASK_HISTORY) > _TASK_HISTORY_MAX:
+        _TASK_HISTORY.pop(next(iter(_TASK_HISTORY)), None)
 
 
 def add_uri(url, options=None):
@@ -360,16 +426,34 @@ def progress(task_id):
     with _ENGINE_LOCK:
         task = _TASKS.get(task_id)
     if task is None:
+        with _ENGINE_LOCK:
+            settled = _TASK_HISTORY.get(task_id)
+        if settled is not None:
+            return json.dumps(settled)
         return json.dumps({"state": ERROR, "error": "unknown task"})
     snap = task.step.snapshot()
     snap["taskId"] = task_id
+    if snap["state"] in (COMPLETED, ERROR, CANCELLED):
+        # A settled task pins a finished thread and its step. Keep only the
+        # verdict: nothing else reads the live object again, and a long
+        # session would otherwise grow without bound.
+        with _ENGINE_LOCK:
+            _TASKS.pop(task_id, None)
+            _remember_terminal(task_id, snap)
     return json.dumps(snap)
 
 
 def cancel(task_id):
+    settled = None
     with _ENGINE_LOCK:
         task = _TASKS.get(task_id)
+        if task is None:
+            settled = _TASK_HISTORY.get(task_id)
     if task is None:
+        if settled is not None:
+            # Already finished: cancelling is a no-op that still succeeds, and
+            # the caller gets the final verdict it may have missed.
+            return json.dumps({"ok": True, **settled})
         return json.dumps({"ok": False})
     task.step.cancel()
     return json.dumps({"ok": True})
@@ -492,15 +576,17 @@ def gallery_resolve(url, cookies_file=None, max_items=None):
     except Exception as e:
         return json.dumps({"ok": False, "error": "gallery-dl import failed: %s" % e})
     try:
-        if cookies_file:
-            # The app exports captured WebView logins as a Netscape cookies.txt;
-            # hand the same file to gallery-dl (auth-walled sites like Instagram
-            # need it). Cookies are domain-scoped inside the jar, so a global
-            # assignment is safe.
+        try:
             from gallery_dl import config as _gdl_config
-
-            _gdl_config.set(("extractor",), "cookies", cookies_file)
+        except Exception:
+            _gdl_config = None
         with _GALLERY_LOCK:
+            # gallery-dl's config is process-global, so a path left by an
+            # authenticated call would ride into the next anonymous one and
+            # send the user's session cookies to a site it was never meant
+            # for. Assign on every call, including the empty one that clears.
+            if _gdl_config is not None:
+                _gdl_config.set(("extractor",), "cookies", cookies_file or None)
             ext = extractor.find(url)
             if ext is None:
                 return json.dumps({"ok": False, "error": "no site module matched"})
