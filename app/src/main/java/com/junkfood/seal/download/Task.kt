@@ -38,6 +38,18 @@ enum class TaskOrigin {
     Quick,
 }
 
+/**
+ * Why a task failed, when the failure has a known cause worth naming under the
+ * title. Persisted, because `Error.throwable` is `@Transient` and a restored
+ * error has none.
+ */
+@Serializable
+enum class ErrorReason {
+    PLAYLIST_SHIFTED,
+    ALREADY_DOWNLOADED,
+    LOGIN_REQUIRED,
+}
+
 @Serializable
 data class Task(
     val url: String,
@@ -125,6 +137,11 @@ data class Task(
         val videoInfo: VideoInfo?,
         val viewState: ViewState,
         val match: MatchResult? = null,
+        /**
+         * The video a playlist item was enqueued for, when its fetch resolves
+         * by index. Appended last with a default so older backups decode.
+         */
+        val expectedVideoId: String? = null,
     )
 
     @Serializable
@@ -211,6 +228,8 @@ data class Task(
             override val action: RestartableAction,
             /** Friendly text for the card; appended last so positional callers still compile. */
             val message: String = "",
+            /** Persisted cause, because [throwable] is gone after a restore. */
+            val reason: ErrorReason? = null,
         ) : DownloadState, Restartable
 
         @Serializable

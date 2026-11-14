@@ -229,6 +229,7 @@ private fun SongRow(
     onAction: (UiAction) -> Unit,
 ) {
     val progress = (state.downloadState as? Running)?.progress?.takeIf { it >= 0f }
+    val status = statusLine(state.downloadState)
     val phase = state.match.phase
     Row(
         modifier =
@@ -246,6 +247,16 @@ private fun SongRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (status != null) {
+                Text(
+                    text = stringResource(status),
+                    modifier = Modifier.padding(top = 2.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (phase.isOpen) {
                 val isDarkTheme = LocalDarkTheme.current.isDarkTheme()
                 // A pending replacement is already downloading: say so, and keep

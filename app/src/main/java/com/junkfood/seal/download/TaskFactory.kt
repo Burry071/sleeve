@@ -105,7 +105,12 @@ object TaskFactory {
                     )
                 val task = Task(url = playlistUrl, preferences = preferences, type = Task.TypeInfo.Playlist(index))
                 val state =
-                    Task.State(downloadState = Idle, videoInfo = null, viewState = viewState)
+                    Task.State(
+                        downloadState = Idle,
+                        videoInfo = null,
+                        viewState = viewState,
+                        expectedVideoId = PlaylistPin.capture(playlistUrl, entry),
+                    )
                 TaskWithState(task, state)
             }
 

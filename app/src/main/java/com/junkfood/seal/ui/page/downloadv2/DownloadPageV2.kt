@@ -120,7 +120,6 @@ import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.phase
-import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Error
@@ -682,6 +681,7 @@ fun DownloadPageImplV2(
                                             (state.downloadState as? Running)
                                                 ?.progress
                                                 ?.takeIf { it >= 0f },
+                                        statusLine = statusLine(state.downloadState),
                                         footerContent =
                                             if (state.downloadState is Error) {
                                                 {
@@ -690,24 +690,18 @@ fun DownloadPageImplV2(
                                                             onActionPost(task, UiAction.Resume)
                                                         },
                                                         onRetryWithCookies =
-                                                            (state.downloadState as Error)
-                                                                .throwable
-                                                                .takeIf {
-                                                                    it is
-                                                                        DownloadErrorMessages
-                                                                            .LoginRequiredError
+                                                            if (
+                                                                hasCookieAction(state.downloadState)
+                                                            ) {
+                                                                {
+                                                                    onActionPost(
+                                                                        task,
+                                                                        UiAction.RetryWithCookies(
+                                                                            task.url
+                                                                        ),
+                                                                    )
                                                                 }
-                                                                ?.let {
-                                                                    {
-                                                                        onActionPost(
-                                                                            task,
-                                                                            UiAction
-                                                                                .RetryWithCookies(
-                                                                                    task.url
-                                                                                ),
-                                                                        )
-                                                                    }
-                                                                },
+                                                            } else null,
                                                     )
                                                 }
                                             } else null,
