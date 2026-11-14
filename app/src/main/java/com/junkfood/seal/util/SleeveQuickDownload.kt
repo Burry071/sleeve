@@ -58,6 +58,41 @@ object SleeveQuickDownload {
             formatIdString = "direct",
         )
 
+    /**
+     * The resolver ladder, injectable so the fallback order is testable without
+     * the embedded engine: gallery-dl → (Instagram) anonymous embed → page
+     * sniff. A gallery miss on any other host must reach the sniffer: most
+     * pages have no gallery-dl module at all, and the old code jumped straight
+     * to yt-dlp, which cannot see a bare `<video src>` on a generic page.
+     */
+    internal suspend fun resolveItems(
+        url: String,
+        cookiesFile: String,
+        gallery: suspend (String, String) -> Result<Pair<String, List<GalleryItem>>>,
+        embed: suspend (String) -> Result<List<GalleryItem>>,
+        sniff: suspend (String) -> Result<List<GalleryItem>>,
+    ): Pair<String, List<GalleryItem>> {
+        val galleryResult = gallery(url, cookiesFile)
+        if (galleryResult.isSuccess) {
+            val (site, resolved) = galleryResult.getOrThrow()
+            if (resolved.isNotEmpty()) return "gallery:$site" to resolved
+            return "sniff" to sniff(url).getOrDefault(emptyList())
+        }
+        val galleryError = galleryResult.exceptionOrNull() ?: error("gallery resolve failed")
+
+        if (url.contains("instagram.com")) {
+            val resolved = embed(url).getOrThrow()
+            if (resolved.isEmpty()) throw galleryError
+            return "instagram-embed" to resolved
+        }
+        // No module matched: read the page's own tags before giving up. An
+        // empty sniff keeps the gallery error so the caller's fallback reports
+        // why the resolver stopped, not a misleading "no media".
+        val sniffed = sniff(url).getOrDefault(emptyList())
+        if (sniffed.isEmpty()) throw galleryError
+        return "sniff" to sniffed
+    }
+
     /** Resolve via gallery → instagram embed → sniff, then enqueue each item. */
     suspend fun enqueue(
         context: Context,
@@ -71,20 +106,13 @@ object SleeveQuickDownload {
                 val cookiesFile = if (anonymous) "" else cookiesFile()
 
                 val (source, items) =
-                    runCatching {
-                        val (site, resolved) =
-                            GhostEngine.galleryResolve(url, cookiesFile).getOrThrow()
-                        if (resolved.isNotEmpty()) "gallery:$site" to resolved
-                        else "sniff" to GhostEngine.sniffMedia(url).getOrDefault(emptyList())
-                    }.recoverCatching { galleryError ->
-                        if (url.contains("instagram.com")) {
-                            val resolved = GhostEngine.instagramEmbed(url).getOrThrow()
-                            if (resolved.isEmpty()) throw galleryError
-                            "instagram-embed" to resolved
-                        } else {
-                            throw galleryError
-                        }
-                    }.getOrThrow()
+                    resolveItems(
+                        url = url,
+                        cookiesFile = cookiesFile,
+                        gallery = { u, c -> GhostEngine.galleryResolve(u, c) },
+                        embed = { GhostEngine.instagramEmbed(it) },
+                        sniff = { GhostEngine.sniffMedia(it) },
+                    )
 
                 if (items.isEmpty()) error("no media found on this page")
 
