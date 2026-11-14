@@ -117,6 +117,7 @@ fun VideoCardV2(
     progress: Float? = null,
     footerContent: (@Composable () -> Unit)? = null,
     statusLine: Int? = null,
+    statusText: String? = null,
     onButtonClick: () -> Unit,
 ) {
     with(viewState) {
@@ -132,6 +133,7 @@ fun VideoCardV2(
             progress = progress,
             footerContent = footerContent,
             statusLine = statusLine,
+            statusText = statusText,
             onButtonClick = onButtonClick,
         )
     }
@@ -268,6 +270,7 @@ fun VideoCardV2(
     progress: Float? = null,
     footerContent: (@Composable () -> Unit)? = null,
     statusLine: Int? = null,
+    statusText: String? = null,
     onButtonClick: () -> Unit,
 ) {
     val containerColor =
@@ -275,7 +278,10 @@ fun VideoCardV2(
             if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
         }
     val denseBottom =
-        (progress != null && progress >= 0f) || footerContent != null || statusLine != null
+        (progress != null && progress >= 0f) ||
+            footerContent != null ||
+            statusLine != null ||
+            statusText != null
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -315,9 +321,9 @@ fun VideoCardV2(
                     )
                 }
             }
-            if (statusLine != null) {
+            if (statusText != null || statusLine != null) {
                 Text(
-                    text = stringResource(statusLine),
+                    text = statusText ?: stringResource(statusLine!!),
                     modifier =
                         Modifier.padding(
                             start = 16.dp,
@@ -695,13 +701,15 @@ fun ListItemStateText(
 /**
  * Inline retry action rendered on failed task cards. A login-walled failure
  * also offers the cookie route, so recovery does not require re-sharing the
- * link.
+ * link; a failed SD-card move offers the kept file instead, because retrying
+ * the move is pointless while the chosen folder is unusable.
  */
 @Composable
 fun ErrorFooter(
     modifier: Modifier = Modifier,
     onRetry: () -> Unit,
     onRetryWithCookies: (() -> Unit)? = null,
+    onShareKeptFile: (() -> Unit)? = null,
 ) {
     // No verticalScroll here: the card hosts this footer inside a Row, which
     // measures children with unbounded height, and a vertical scroller throws.
@@ -726,6 +734,11 @@ fun ErrorFooter(
         onRetryWithCookies?.let {
             TextButton(onClick = it, modifier = Modifier) {
                 Text(text = stringResource(R.string.retry_with_cookies))
+            }
+        }
+        onShareKeptFile?.let {
+            TextButton(onClick = it, modifier = Modifier) {
+                Text(text = stringResource(R.string.share_kept_file))
             }
         }
     }

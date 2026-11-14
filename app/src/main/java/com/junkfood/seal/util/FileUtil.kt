@@ -28,6 +28,8 @@ private const val COOKIE_FILE_NAME = "cookies.txt"
 private const val STAGED_SHARE_DIR = "share"
 private const val STAGED_SHARE_KEEP = 2
 private const val STAGED_SHARE_MAX_BYTES = 1L shl 30
+private const val SCRATCH_SUFFIX = ".part"
+private const val MAX_FREE_NAMES = 100
 
 // Engine scratch written next to the output: "<name>.tmp" and the
 // "<name>.parts[-<tag>]" segment directory.
@@ -72,19 +74,16 @@ object FileUtil {
         val parsed = Uri.parse(path)
         // SAF documents already carry their own grant; never copy those.
         if (parsed.scheme == "content") {
-            val uri =
-                DocumentFile.fromSingleUri(context, parsed)
-                    ?.takeIf { it.exists() }
-                    ?.uri
-                    ?: return null
-            return intentForUri(uri, action)
+            val document =
+                DocumentFile.fromSingleUri(context, parsed)?.takeIf { it.exists() } ?: return null
+            return intentForUri(document.uri, action, document.name)
         }
 
         val file = File(path)
         if (!file.exists()) return null
 
         val uri = resolveProviderUri(file) ?: return null
-        return intentForUri(uri, action)
+        return intentForUri(uri, action, file.name)
     }
 
     private suspend fun resolveProviderUri(file: File): Uri? {
@@ -108,7 +107,7 @@ object FileUtil {
         }
     }
 
-    private fun intentForUri(uri: Uri, action: FileAction): Intent =
+    private fun intentForUri(uri: Uri, action: FileAction, name: String? = null): Intent =
         Intent().apply {
             this.action =
                 when (action) {
@@ -116,12 +115,19 @@ object FileUtil {
                     FileAction.SHARE -> Intent.ACTION_SEND
                 }
             flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-            data = uri
             when (action) {
-                FileAction.OPEN -> addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                FileAction.OPEN -> {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    // A SAF document's own MIME type comes back as
+                    // application/octet-stream for .m4b; the known override
+                    // wins so players and viewers claim the intent.
+                    val type = mimeTypeFor(name)
+                    if (type != null) setDataAndType(uri, type) else data = uri
+                }
                 FileAction.SHARE -> {
                     putExtra(Intent.EXTRA_STREAM, uri)
-                    val mimeType = context.contentResolver.getType(uri) ?: "media/*"
+                    val mimeType =
+                        mimeTypeFor(name) ?: context.contentResolver.getType(uri) ?: "media/*"
                     setDataAndType(uri, mimeType)
                     clipData = ClipData(null, arrayOf(mimeType), ClipData.Item(uri))
                 }
@@ -244,8 +250,20 @@ object FileUtil {
                 MediaScannerConnection.scanFile(context, this.toList().toTypedArray(), null, null)
             }
 
+    /**
+     * Move a finished download onto the chosen SD-card tree.
+     *
+     * Every file is written to a `<name>.part` scratch document, byte-counted,
+     * and only then renamed into its final name; [onCopied] reports the name
+     * the file ended up with, because the final name can differ from the temp
+     * one. A file that never verifies is failed, never reported as copied.
+     */
     @CheckResult
-    fun moveFilesToSdcard(tempPath: File, sdcardUri: String): Result<List<String>> {
+    fun moveFilesToSdcard(
+        tempPath: File,
+        sdcardUri: String,
+        onCopied: (sourceName: String, destUri: String) -> Unit = { _, _ -> },
+    ): Result<List<String>> {
         val copied = mutableListOf<String>()
         val failed = mutableListOf<String>()
         var cause: Throwable? = null
@@ -258,38 +276,37 @@ object FileUtil {
                         )
                     }
                 }
-                .getOrElse { return Result.failure(it) }
+                .getOrElse {
+                    return Result.failure(
+                        DownloadErrorMessages.StorageMoveError(
+                            copied = 0,
+                            failed = listOf(tempPath.name),
+                            retainedDir = tempPath.absolutePath,
+                            cause = it,
+                        )
+                    )
+                }
 
         try {
             tempPath.walkTopDown().forEach { file ->
                 if (file.isDirectory) return@forEach
-                try {
-                    val mimeType =
-                        MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "*/*"
-                    val destUri =
-                        DocumentsContract.createDocument(
-                            context.contentResolver,
-                            destDir,
-                            mimeType,
-                            file.name,
-                        )
-                            ?: run {
-                                failed += file.name
-                                return@forEach
-                            }
-                    val outputStream =
-                        context.contentResolver.openOutputStream(destUri)
-                            ?: run {
-                                failed += file.name
-                                return@forEach
-                            }
-                    file.inputStream().use { input ->
-                        outputStream.use { output -> input.copyTo(output) }
+                // An empty file is a failed write, not a download; a scratch
+                // name belongs to another pass. Neither is copied or failed.
+                if (file.length() == 0L || file.name.matches(SCRATCH_FILE_REGEX)) {
+                    return@forEach
+                }
+                val destUri =
+                    try {
+                        copyVerified(file, destDir)
+                    } catch (e: Exception) {
+                        cause = cause ?: e
+                        null
                     }
-                    copied.add(destUri.toString())
-                } catch (e: Exception) {
+                if (destUri == null) {
                     failed += file.name
-                    cause = cause ?: e
+                } else {
+                    copied += destUri.toString()
+                    onCopied(file.name, destUri.toString())
                 }
             }
         } catch (e: Exception) {
@@ -297,11 +314,116 @@ object FileUtil {
             cause = cause ?: e
         }
 
-        val result = sdcardCopyResult(copied = copied, failed = failed, cause = cause)
+        val result =
+            sdcardCopyResult(
+                copied = copied,
+                failed = failed,
+                cause = cause,
+                retainedDir = tempPath.absolutePath,
+            )
         // The temp copy is the only intact copy when any file failed; deleting
         // it here is what turned a revoked tree URI into lost media.
         if (result.isSuccess) tempPath.deleteRecursively()
         return result
+    }
+
+    /**
+     * A provider can reject a document even when the source filesystem allowed
+     * the name, so a verified-copy failure is retried once under a name with
+     * the reserved characters replaced.
+     */
+    private fun copyVerified(file: File, dir: Uri): Uri? {
+        copyToDocument(context, dir, file, file.name)?.let {
+            return it
+        }
+        val sanitized = sanitizeSegment(file.name)
+        if (sanitized == file.name) return null
+        return copyToDocument(context, dir, file, sanitized)
+    }
+
+    /** Writes one scratch document, verifies its bytes, and renames it. */
+    private fun copyToDocument(context: Context, dir: Uri, file: File, name: String): Uri? {
+        val resolver = context.contentResolver
+        // Typed from the final name, never the ".part" scratch: no MIME entry
+        // exists for that suffix, and every document would become "*/*".
+        val scratch =
+            DocumentsContract.createDocument(
+                resolver,
+                dir,
+                documentMimeType(name),
+                "$name$SCRATCH_SUFFIX",
+            ) ?: return null
+        var published: Uri? = null
+        try {
+            val outputStream = resolver.openOutputStream(scratch) ?: return null
+            file.inputStream().use { input ->
+                outputStream.use { output -> input.copyTo(output) }
+            }
+            // A provider that drops bytes is indistinguishable from a short
+            // download, so the count has to match before the name is published.
+            if (!isVerifiedCopy(file.length(), destinationLength(context, scratch))) return null
+            val finalName = freeName(context, dir, name)
+            published = DocumentsContract.renameDocument(resolver, scratch, finalName)
+            return published
+        } finally {
+            if (published == null) {
+                runCatching { DocumentsContract.deleteDocument(resolver, scratch) }
+            }
+        }
+    }
+
+    /**
+     * `createDocument` silently appends " (1)" on a collision, but
+     * `renameDocument` onto a taken name is provider-defined, so the target
+     * name is probed first. At 100 occupied names it gives up rather than risk
+     * overwriting a document it did not create.
+     */
+    private fun freeName(context: Context, dir: Uri, name: String): String {
+        val parent = DocumentFile.fromTreeUri(context, dir) ?: return name
+        if (parent.findFile(name) == null) return name
+        val base = name.substringBeforeLast('.', name)
+        val extension = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
+        for (suffix in 2..MAX_FREE_NAMES) {
+            val candidate = "$base ($suffix)$extension"
+            if (parent.findFile(candidate) == null) return candidate
+        }
+        throw IllegalStateException("no free document name for $name")
+    }
+
+    private fun documentMimeType(name: String): String =
+        mimeTypeFor(name)
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(File(name).extension)
+            ?: "*/*"
+
+    /**
+     * Some providers refuse to report a size for a document they just wrote,
+     * so a missing size is measured by reading the bytes back.
+     */
+    private fun destinationLength(context: Context, uri: Uri): Long {
+        val resolver = context.contentResolver
+        runCatching {
+                resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                    descriptor.statSize
+                }
+            }
+            .getOrNull()
+            ?.takeIf { it > 0 }
+            ?.let {
+                return it
+            }
+        return runCatching {
+                resolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                    }
+                    total
+                } ?: -1L
+            }
+            .getOrDefault(-1L)
     }
 
     fun clearTempFiles(downloadDir: File): Int {
@@ -444,15 +566,89 @@ internal fun sdcardCopyResult(
     copied: List<String>,
     failed: List<String>,
     cause: Throwable? = null,
+    retainedDir: String = "",
 ): Result<List<String>> =
     if (failed.isEmpty()) {
         Result.success(copied)
     } else {
         Result.failure(
-            IOException(
-                "SD card copy failed for ${failed.size} of ${copied.size + failed.size} file(s): " +
-                    failed.joinToString(", "),
-                cause,
+            DownloadErrorMessages.StorageMoveError(
+                copied = copied.size,
+                failed = failed,
+                retainedDir = retainedDir,
+                cause = cause,
             )
         )
     }
+
+/**
+ * Replace what a storage provider is allowed to refuse. Defaults change
+ * nothing else: a name that is already legal must survive untouched, so the
+ * collapse/trim flags are opt-in and the trailing dot is left alone.
+ */
+private val ILLEGAL_NAME_CHARS = Regex("""[\\/:*?"<>|\u0000-\u001F]""")
+private val WHITESPACE_RUN = Regex("\\s+")
+
+internal fun sanitizeSegment(
+    raw: String,
+    maxLength: Int = 120,
+    collapseWhitespace: Boolean = false,
+    trimWhitespace: Boolean = false,
+): String {
+    var value = raw.replace(ILLEGAL_NAME_CHARS, "_")
+    if (collapseWhitespace) value = value.replace(WHITESPACE_RUN, " ")
+    if (trimWhitespace) value = value.trim()
+    return value.take(maxLength)
+}
+
+/** A copy is complete only when the destination holds every source byte. */
+internal fun isVerifiedCopy(sourceLength: Long, destinationLength: Long): Boolean =
+    sourceLength > 0 && sourceLength == destinationLength
+
+/** Extensions Android's MIME table has no usable entry for. */
+internal fun mimeTypeFor(name: String?): String? {
+    val extension = name?.substringAfterLast('.', "")?.lowercase() ?: return null
+    return when (extension) {
+        "m4b" -> "audio/mp4"
+        else -> null
+    }
+}
+
+private val SHARE_MEDIA_EXTENSIONS =
+    AUDIO_FILE_EXTENSIONS +
+        setOf("m4b", "mp4", "m4v", "webm", "mkv", "mov", "avi", "3gp", "ts", "flv")
+
+/**
+ * The file "Share kept file" should open when the move failed: a real media
+ * file still sitting in [retainedDir]. It never points at the directory
+ * itself, a scratch or `.ytdl` leftover, or a hidden file, because sharing
+ * any of those gives the user nothing.
+ */
+internal fun retainedShareCandidate(
+    retainedDir: String,
+    failed: List<String>,
+    exists: (String) -> Boolean = { name -> File(retainedDir, name).isFile },
+    listing: () -> List<String> = {
+        File(retainedDir).listFiles()?.map { it.name }.orEmpty()
+    },
+): String? {
+    val dirName = File(retainedDir).name
+
+    fun usable(name: String): Boolean =
+        name.isNotEmpty() &&
+            name != dirName &&
+            !name.startsWith(".") &&
+            !name.endsWith(".ytdl", ignoreCase = true) &&
+            !name.matches(SCRATCH_FILE_REGEX) &&
+            exists(name)
+
+    fun shareable(name: String): Boolean =
+        usable(name) && name.substringAfterLast('.', "").lowercase() in SHARE_MEDIA_EXTENSIONS
+
+    val name =
+        failed.firstOrNull(::shareable)
+            ?: listing().firstOrNull(::shareable)
+            ?: failed.firstOrNull(::usable)
+            ?: return null
+    return "${retainedDir.trimEnd('/')}/$name"
+}

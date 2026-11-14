@@ -230,6 +230,7 @@ private fun SongRow(
 ) {
     val progress = (state.downloadState as? Running)?.progress?.takeIf { it >= 0f }
     val status = statusLine(state.downloadState)
+    val statusText = statusText(state.downloadState)
     val phase = state.match.phase
     Row(
         modifier =
@@ -247,9 +248,9 @@ private fun SongRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (status != null) {
+            if (statusText != null || status != null) {
                 Text(
-                    text = stringResource(status),
+                    text = statusText ?: stringResource(status!!),
                     modifier = Modifier.padding(top = 2.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

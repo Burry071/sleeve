@@ -1286,8 +1286,7 @@ object DownloadUtil {
         val baseName =
             preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
                 .ifBlank { "download" }
-                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                .take(120)
+                .let { sanitizeSegment(it) }
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
         val fileName = "$baseName.mp4" // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
@@ -1475,8 +1474,7 @@ object DownloadUtil {
         val baseName =
             preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
                 .ifBlank { "download" }
-                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                .take(120)
+                .let { sanitizeSegment(it) }
         val downloadDir =
             if (preferences.privateDirectory) App.privateDownloadDir
             else
@@ -2114,10 +2112,7 @@ object DownloadUtil {
         // file extension instead.
         val directVcodec = if (ext in DIRECT_AUDIO_EXTS) "none" else "h264"
         val baseName =
-            title.ifBlank { path }
-                .ifBlank { cleanUrl }
-                .replace(Regex("[\\/:*?\"<>|]"), "_")
-                .take(120)
+            title.ifBlank { path }.ifBlank { cleanUrl }.let { sanitizeSegment(it) }
         val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
         // requestedFormats = the chosen file: ViewState.videoFormats and the
         // ghost-handoff candidate read requestedFormats first, and an empty

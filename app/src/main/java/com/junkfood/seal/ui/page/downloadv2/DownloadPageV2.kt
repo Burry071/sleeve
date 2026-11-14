@@ -152,6 +152,7 @@ import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.ui.svg.drawablevectors.download
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.NOTIFICATION
@@ -160,6 +161,7 @@ import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.getErrorReport
 import com.junkfood.seal.util.makeToast
+import com.junkfood.seal.util.retainedShareCandidate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -167,6 +169,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 
 private const val TAG = "DownloadPageV2"
@@ -223,6 +226,26 @@ enum class Filter {
     }
 }
 
+/**
+ * The retained media file "Share kept file" acts on, chosen per §1 E3.3.
+ * Resolved off the main thread because it stats the temp directory, and only
+ * for a live [DownloadErrorMessages.StorageMoveError]: a restored error has no
+ * throwable left, so its card has nothing to point at.
+ */
+@Composable
+private fun retainedShareFile(state: Task.DownloadState): String? {
+    val move =
+        (state as? Error)?.throwable as? DownloadErrorMessages.StorageMoveError ?: return null
+    var path by remember(move) { mutableStateOf<String?>(null) }
+    LaunchedEffect(move) {
+        path =
+            withContext(Dispatchers.IO) {
+                retainedShareCandidate(move.retainedDir, move.failed)
+            }
+    }
+    return path
+}
+
 sealed interface UiAction {
     data class OpenFile(val filePath: String?) : UiAction
 
@@ -244,6 +267,9 @@ sealed interface UiAction {
 
     /** Re-opens the confirm sheet for a login-walled failure. */
     data class RetryWithCookies(val url: String) : UiAction
+
+    /** Shares the media file an SD-card move left behind in the temp folder. */
+    data class ShareRetainedFile(val path: String) : UiAction
 
     /** Opens the runtime audit log (cookie state and every match score). */
     data object ShowLogs : UiAction
@@ -355,6 +381,14 @@ fun DownloadPageV2(
                 val shareTitle = context.getString(R.string.share)
                 scope.launch {
                     FileUtil.createIntentForSharingFile(action.filePath)?.let {
+                        context.startActivity(Intent.createChooser(it, shareTitle))
+                    } ?: context.makeToast(R.string.file_unavailable)
+                }
+            }
+            is UiAction.ShareRetainedFile -> {
+                val shareTitle = context.getString(R.string.share)
+                scope.launch {
+                    FileUtil.createIntentForSharingFile(action.path)?.let {
                         context.startActivity(Intent.createChooser(it, shareTitle))
                     } ?: context.makeToast(R.string.file_unavailable)
                 }
@@ -670,6 +704,7 @@ fun DownloadPageImplV2(
                                     },
                                 key = { (task, _) -> task.uiKey },
                             ) { (task, state) ->
+                                val keptFile = retainedShareFile(state.downloadState)
                                 with(state.viewState) {
                                     VideoCardV2(
                                         modifier =
@@ -682,6 +717,7 @@ fun DownloadPageImplV2(
                                                 ?.progress
                                                 ?.takeIf { it >= 0f },
                                         statusLine = statusLine(state.downloadState),
+                                        statusText = statusText(state.downloadState),
                                         footerContent =
                                             if (state.downloadState is Error) {
                                                 {
@@ -702,6 +738,17 @@ fun DownloadPageImplV2(
                                                                     )
                                                                 }
                                                             } else null,
+                                                        onShareKeptFile =
+                                                            keptFile?.let { path ->
+                                                                {
+                                                                    onActionPost(
+                                                                        task,
+                                                                        UiAction.ShareRetainedFile(
+                                                                            path
+                                                                        ),
+                                                                    )
+                                                                }
+                                                            },
                                                     )
                                                 }
                                             } else null,

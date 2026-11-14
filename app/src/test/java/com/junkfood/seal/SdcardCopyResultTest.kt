@@ -1,7 +1,7 @@
 package com.junkfood.seal
 
+import com.junkfood.seal.util.DownloadErrorMessages.StorageMoveError
 import com.junkfood.seal.util.sdcardCopyResult
-import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,11 +17,20 @@ class SdcardCopyResultTest {
 
     @Test
     fun `any failed file fails the whole move`() {
-        val result = sdcardCopyResult(copied = listOf("a.mp3"), failed = listOf("b.mp3"))
+        val result =
+            sdcardCopyResult(
+                copied = listOf("a.mp3"),
+                failed = listOf("b.mp3"),
+                retainedDir = "/tmp/abc",
+            )
 
         val error = result.exceptionOrNull()
-        assertTrue(error is IOException)
-        assertTrue(error!!.message!!.contains("1 of 2"))
+        assertTrue(error is StorageMoveError)
+        error as StorageMoveError
+        assertEquals(1, error.copied)
+        assertEquals(listOf("b.mp3"), error.failed)
+        assertEquals("/tmp/abc", error.retainedDir)
+        assertTrue(error.message!!.contains("1 of 2"))
         assertTrue(error.message!!.contains("b.mp3"))
     }
 

@@ -521,12 +521,21 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     /**
      * Non-blank text for [Task.DownloadState.Error.message]. Error surfaces
      * prefer this field when `throwable.message` is blank, so a throwable that
-     * carries no message must not leave it empty.
+     * carries no message must not leave it empty. A failed SD-card move gets
+     * the counts in plain words, then the folder the files are still in.
      */
-    private fun errorText(throwable: Throwable, friendly: Throwable): String =
-        friendly.message?.takeIf { it.isNotBlank() }
+    private fun errorText(throwable: Throwable, friendly: Throwable): String {
+        if (friendly is DownloadErrorMessages.StorageMoveError) {
+            return appContext.getString(
+                    R.string.error_sdcard_move_kept,
+                    friendly.copied,
+                    friendly.copied + friendly.failed.size,
+                ) + (if (friendly.retainedDir.isBlank()) "" else "\n" + friendly.retainedDir)
+        }
+        return friendly.message?.takeIf { it.isNotBlank() }
             ?: throwable.message?.takeIf { it.isNotBlank() }
             ?: appContext.getString(R.string.unknown_error)
+    }
 
     /** One short, user-safe line; never a stack trace. */
     private fun shortReason(throwable: Throwable): String =

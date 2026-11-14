@@ -24,6 +24,18 @@ fun statusLine(state: DownloadState): Int? {
 }
 
 /**
+ * The move-failure sentence, which carries counts and so cannot be a string
+ * resource. Gated on the same transient throwable as the share action, so the
+ * two appear and disappear together; the full message, directory included,
+ * stays in the copied report.
+ */
+fun statusText(state: DownloadState): String? {
+    val error = state as? Error ?: return null
+    if (error.throwable !is DownloadErrorMessages.StorageMoveError) return null
+    return error.message.lineSequence().firstOrNull()
+}
+
+/**
  * Whether the cookie recovery action applies. Shared by the sheet and the
  * card footer so the two conditions cannot drift: the persisted reason keeps
  * the action reachable after a restore, where the throwable is blank.
