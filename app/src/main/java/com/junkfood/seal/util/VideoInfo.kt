@@ -121,7 +121,7 @@ data class Format(
 
 /** Containers that only ever hold audio; used when yt-dlp omits codec info. */
 val AUDIO_FILE_EXTENSIONS =
-    setOf("mp3", "m4a", "aac", "opus", "flac", "wav", "ogg", "oga", "wma", "weba", "mka")
+    setOf("mp3", "m4a", "m4b", "aac", "opus", "flac", "wav", "ogg", "oga", "wma", "weba", "mka")
 
 @Serializable
 data class VideoClip(val start: Int = 0, val end: Int = 0) {

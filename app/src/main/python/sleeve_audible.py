@@ -46,10 +46,11 @@ def _product_dto(product):
     )
     artist = authors + (" (narrated by " + narrators + ")" if narrators else "")
     minutes = (product.get("runtime_length_min") or 0)
+    # No "album": the catalogue has none, and an album tag invented from the
+    # provider name would be written into every exported audiobook.
     return {
         "title": product.get("title") or "",
         "artist": artist,
-        "album": "Audible",
         "durationMs": int(minutes) * 60 * 1000,
         "authors": authors,
         "language": product.get("language") or "",

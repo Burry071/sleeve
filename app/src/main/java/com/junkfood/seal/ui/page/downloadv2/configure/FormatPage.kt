@@ -74,6 +74,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
@@ -100,6 +101,7 @@ import com.junkfood.seal.ui.page.download.VideoSelectionSlider
 import com.junkfood.seal.ui.page.settings.general.DialogCheckBoxItem
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.ui.theme.generateLabelColor
+import com.junkfood.seal.util.Chapter
 import com.junkfood.seal.util.EMBED_SUBTITLE
 import com.junkfood.seal.util.EXTRACT_AUDIO
 import com.junkfood.seal.util.Format
@@ -485,6 +487,15 @@ private fun FormatPageImpl(
                 }
             }
 
+            videoInfo.chapters?.takeIf { it.isNotEmpty() }?.let { chapters ->
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    ChapterSummary(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        chapters = chapters,
+                    )
+                }
+            }
+
             item(span = { GridItemSpan(maxLineSpan) }) {
                 var shouldUpdateClipDuration by remember { mutableStateOf(false) }
 
@@ -822,6 +833,31 @@ private fun FormatPageImpl(
                 showSubtitleSelectionDialog = false
             },
         )
+}
+
+/**
+ * What an audiobook export would contain: the chapter count, then the first few
+ * titles. Shown for any chaptered source so the user sees the shape of the
+ * output before starting the download.
+ */
+@Composable
+private fun ChapterSummary(modifier: Modifier = Modifier, chapters: List<Chapter>) {
+    val titles = chapters.take(3).mapNotNull { it.title?.trim()?.takeIf(String::isNotEmpty) }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            text =
+                (listOf(pluralStringResource(R.plurals.chapter_summary_count, chapters.size, chapters.size)) +
+                        titles)
+                    .joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

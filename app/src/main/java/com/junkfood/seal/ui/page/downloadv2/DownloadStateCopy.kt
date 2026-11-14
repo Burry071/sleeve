@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.junkfood.seal.R
+import com.junkfood.seal.download.CompletedNote
 import com.junkfood.seal.download.ErrorReason
 import com.junkfood.seal.download.Task.DownloadState
 import com.junkfood.seal.download.Task.DownloadState.Completed
@@ -59,6 +60,21 @@ fun completedFormatLine(state: DownloadState, preferences: DownloadPreferences):
         stringResource(R.string.converted_to, target)
     } else {
         stringResource(R.string.container_format, container)
+    }
+}
+
+/**
+ * What a finished card says about a secondary miss: the download succeeded, but
+ * one thing about it did not. Separate from [statusText] so a note never
+ * outranks a real warning.
+ */
+@Composable
+fun completedNoteLine(state: DownloadState): String? {
+    val completed = state as? Completed ?: return null
+    return when {
+        CompletedNote.M4B_NOT_EXPORTED in completed.notes ->
+            stringResource(R.string.m4b_not_exported)
+        else -> null
     }
 }
 

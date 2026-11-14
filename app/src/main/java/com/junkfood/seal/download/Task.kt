@@ -52,6 +52,17 @@ enum class ErrorReason {
     STREAM_UPCOMING,
 }
 
+/**
+ * A rider on a Completed state: the download succeeded, but one secondary
+ * thing about it did not. Persisted (unlike `Error.throwable`) so a restored
+ * card still explains itself.
+ */
+@Serializable
+enum class CompletedNote {
+    /** The chaptered `.m4b` export failed; the audio file was kept. */
+    M4B_NOT_EXPORTED,
+}
+
 @Serializable
 data class Task(
     val url: String,
@@ -254,6 +265,11 @@ data class Task(
              * default so states cached by beta.4 still decode.
              */
             val warning: String = "",
+            /**
+             * Secondary remarks about a successful download (a refused export).
+             * Appended last with a default so older states still decode.
+             */
+            val notes: List<CompletedNote> = emptyList(),
         ) : DownloadState
     }
 

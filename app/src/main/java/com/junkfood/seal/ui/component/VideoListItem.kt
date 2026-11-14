@@ -46,7 +46,7 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.AsyncImageImpl
 import com.junkfood.seal.util.toFileSizeText
 
-private const val AUDIO_REGEX = "\\.(mp3|aac|opus|m4a|flac|wav)"
+private const val AUDIO_REGEX = "\\.(mp3|aac|opus|m4a|m4b|flac|wav)"
 
 @Composable
 @Preview

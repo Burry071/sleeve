@@ -14,7 +14,7 @@ object DirectMediaRules {
             "jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "jfif",
             "heic", "heif", "tif", "tiff",
             "mp4", "m4v", "webm", "mkv", "mov", "avi", "3gp", "ts", "flv",
-            "mp3", "m4a", "aac", "opus", "wav", "flac", "oga", "wma",
+            "mp3", "m4a", "m4b", "aac", "opus", "wav", "flac", "oga", "wma",
         )
 
     val IMAGE_EXTS =

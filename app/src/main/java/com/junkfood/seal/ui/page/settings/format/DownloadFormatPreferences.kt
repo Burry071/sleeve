@@ -7,6 +7,7 @@ import androidx.compose.material.icons.outlined.ArtTrack
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Sort
@@ -55,6 +56,7 @@ import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.DownloadUtil.toFormatSorter
 import com.junkfood.seal.util.EMBED_METADATA
 import com.junkfood.seal.util.EMBED_SUBTITLE
+import com.junkfood.seal.util.EXPORT_M4B
 import com.junkfood.seal.util.EXTRACT_AUDIO
 import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.FORMAT_SORTING
@@ -90,6 +92,7 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
     var remuxToMkv by MERGE_OUTPUT_MKV.booleanState
     var preferMp4 by remember { mutableStateOf(PREFER_MP4.getBoolean()) }
     var embedMetadata by EMBED_METADATA.booleanState
+    var exportM4b by remember { mutableStateOf(EXPORT_M4B.getBoolean()) }
 
     var showAudioFormatDialog by remember { mutableStateOf(false) }
     var showAudioQualityDialog by remember { mutableStateOf(false) }
@@ -170,6 +173,17 @@ fun DownloadFormatPreferences(onNavigateBack: () -> Unit, navigateToSubtitlePage
                             onClick = {
                                 embedMetadata = !embedMetadata
                                 EMBED_METADATA.updateBoolean(embedMetadata)
+                            },
+                        )
+                        PreferenceSwitch(
+                            title = stringResource(R.string.export_m4b),
+                            description = stringResource(R.string.export_m4b_desc),
+                            icon = Icons.Outlined.LibraryMusic,
+                            enabled = audioSwitch && !isCustomCommandEnabled,
+                            isChecked = exportM4b,
+                            onClick = {
+                                exportM4b = !exportM4b
+                                PreferenceUtil.updateValue(EXPORT_M4B, exportM4b)
                             },
                         )
                         PreferenceSwitch(
