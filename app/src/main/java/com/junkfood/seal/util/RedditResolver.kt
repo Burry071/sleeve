@@ -306,8 +306,10 @@ object RedditResolver {
         url.replace("&amp;", "&").replace("&#38;", "&")
 
     private fun sanitize(name: String): String =
-        name.replace(Regex("[\\\\/:*?\"<>|\\n\\r\\t]"), "_")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-            .take(100)
+        sanitizeSegment(
+            raw = name,
+            maxLength = 100,
+            collapseWhitespace = true,
+            trimWhitespace = true,
+        )
 }

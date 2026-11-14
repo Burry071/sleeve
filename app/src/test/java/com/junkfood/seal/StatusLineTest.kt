@@ -8,6 +8,7 @@ import com.junkfood.seal.download.Task.DownloadState.Idle
 import com.junkfood.seal.download.Task.RestartableAction
 import com.junkfood.seal.ui.page.downloadv2.hasCookieAction
 import com.junkfood.seal.ui.page.downloadv2.statusLine
+import com.junkfood.seal.ui.page.downloadv2.statusText
 import com.junkfood.seal.util.DownloadErrorMessages
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -83,6 +84,45 @@ class StatusLineTest {
         assertFalse(hasCookieAction(Error(Throwable("x"), RestartableAction.Download)))
         assertFalse(hasCookieAction(Idle))
         assertFalse(hasCookieAction(Completed("/tmp/song.m4a")))
+    }
+
+    @Test
+    fun `a move failure shows its count sentence, not the retained path`() {
+        val state =
+            Error(
+                throwable =
+                    DownloadErrorMessages.StorageMoveError(
+                        copied = 1,
+                        failed = listOf("b.mp4"),
+                        retainedDir = "/tmp/abc",
+                    ),
+                action = RestartableAction.Download,
+                message = "Downloaded 1 of 2 file(s) to the chosen folder.\n/tmp/abc",
+            )
+
+        assertEquals("Downloaded 1 of 2 file(s) to the chosen folder.", statusText(state))
+    }
+
+    @Test
+    fun `other errors and non-errors have no status text`() {
+        assertNull(statusText(error(null)))
+        assertNull(statusText(error(ErrorReason.LOGIN_REQUIRED)))
+        assertNull(statusText(Idle))
+        assertNull(statusText(Completed("/tmp/song.m4a")))
+    }
+
+    @Test
+    fun `a restored move failure drops the sentence with its throwable`() {
+        val live =
+            Error(
+                throwable =
+                    DownloadErrorMessages.StorageMoveError(0, listOf("a.mp4"), "/tmp/abc"),
+                action = RestartableAction.Download,
+                message = "Downloaded 0 of 1 file(s) to the chosen folder.",
+            )
+
+        assertEquals("Downloaded 0 of 1 file(s) to the chosen folder.", statusText(live))
+        assertNull(statusText(roundTrip(live)))
     }
 
     private fun roundTrip(state: DownloadState): Error {

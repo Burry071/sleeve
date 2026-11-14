@@ -34,6 +34,23 @@ object DownloadErrorMessages {
         IllegalStateException(message)
 
     /**
+     * The move into the chosen SD-card folder failed for at least one file.
+     * The typed fields drive both the card copy and the "Share kept file"
+     * action, so neither parses the message. [cause] is nullable because a
+     * provider can refuse a document without throwing anything.
+     */
+    class StorageMoveError(
+        val copied: Int,
+        val failed: List<String>,
+        val retainedDir: String,
+        cause: Throwable? = null,
+    ) : Exception(
+        "SD card copy failed for ${failed.size} of ${copied + failed.size} file(s): " +
+            failed.joinToString(", "),
+        cause,
+    )
+
+    /**
      * The reason to persist beside the message. Applied to [asFriendly]'s
      * result, not the raw throwable: [LoginRequiredError] is only ever
      * constructed inside [asFriendly], so a raw value never maps to it.
@@ -76,6 +93,9 @@ object DownloadErrorMessages {
 
     /** Same throwable when nothing maps; otherwise a rethrow with a user-facing message. */
     fun asFriendly(throwable: Throwable): Throwable {
+        // Already user-facing, and the failed names inside the message are
+        // file names: remapping would drop the typed fields the card needs.
+        if (throwable is StorageMoveError) return throwable
         val message = friendly(throwable)
         return when {
             message == throwable.message -> throwable
