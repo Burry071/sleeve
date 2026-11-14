@@ -18,6 +18,7 @@ import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -131,6 +133,7 @@ import com.junkfood.seal.ui.common.HapticFeedback.slightHapticFeedback
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.junkfood.seal.ui.common.LocalFixedColorRoles
 import com.junkfood.seal.ui.common.LocalWindowWidthState
+import com.junkfood.seal.ui.common.rememberBatterySettings
 import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.ui.component.SelectionGroupDefaults
 import com.junkfood.seal.ui.component.SelectionGroupItem
@@ -343,6 +346,8 @@ fun DownloadPageV2(
         },
         onReviewSwap = { selections -> downloader.swapMatches(selections) },
         onReviewParts = { task, parts -> downloader.enqueueParts(task, parts) },
+        showInterruptedRestore = downloader.interruptedRestore,
+        onDismissInterruptedRestore = downloader::dismissInterruptedRestore,
     ) { task, action ->
         view.slightHapticFeedback()
         when (action) {
@@ -499,6 +504,8 @@ fun DownloadPageImplV2(
     onReviewAcceptAll: (String) -> Unit = {},
     onReviewSwap: suspend (List<Pair<Task, MatchCandidate>>) -> List<SwapResult> = { emptyList() },
     onReviewParts: suspend (Task, List<MatchCandidate>) -> Int = { _, _ -> 0 },
+    showInterruptedRestore: Boolean = false,
+    onDismissInterruptedRestore: () -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
 ) {
     var activeFilter by remember { mutableStateOf(Filter.All) }
@@ -653,6 +660,14 @@ fun DownloadPageImplV2(
                         }
                     }
 
+                    // Restored as cancelled, not by the user: something stopped
+                    // the service, and the exemption is the likely fix.
+                    if (showInterruptedRestore) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            InterruptedRestoreHint(onDismiss = onDismissInterruptedRestore)
+                        }
+                    }
+
                     if (activeFilter.showsTaskCards && filteredMap.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             val videoCount =
@@ -728,7 +743,11 @@ fun DownloadPageImplV2(
                                                 ?: state.notice?.takeIf {
                                                     state.downloadState is Running ||
                                                         state.downloadState is ReadyWithInfo
-                                                },
+                                                }
+                                                ?: completedFormatLine(
+                                                    state.downloadState,
+                                                    task.preferences,
+                                                ),
                                         footerContent =
                                             if (state.downloadState is Error) {
                                                 {
@@ -1216,6 +1235,50 @@ private fun BatchInPlaylistBanner(onClick: () -> Unit) {
             Text(
                 text = stringResource(R.string.show_playlists),
                 modifier = Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/** One line over the list after a restore: the queue outlived an app kill. */
+@Composable
+private fun InterruptedRestoreHint(onDismiss: () -> Unit) {
+    val battery = rememberBatterySettings()
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+    ) {
+        Column(modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.interrupted_downloads_title),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.close),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.interrupted_downloads_desc),
+                modifier = Modifier.padding(end = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(R.string.battery_settings),
+                modifier =
+                    Modifier.padding(top = 6.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { battery.open() }
+                        .padding(vertical = 2.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )

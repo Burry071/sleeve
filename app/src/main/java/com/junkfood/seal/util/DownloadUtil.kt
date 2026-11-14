@@ -929,9 +929,16 @@ object DownloadUtil {
                         else -> {}
                     }
                 }
-                if (mergeToMkv) {
-                    addOption("--remux-video", "mkv")
-                    addOption("--merge-output-format", "mkv")
+                if (mergeToMkv || PREFER_MP4.getBoolean()) {
+                    val target =
+                        when {
+                            // The explicit toggle always wins over "Prefer MP4".
+                            MERGE_OUTPUT_MKV.getBoolean() -> "mkv"
+                            PREFER_MP4.getBoolean() -> "mp4/mkv"
+                            else -> "mkv" // merge forced by embedded subtitles
+                        }
+                    addOption("--remux-video", target)
+                    addOption("--merge-output-format", target)
                 }
                 if (embedThumbnail) {
                     addOption("--embed-thumbnail")

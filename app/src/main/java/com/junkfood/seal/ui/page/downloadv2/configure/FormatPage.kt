@@ -100,9 +100,12 @@ import com.junkfood.seal.ui.page.download.VideoSelectionSlider
 import com.junkfood.seal.ui.page.settings.general.DialogCheckBoxItem
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.ui.theme.generateLabelColor
+import com.junkfood.seal.util.EMBED_SUBTITLE
 import com.junkfood.seal.util.EXTRACT_AUDIO
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.MERGE_MULTI_AUDIO_STREAM
+import com.junkfood.seal.util.MERGE_OUTPUT_MKV
+import com.junkfood.seal.util.PREFER_MP4
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getString
 import com.junkfood.seal.util.PreferenceUtil.updateString
@@ -112,6 +115,7 @@ import com.junkfood.seal.util.SubtitleFormat
 import com.junkfood.seal.util.VIDEO_CLIP
 import com.junkfood.seal.util.VideoClip
 import com.junkfood.seal.util.VideoInfo
+import com.junkfood.seal.util.toFileSizeText
 import com.junkfood.seal.util.toHttpsUrl
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -760,6 +764,31 @@ private fun FormatPageImpl(
                         applyPaddings = false,
                     )
                 }
+            if (!audioOnly) {
+                val remux =
+                    (SUBTITLE.getBoolean() && EMBED_SUBTITLE.getBoolean()) ||
+                        MERGE_OUTPUT_MKV.getBoolean() ||
+                        PREFER_MP4.getBoolean()
+                val merge =
+                    !isSuggestedFormatSelected &&
+                        selectedVideoOnlyFormat != NOT_SELECTED &&
+                        selectedAudioOnlyFormats.isNotEmpty()
+                val expectedBytes =
+                    formatList.sumOf { it.fileSize ?: it.fileSizeApprox ?: 0.0 }
+                if ((remux || merge) && expectedBytes > 0) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        PreferenceInfo(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                            text =
+                                stringResource(
+                                    R.string.merge_space_hint,
+                                    (expectedBytes * 2.2).toLong().toFileSizeText(),
+                                ),
+                            applyPaddings = false,
+                        )
+                    }
+                }
+            }
             item { Spacer(modifier = Modifier.height(64.dp)) }
         }
     }

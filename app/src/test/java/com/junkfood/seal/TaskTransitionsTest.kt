@@ -150,7 +150,10 @@ class TaskTransitionsTest {
         assertEquals(Canceled(RestartableAction.FetchInfo), TaskTransitions.restore(Idle))
         assertEquals(Canceled(RestartableAction.FetchInfo), TaskTransitions.restore(fetching))
         assertEquals(Canceled(RestartableAction.Download, null), TaskTransitions.restore(ReadyWithInfo))
-        assertEquals(Canceled(RestartableAction.Download, 0.5f), TaskTransitions.restore(running))
+        assertEquals(
+            Canceled(RestartableAction.Download, 0.5f, byUser = false),
+            TaskTransitions.restore(running),
+        )
         assertEquals(canceledDownload, TaskTransitions.restore(canceledDownload))
         assertEquals(errorFetch, TaskTransitions.restore(errorFetch))
         assertEquals(completed, TaskTransitions.restore(completed))
@@ -226,7 +229,7 @@ class TaskTransitionsTest {
             TaskTransitions.cancelTarget(fetching),
         )
         assertEquals(
-            Canceled(RestartableAction.Download, 0.5f),
+            Canceled(RestartableAction.Download, 0.5f, byUser = true),
             TaskTransitions.cancelTarget(running),
         )
         assertNull(TaskTransitions.cancelTarget(canceledFetch))

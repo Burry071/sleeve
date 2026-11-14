@@ -1,12 +1,17 @@
 package com.junkfood.seal.ui.page.downloadv2
 
 import androidx.annotation.StringRes
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import com.junkfood.seal.R
 import com.junkfood.seal.download.ErrorReason
 import com.junkfood.seal.download.Task.DownloadState
+import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Error
+import com.junkfood.seal.util.ContainerLabel
 import com.junkfood.seal.util.CookieFileStatus
 import com.junkfood.seal.util.DownloadErrorMessages
+import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 
 /**
  * One mapping for both surfaces that show why a task failed. Reads the
@@ -36,6 +41,25 @@ fun statusText(state: DownloadState): String? {
     val error = state as? Error ?: return null
     if (error.throwable !is DownloadErrorMessages.StorageMoveError) return null
     return error.message.lineSequence().firstOrNull()
+}
+
+/**
+ * What the finished card names about the file itself: the audio target when conversion
+ * replaced the source stream, otherwise the container the merge produced. Both are read
+ * from the finished name, so a private-mode null path and a SAF `content://` URI show
+ * nothing.
+ */
+@Composable
+fun completedFormatLine(state: DownloadState, preferences: DownloadPreferences): String? {
+    val completed = state as? Completed ?: return null
+    val container = ContainerLabel.of(completed.filePath) ?: return null
+    return if (preferences.extractAudio) {
+        if (!preferences.convertAudio) return null
+        val target = if (preferences.audioConvertFormat == 0) "MP3" else "M4A"
+        stringResource(R.string.converted_to, target)
+    } else {
+        stringResource(R.string.container_format, container)
+    }
 }
 
 /**

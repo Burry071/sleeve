@@ -97,7 +97,7 @@ internal object TaskTransitions {
             Idle -> Canceled(action = FetchInfo)
             ReadyWithInfo -> Canceled(action = Download)
             is FetchingInfo -> Canceled(action = from.action)
-            is Running -> Canceled(action = from.action, progress = from.progress)
+            is Running -> Canceled(action = from.action, progress = from.progress, byUser = true)
             else -> null
         }
 }

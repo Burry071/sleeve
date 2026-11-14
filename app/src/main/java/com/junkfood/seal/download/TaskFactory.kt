@@ -181,8 +181,52 @@ object TaskFactory {
         tasks: List<TaskWithState>,
         preferences: DownloadPreferences,
         batch: BatchInfo,
+        numbering: Boolean = false,
     ): List<TaskWithState> =
-        tasks.map { it.copy(task = it.task.copy(preferences = preferences, batch = batch)) }
+        tasks.map {
+            val index = (it.task.type as? Task.TypeInfo.Playlist)?.index ?: 0
+            val template =
+                numberedTemplate(
+                    template = preferences.outputTemplate,
+                    index = index,
+                    enabled = numbering,
+                    splitByChapter = preferences.splitByChapter,
+                    hasClips = preferences.videoClips.isNotEmpty(),
+                )
+            it.copy(
+                task =
+                    it.task.copy(
+                        preferences = preferences.copy(outputTemplate = template),
+                        batch = batch,
+                    )
+            )
+        }
+
+    /**
+     * The live lane downloads each batch item with `--no-playlist`, so a
+     * `%(playlist_index)` token would always render `NA`; the literal prefix is
+     * stamped at enqueue instead, where the batch position is still known.
+     */
+    @CheckResult
+    fun numberedTemplate(
+        template: String,
+        index: Int,
+        enabled: Boolean,
+        splitByChapter: Boolean = false,
+        hasClips: Boolean = false,
+    ): String {
+        if (!enabled || index <= 0 || splitByChapter || hasClips) return template
+        // These templates carry prefixes of their own; a number would corrupt them.
+        if (template.contains("%(autonumber)")) return template
+        if (template.contains("%(section_")) return template
+        val cut = template.lastIndexOf('/')
+        // Plain ASCII digits: "%02d".format() follows the device locale and
+        // would emit non-ASCII numerals where those are in use.
+        return template.substring(0, cut + 1) +
+            index.toString().padStart(2, '0') +
+            " - " +
+            template.substring(cut + 1)
+    }
 
     data class TaskWithState(val task: Task, val state: Task.State)
 }

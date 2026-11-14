@@ -563,4 +563,21 @@
         <item quantity="one">%d audio</item>
         <item quantity="other">%d audios</item>
     </plurals>
+    <string name="playlist_numbering">Number files by playlist position</string>
+    <string name="playlist_numbering_desc">Prefix each file with its position, for example 03 - </string>
+    <string name="prefer_mp4_container">Prefer MP4 container</string>
+    <string name="prefer_mp4_container_desc">Remux to MP4 when the codecs fit, otherwise keep MKV</string>
+    <string name="merge_to_mkv_wins">Merge to MKV wins when both are on</string>
+    <string name="container_format">%1$s container</string>
+    <string name="converted_to">Converted to %1$s</string>
+    <string name="merge_space_hint">About %1$s of free space is needed while the container is rewritten</string>
+    <string name="output_template_preview">Preview</string>
+    <string name="output_template_issue_basename">The template must include %1$s</string>
+    <string name="output_template_issue_extension">The template must end with %1$s</string>
+    <string name="output_template_issue_stray_percent">A lone percent sign must start a field or be doubled for a literal percent</string>
+    <string name="output_template_issue_unknown_field">%1$s is not a known field</string>
+    <string name="output_template_issue_illegal_char">%1$s cannot be used in a file name</string>
+    <string name="interrupted_downloads_title">Downloads may have been interrupted</string>
+    <string name="interrupted_downloads_desc">Your device may be stopping background downloads. Allow Sleeve to run in the background to keep them going.</string>
+    <string name="battery_settings">Battery settings</string>
 </resources>

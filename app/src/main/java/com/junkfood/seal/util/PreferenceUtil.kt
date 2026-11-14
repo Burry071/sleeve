@@ -59,6 +59,7 @@ const val SDCARD_DOWNLOAD = "sdcard_download"
 const val SDCARD_URI = "sd_card_uri"
 const val SUBDIRECTORY_EXTRACTOR = "sub-directory"
 const val SUBDIRECTORY_PLAYLIST_TITLE = "subdirectory_playlist_title"
+const val PLAYLIST_NUMBERING = "playlist_numbering"
 const val PLAYLIST = "playlist"
 private const val LANGUAGE = "language"
 const val NOTIFICATION = "notification"
@@ -109,6 +110,7 @@ const val RESTRICT_FILENAMES = "restrict_filenames"
 const val AV1_HARDWARE_ACCELERATED = "av1_hardware_accelerated"
 const val FORCE_IPV4 = "force_ipv4"
 const val MERGE_OUTPUT_MKV = "merge_to_mkv"
+const val PREFER_MP4 = "prefer_mp4"
 const val USE_CUSTOM_AUDIO_PRESET = "custom_audio_preset"
 
 const val MERGE_MULTI_AUDIO_STREAM = "multi_audio_stream"
@@ -231,6 +233,8 @@ private val BooleanPreferenceDefaults =
         NOTIFICATION to true,
         EMBED_METADATA to true,
         USE_CUSTOM_AUDIO_PRESET to false,
+        PLAYLIST_NUMBERING to false,
+        PREFER_MP4 to false,
     )
 
 private val IntPreferenceDefaults =

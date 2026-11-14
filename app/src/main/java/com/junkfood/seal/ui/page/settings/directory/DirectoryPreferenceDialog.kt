@@ -29,16 +29,23 @@ fun DirectoryPreferenceDialog(
     onDismissRequest: () -> Unit = {},
     isWebsiteSelected: Boolean,
     isPlaylistTitleSelected: Boolean,
-    onConfirm: (isWebsiteSelected: Boolean, isPlaylistTitleSelected: Boolean) -> Unit = { _, _ -> },
+    isNumberingSelected: Boolean,
+    onConfirm: (
+        isWebsiteSelected: Boolean,
+        isPlaylistTitleSelected: Boolean,
+        isNumberingSelected: Boolean,
+    ) -> Unit = { _, _, _ ->
+    },
 ) {
     var website by remember { mutableStateOf(isWebsiteSelected) }
     var playlistTitle by remember { mutableStateOf(isPlaylistTitleSelected) }
+    var numbering by remember { mutableStateOf(isNumberingSelected) }
 
     SealDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = {
             ConfirmButton {
-                onConfirm(website, playlistTitle)
+                onConfirm(website, playlistTitle, numbering)
                 onDismissRequest()
             }
         },
@@ -68,6 +75,12 @@ fun DirectoryPreferenceDialog(
                 ) {
                     playlistTitle = !playlistTitle
                 }
+                DialogCheckBoxItem(
+                    text = stringResource(id = R.string.playlist_numbering),
+                    checked = numbering,
+                ) {
+                    numbering = !numbering
+                }
                 androidx.compose.material3.HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                 )
@@ -77,6 +90,7 @@ fun DirectoryPreferenceDialog(
                     StringBuilder(".../").run {
                         if (website) append("website/")
                         if (playlistTitle) append("playlist_title/")
+                        if (numbering) append("03 - ")
                         append("file_name")
                     }
 
@@ -97,5 +111,6 @@ private fun DirectoryPreferenceDialogPreview() {
         onDismissRequest = {},
         isWebsiteSelected = false,
         isPlaylistTitleSelected = false,
+        isNumberingSelected = false,
     )
 }
