@@ -1838,11 +1838,22 @@ object DownloadUtil {
                         }
                         if (useDownloadArchive) {
                             val archiveFile = context.getArchiveFile()
-                            val archiveFileContent = archiveFile.readText()
-                            if (archiveFileContent.contains("${videoInfo.extractor} ${videoInfo.id}")) {
+                            if (
+                                ArchiveIndex.contains(
+                                    archiveFile,
+                                    videoInfo.extractorKey,
+                                    videoInfo.id,
+                                )
+                            ) {
+                                // Returned, not thrown: this site has no
+                                // surrounding try/catch, and a throw would
+                                // escape the caller's onFailure and wedge the
+                                // task in Running.
                                 return Result.failure(
-                                    YoutubeDLException(
-                                        context.getString(R.string.download_archive_error)
+                                    DownloadErrorMessages.AlreadyDownloadedError(
+                                        extractorKey = videoInfo.extractorKey,
+                                        id = videoInfo.id,
+                                        message = context.getString(R.string.download_archive_error),
                                     )
                                 )
                             } else {
