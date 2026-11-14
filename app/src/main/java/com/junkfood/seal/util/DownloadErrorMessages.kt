@@ -2,6 +2,7 @@ package com.junkfood.seal.util
 
 import com.junkfood.seal.App
 import com.junkfood.seal.R
+import com.junkfood.seal.download.ErrorReason
 
 /**
  * One shared mapping from raw extractor failure text (yt-dlp, gallery-dl,
@@ -20,6 +21,30 @@ object DownloadErrorMessages {
      */
     class LoginRequiredError(message: String, cause: Throwable) :
         IllegalStateException(message, cause)
+
+    /**
+     * The playlist item's index now resolves to a different video than the one
+     * the user picked. The row copy comes from [R.string.status_playlist_shifted].
+     */
+    class PlaylistShiftedError(val expectedId: String, val actualId: String) :
+        IllegalStateException("playlist shifted: $expectedId -> $actualId")
+
+    /** yt-dlp's archive already lists this media. The row copy comes from [R.string.status_already_downloaded]. */
+    class AlreadyDownloadedError(val extractorKey: String, val id: String, message: String) :
+        IllegalStateException(message)
+
+    /**
+     * The reason to persist beside the message. Applied to [asFriendly]'s
+     * result, not the raw throwable: [LoginRequiredError] is only ever
+     * constructed inside [asFriendly], so a raw value never maps to it.
+     */
+    fun errorReasonOf(throwable: Throwable): ErrorReason? =
+        when (throwable) {
+            is PlaylistShiftedError -> ErrorReason.PLAYLIST_SHIFTED
+            is AlreadyDownloadedError -> ErrorReason.ALREADY_DOWNLOADED
+            is LoginRequiredError -> ErrorReason.LOGIN_REQUIRED
+            else -> null
+        }
 
     private val loginRequired =
         Regex(

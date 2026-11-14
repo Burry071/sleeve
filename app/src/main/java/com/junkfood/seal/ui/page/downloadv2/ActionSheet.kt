@@ -69,7 +69,6 @@ import com.junkfood.seal.ui.component.SealModalBottomSheet
 import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
 import com.junkfood.seal.ui.theme.ErrorTonalPalettes
 import com.junkfood.seal.ui.theme.SealTheme
-import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.toBitrateText
 import com.junkfood.seal.util.toDurationText
@@ -322,7 +321,7 @@ fun LazyListScope.ActionButtons(
                     onDismissRequest()
                 }
             }
-            if (downloadState.throwable is DownloadErrorMessages.LoginRequiredError) {
+            if (hasCookieAction(downloadState)) {
                 val retryUrl =
                     viewState.url.ifBlank { task.url }.takeIf { !it.startsWith("metadata://") }
                 if (retryUrl != null) {

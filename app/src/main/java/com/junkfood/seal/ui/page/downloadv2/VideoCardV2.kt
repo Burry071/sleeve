@@ -116,6 +116,7 @@ fun VideoCardV2(
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
     footerContent: (@Composable () -> Unit)? = null,
+    statusLine: Int? = null,
     onButtonClick: () -> Unit,
 ) {
     with(viewState) {
@@ -130,6 +131,7 @@ fun VideoCardV2(
             actionButton = actionButton,
             progress = progress,
             footerContent = footerContent,
+            statusLine = statusLine,
             onButtonClick = onButtonClick,
         )
     }
@@ -265,13 +267,15 @@ fun VideoCardV2(
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
     footerContent: (@Composable () -> Unit)? = null,
+    statusLine: Int? = null,
     onButtonClick: () -> Unit,
 ) {
     val containerColor =
         MaterialTheme.colorScheme.run {
             if (LocalDarkTheme.current.isDarkTheme()) surfaceContainer else surfaceContainerLowest
         }
-    val denseBottom = (progress != null && progress >= 0f) || footerContent != null
+    val denseBottom =
+        (progress != null && progress >= 0f) || footerContent != null || statusLine != null
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -310,6 +314,21 @@ fun VideoCardV2(
                         modifier = Modifier.size(20.dp),
                     )
                 }
+            }
+            if (statusLine != null) {
+                Text(
+                    text = stringResource(statusLine),
+                    modifier =
+                        Modifier.padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = if (footerContent != null) 6.dp else 12.dp,
+                        ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             if (progress != null && progress >= 0f) {
                 val animatedProgress by

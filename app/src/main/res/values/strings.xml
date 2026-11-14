@@ -194,6 +194,9 @@
     <string name="quick_download_pushed">Quick download shortcut added (app long-press)</string>
     <string name="gallery_auth_required">This content needs a login. Import cookies in Settings → Cookies &amp; profiles, then retry.</string>
     <string name="status_error">Error</string>
+    <string name="status_playlist_shifted">Playlist changed — this item no longer matches</string>
+    <string name="status_already_downloaded">Already downloaded — nothing to fetch</string>
+    <string name="status_login_required">Login required — retry with cookies</string>
     <string name="copy_link">Copy link</string>
     <string name="copy_error_report">Copy report</string>
     <string name="video_resolution">Video resolution</string>

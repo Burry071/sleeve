@@ -971,6 +971,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         preferences = preferences,
                         taskKey = id,
                     )
+                    // Ahead of onSuccess on purpose: a throw inside onSuccess
+                    // escapes the chain without reaching the chained onFailure.
+                    .mapCatching { info ->
+                        PlaylistPin.verify(state.expectedVideoId, info.id)
+                        info
+                    }
                     .onSuccess {
                         info = it
                         viewState = Task.ViewState.fromVideoInfo(it)
@@ -1007,6 +1013,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 throwable = friendly,
                                 action = FetchInfo,
                                 message = errorText(throwable, friendly),
+                                reason = DownloadErrorMessages.errorReasonOf(friendly),
                             ),
                             isThisAttempt,
                         )
@@ -1059,6 +1066,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 throwable = friendly,
                                 action = FetchInfo,
                                 message = errorText(throwable, friendly),
+                                reason = DownloadErrorMessages.errorReasonOf(friendly),
                             ),
                             isThisAttempt,
                         )
@@ -1249,6 +1257,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                 throwable = friendly,
                                 action = Download,
                                 message = errorText(throwable, friendly),
+                                reason = DownloadErrorMessages.errorReasonOf(friendly),
                             ),
                         ) { it is Running && it.job === runJob }
                     }
@@ -1374,6 +1383,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                                     throwable = friendly,
                                     action = Download,
                                     message = errorText(throwable, friendly),
+                                    reason = DownloadErrorMessages.errorReasonOf(friendly),
                                 ),
                                 isThisAttempt,
                             )
