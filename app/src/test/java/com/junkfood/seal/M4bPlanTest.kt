@@ -16,6 +16,7 @@ import com.junkfood.seal.util.tagArtist
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -178,6 +179,31 @@ class M4bPlanTest {
         assertTrue(hasRoomFor(dir, required = 0L))
         assertTrue(hasRoomFor(dir, required = 1L))
         assertFalse(hasRoomFor(dir, required = Long.MAX_VALUE))
+    }
+
+    @Test
+    fun `a url task id yields one flat report file inside the cache dir`() {
+        val cacheDir = tmp.newFolder("cache")
+        val taskId = "https://www.audible.com/pd/Dune/B002V1OF70?qid=123__942405748"
+
+        val report = M4bPlan.reportFile(cacheDir, taskId)
+
+        assertEquals(cacheDir, report.parentFile)
+        assertTrue(report.name.matches(Regex("""m4b_report_[0-9a-f]{24}\.txt""")))
+        report.writeText("/sdcard/Download/Sleeve/Dune.m4a")
+        assertEquals("/sdcard/Download/Sleeve/Dune.m4a", report.readText())
+    }
+
+    @Test
+    fun `the same task always maps to the same report file`() {
+        val cacheDir = tmp.newFolder("cache")
+        val taskId = "https://example.com/a/b?c=d__1"
+
+        assertEquals(M4bPlan.reportFile(cacheDir, taskId), M4bPlan.reportFile(cacheDir, taskId))
+        assertNotEquals(
+            M4bPlan.reportFile(cacheDir, taskId),
+            M4bPlan.reportFile(cacheDir, taskId + "x"),
+        )
     }
 }
 

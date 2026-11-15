@@ -9,9 +9,9 @@
 - Platform: Android 7.0 (API 24) and newer; target SDK 35
 - License: GPL-3.0
 - Price: free, no ads, no subscriptions, no accounts
-- Release line: 2.1.0 — v2.1.0-rc.1 (versionCode 201000310) is the release candidate; v2.1.0 is the upcoming stable release; arm64-v8a + x86_64
+- Release line: 2.1.0 — v2.1.0-rc.2 (versionCode 201000320) is the release candidate; v2.1.0 is the upcoming stable release; arm64-v8a + x86_64
 - Release APK: https://github.com/Burry071/sleeve/releases/latest/download/Sleeve-generic-release.apk
-- Release APK SHA-256: listed per release in the SHA256SUMS asset (2.1.0-rc.1 hashes publish with the release)
+- Release APK SHA-256: listed per release in the SHA256SUMS asset (2.1.0-rc.2 hashes publish with the release)
 - Signing certificate SHA-256: 2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3
 - Source repository: https://github.com/Burry071/sleeve
 

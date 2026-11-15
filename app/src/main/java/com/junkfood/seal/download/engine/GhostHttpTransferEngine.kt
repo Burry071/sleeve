@@ -3,9 +3,12 @@ package com.junkfood.seal.download.engine
 import android.util.Log
 import com.junkfood.seal.App
 import com.junkfood.seal.App.Companion.audioDownloadDir
+import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.TaskState
+import com.junkfood.seal.util.FileUtil.getSdcardTempDir
+import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.sanitizeSegment
 import com.yausername.youtubedl_android.YoutubeDLException
 import java.io.File
@@ -115,9 +118,15 @@ internal object GhostHttpTransferEngine : TransferEngine {
                 .ifBlank { "download" }
                 .let { sanitizeSegment(it) }
         val downloadDir =
-            if (preferences.privateDirectory) App.privateDownloadDir
-            else
-                if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
+            ghostOutputDir(
+                sdcardStagingDir =
+                    if (preferences.sdcard) context.getSdcardTempDir(videoInfo.id) else null,
+                privateDirectory = preferences.privateDirectory,
+                privateDir = App.privateDownloadDir,
+                audioDir = audioDownloadDir,
+                videoDir = videoDownloadDir,
+                isAudioOnly = eligibleFormat.isAudioOnly(),
+            )
         // The engine writes atomically with a rename, which fails with EPERM
         // when the destination already exists and belongs to another install
         // (shared Download/Sleeve keeps files across app re-installs). Pick a
@@ -150,12 +159,16 @@ internal object GhostHttpTransferEngine : TransferEngine {
                     pageReferer
                 }
             }
+        // An empty UA is not "no header": the engine would send `User-Agent:`
+        // and CDNs that gate on it (w3schools) answer 403 for a transfer that
+        // yt-dlp completes. Present as the browser the device claims to be.
+        val userAgent = preferences.userAgentString.ifBlank { RedditResolver.BROWSER_UA }
         val engineHeaders =
             if (referer.isNullOrBlank()) {
-                mapOf("User-Agent" to preferences.userAgentString)
+                mapOf("User-Agent" to userAgent)
             } else {
                 mapOf(
-                    "User-Agent" to preferences.userAgentString,
+                    "User-Agent" to userAgent,
                     "Referer" to referer,
                 )
             }
@@ -254,3 +267,24 @@ internal object GhostHttpTransferEngine : TransferEngine {
         return Result.failure(YoutubeDLException("Ghost engine: $reason"))
     }
 }
+
+/**
+ * Where the engine writes. With "Save to SD card" on, yt-dlp and N_m3u8DL-RE
+ * stage in the app-owned temp folder under that card and the finish line moves
+ * the file from there; writing to the local folder left the move with nothing
+ * to copy, so a complete transfer was reported as failed and downloaded again.
+ */
+internal fun ghostOutputDir(
+    sdcardStagingDir: File?,
+    privateDirectory: Boolean,
+    privateDir: String,
+    audioDir: String,
+    videoDir: String,
+    isAudioOnly: Boolean,
+): String =
+    when {
+        sdcardStagingDir != null -> sdcardStagingDir.absolutePath
+        privateDirectory -> privateDir
+        isAudioOnly -> audioDir
+        else -> videoDir
+    }
