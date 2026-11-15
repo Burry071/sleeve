@@ -11,6 +11,7 @@ import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Idle
 import com.junkfood.seal.download.Task.DownloadState.ReadyWithInfo
 import com.junkfood.seal.download.Task.RestartableAction
+import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -154,6 +155,63 @@ class MatchGateTest {
         assertEquals(1, summary.completed)
         assertEquals(1, summary.canceled)
         assertEquals(1, MatchOps.reviewCount(entries))
+        assertTrue(MatchOps.reviewVisible(entries))
+    }
+
+    @Test
+    fun `an empty search becomes a reviewable hold instead of a failed task`() {
+        val metadata =
+            Task.TypeInfo.MetadataTrack(
+                index = 0,
+                provider = "Audible",
+                title = "Dune",
+                artist = "Frank Herbert",
+                authors = "Frank Herbert",
+                durationMs = 75_720_000L,
+            )
+        val resolved = DownloadUtil.noSourceResolution(metadata, "no confident match for Dune")
+
+        assertTrue(resolved.match.held)
+        assertTrue(resolved.match.candidates.isEmpty())
+        assertEquals(0.0, resolved.match.selectedScore, 0.0)
+        assertEquals(75_720_000L, resolved.match.expectedDurationMs)
+        // The row is titled from the catalogue, never from the synthetic URL.
+        assertEquals("Dune", resolved.videoInfo.title)
+        assertEquals("Frank Herbert", resolved.videoInfo.uploader)
+        assertEquals("", resolved.videoInfo.originalUrl)
+        assertEquals("", Task.ViewState.fromVideoInfo(resolved.videoInfo).url)
+
+        val state =
+            Task.State(
+                Canceled(RestartableAction.Download),
+                resolved.videoInfo,
+                Task.ViewState.fromVideoInfo(resolved.videoInfo),
+                resolved.match,
+            )
+        assertTrue(MatchOps.reviewable(state))
+        assertFalse(MatchOps.acknowledgeable(state))
+        // The hold still keeps the scheduler away from any media request.
+        assertTrue(MatchOps.resolvedState(resolved.match) is Canceled)
+    }
+
+    @Test
+    fun `a no-source hold surfaces the review entry for a finished batch`() {
+        val metadata =
+            Task.TypeInfo.MetadataTrack(provider = "Audible", title = "Dune", durationMs = 1_000L)
+        val resolved = DownloadUtil.noSourceResolution(metadata, "nothing found")
+        val entries =
+            listOf(
+                task(0) to
+                    Task.State(
+                        Canceled(RestartableAction.Download),
+                        resolved.videoInfo,
+                        Task.ViewState.fromVideoInfo(resolved.videoInfo),
+                        resolved.match,
+                    ),
+                task(1) to state(heldMatch().copy(held = false), Completed("/tmp/dune.m4a")),
+            )
+
+        assertEquals(0, BatchOps.summary(entries).unfinished)
         assertTrue(MatchOps.reviewVisible(entries))
     }
 

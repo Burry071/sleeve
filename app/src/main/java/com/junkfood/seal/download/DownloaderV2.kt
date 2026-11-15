@@ -42,6 +42,7 @@ import com.junkfood.seal.util.makeToast
 import com.junkfood.seal.util.toDurationText
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.collections.component1
@@ -90,6 +91,15 @@ interface DownloaderV2 {
     }
 
     fun remove(task: Task): Boolean
+
+    /**
+     * Re-run the catalogue search for one row with a user-edited query. Only a
+     * canceled or failed row may be re-searched; the edited terms are kept for
+     * this process so a later Resume repeats them.
+     *
+     * @return true when the row is now searching again.
+     */
+    fun searchAgain(task: Task, query: String): Boolean = false
 
     /**
      * True when this process restored a task that was cut off mid-transfer by the
@@ -243,6 +253,15 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
      */
     private val stateLock = Any()
 
+    /**
+     * Tasks a relaunch owes a restart: the backup left them in flight, but the
+     * network refused at boot. Kept until the network allows the transfer, so
+     * a phone that came back on mobile data resumes on Wi-Fi instead of
+     * silently spending bytes.
+     */
+    private val pendingResume: MutableSet<String> =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
     init {
         // Observation starts with the downloader. Idempotent: App.onCreate()
         // registers first, and this keeps a DownloaderV2 built in isolation
@@ -278,7 +297,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         // re-emits on a map change, so a task parked by the metered gate would
         // otherwise sit there until the user touched it.
         NetworkPolicy.onNetworkRestored = {
-            scope.launch(Dispatchers.Default) { kickFromNetwork() }
+            scope.launch(Dispatchers.Default) {
+                // A batch killed mid-transfer that woke up metered resumes
+                // here, before the scheduler tick looks for runnable work.
+                resumePending()
+                kickFromNetwork()
+            }
         }
 
         scope.launch(Dispatchers.IO) {
@@ -311,27 +335,54 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
     }
 
     private fun enqueueFromBackup() {
+        val backup = PreferenceUtil.decodeTaskListBackup()
+        // Only a process kill stores a task in flight, so the entries below are
+        // exactly the ones a relaunch may restart on its own. An entry already
+        // persisted as Canceled was stopped by the user and stays stopped.
+        val interrupted = backup.filterValues { TaskTransitions.resumesAfterProcessDeath(it.downloadState) }
         val taskList =
-            PreferenceUtil.decodeTaskListBackup()
-                .mapValues { (_, state) ->
-                    val downloadState = TaskTransitions.restore(state.downloadState)
-                    state.copy(
-                        downloadState = downloadState,
-                        // A pending swap is persisted, but the old path it
-                        // replaces is not. Never restore a pending state that
-                        // has no way to be resolved: completed -> promote;
-                        // otherwise fall back to the previous pick.
-                        match =
-                            state.match?.restoreAfterProcessDeath(
-                                completed = downloadState is Completed
-                            ),
-                    )
-                }
+            backup.mapValues { (_, state) ->
+                val downloadState = TaskTransitions.restore(state.downloadState)
+                state.copy(
+                    downloadState = downloadState,
+                    // A pending swap is persisted, but the old path it
+                    // replaces is not. Never restore a pending state that
+                    // has no way to be resolved: completed -> promote;
+                    // otherwise fall back to the previous pick.
+                    match =
+                        state.match?.restoreAfterProcessDeath(
+                            completed = downloadState is Completed
+                        ),
+                )
+            }
         taskList.forEach { (task, state) -> enqueue(task, state) }
         // Only a restore of Running keeps progress above zero (and a user cancel
         // is recorded), so this cannot fire on a state that was already terminal.
         if (taskList.values.any { (it.downloadState as? Canceled)?.interrupted == true }) {
             interruptedRestore = true
+        }
+        interrupted.keys.map { it.id }.forEach(pendingResume::add)
+        resumePending()
+    }
+
+    /**
+     * Restarts what the backup left owed, but only when the network allows a
+     * transfer: on mobile data without the opt-in the rows stay parked and the
+     * network callback above finishes the job on Wi-Fi.
+     */
+    private fun resumePending() {
+        if (pendingResume.isEmpty() || !NetworkPolicy.canStartDownloads()) return
+        val due = pendingResume.toList().toSet()
+        // Collect before writing: the restarts below change the same map this
+        // reads, and a row removed since the kill simply owes nothing.
+        val owed =
+            taskStateMap.entries.filter { it.key.id in due }.map { (task, state) -> task to state.match }
+        pendingResume.removeAll(due)
+        owed.forEach { (task, match) ->
+            // A held book has no verified source; its only exit is an explicit
+            // pick, so an automatic restart would download the refused upload.
+            if (match?.held == true || match?.pending == true) return@forEach
+            task.restartImpl()
         }
     }
 
@@ -384,7 +435,20 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
             taskStateMap.remove(task)
             TaskAuditLog.clear(task.id)
-            pendingSwapCleanup.remove(task.id)
+            searchOverrides.remove(task.id)
+            // A swap in flight parks the file it would have replaced. Removing
+            // the task drops every remaining claim on that file, so it must not
+            // survive as an orphan: row first, then the file, exactly like a
+            // completed swap.
+            pendingSwapCleanup.remove(task.id)?.takeIf { it.isNotBlank() }?.let { orphaned ->
+                scope.launch(Dispatchers.IO) {
+                    DatabaseUtil.deleteInfoByPath(orphaned)
+                    runCatching { File(orphaned).takeIf { it.isFile }?.delete() }
+                        .onFailure {
+                            Log.w(TAG, "could not delete orphaned swapped file: ${it.message}")
+                        }
+                }
+            }
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }
             return true
@@ -463,6 +527,22 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
     override fun restart(task: Task) {
         task.restartImpl()
+    }
+
+    override fun searchAgain(task: Task, query: String): Boolean {
+        val current = taskStateMap[task] ?: return false
+        // Only a terminal row may be re-searched: a new search replaces the
+        // match the worker may still be using.
+        if (!TaskTransitions.acceptsSearchAgain(current.downloadState)) return false
+        val terms = query.trim().takeIf { it.isNotBlank() } ?: return false
+        if (task.type !is TypeInfo.MetadataTrack) return false
+        searchOverrides[task.id] = terms
+        TaskAuditLog.append(task.id, "search again: query=$terms")
+        // Idle, not restartTarget: this must re-run the catalogue search, never
+        // re-download the info a previous pick cached.
+        val queued = applyTransition(task, DownloadState.Idle) { it == current.downloadState }
+        if (!queued) searchOverrides.remove(task.id)
+        return queued
     }
 
     /**
@@ -788,6 +868,12 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
     /** Deletes the file a swapped pick replaced, but only after the new file is complete. */
     private val pendingSwapCleanup = ConcurrentHashMap<String, String>()
+
+    /**
+     * Search terms the user typed for a "Search again" row, by task id. Process
+     * local: they matter only while this app run is resolving that row.
+     */
+    private val searchOverrides = ConcurrentHashMap<String, String>()
 
     /** Suffix source for yt-dlp process ids; never reused within this process. */
     private val processSequence = AtomicLong()
@@ -1160,6 +1246,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         metadata = track,
                         taskKey = id,
                         preferences = preferences,
+                        // A user-edited "Search again" query wins over the
+                        // catalogue-built one for the rest of this run.
+                        queryOverride = searchOverrides[id].orEmpty(),
                         // A cancel or removal flips this false, so matching stops
                         // before spawning another yt-dlp process.
                         isActive = {
@@ -1393,7 +1482,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             val keepPath =
                                 previousPath?.takeIf { File(it).isFile } ?: newPath
                             val warning =
-                                if (keepPath != null && keepPath != newPath) {
+                                if (keepPath != newPath) {
                                     "replacement rejected: ${verify.reason}; kept the previous file"
                                 } else {
                                     verify.reason
@@ -1443,17 +1532,43 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         }
                         // A failed replacement keeps the old file and row; the
                         // pending pick must not stay "Replacing…" forever.
+                        val previousPath = pendingSwapCleanup[id]
                         abandonSwappedFile(id)
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
-                        applyTransition(
-                            task,
-                            Error(
-                                throwable = friendly,
-                                action = Download,
-                                message = errorText(throwable, friendly),
-                                reason = DownloadErrorMessages.errorReasonOf(friendly),
-                            ),
-                        ) { it is Running && it.job === runJob }
+                        val keptPath =
+                            previousPath?.takeIf { it.isNotBlank() && File(it).isFile }
+                        if (keptPath != null) {
+                            // The file the user already had is still on disk.
+                            // Reporting a bare failure would hide a download
+                            // that exists, so this completes with a warning and
+                            // stays reviewable: the failed pick is named, and
+                            // the row and the batch count agree with the disk.
+                            val reason = shortReason(throwable)
+                            match =
+                                match?.copy(
+                                    flagged = true,
+                                    acknowledged = false,
+                                    gateReason = reason,
+                                )
+                            applyTransition(
+                                task,
+                                Completed(
+                                    keptPath,
+                                    warning = "replacement failed: $reason; kept the previous file",
+                                    notes = completedNotes.distinct(),
+                                ),
+                            ) { it is Running && it.job === runJob }
+                        } else {
+                            applyTransition(
+                                task,
+                                Error(
+                                    throwable = friendly,
+                                    action = Download,
+                                    message = errorText(throwable, friendly),
+                                    reason = DownloadErrorMessages.errorReasonOf(friendly),
+                                ),
+                            ) { it is Running && it.job === runJob }
+                        }
                     }
             }
             .also { job ->

@@ -12,6 +12,8 @@ import com.junkfood.seal.download.Task.DownloadState.Running
 data class BatchSummary(
     val total: Int = 0,
     val completed: Int = 0,
+    /** Completed songs whose file succeeded but carries a warning. */
+    val warned: Int = 0,
     val failed: Int = 0,
     val canceled: Int = 0,
     val unfinished: Int = 0,
@@ -67,6 +69,10 @@ object BatchOps {
         BatchSummary(
             total = entries.size,
             completed = entries.count { it.second.downloadState is Completed },
+            warned =
+                entries.count {
+                    (it.second.downloadState as? Completed)?.warning?.isNotBlank() == true
+                },
             failed = entries.count { it.second.downloadState is Error },
             canceled = entries.count { it.second.downloadState is Canceled },
             unfinished = entries.count { isUnfinished(it.second.downloadState) },

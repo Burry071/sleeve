@@ -4,6 +4,7 @@ import com.junkfood.seal.download.Task
 import com.junkfood.seal.ghostengine.GhostEngine
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -71,5 +72,33 @@ class AudibleLanguagePlumbingTest {
 
         assertEquals("", decoded.language)
         assertEquals("Dune", decoded.title)
+    }
+
+    @Test
+    fun `a ranked candidate emits its audio language under the snake_case key`() {
+        val candidate =
+            GhostEngine.RankedCandidate(
+                index = 0,
+                id = "vid",
+                url = "https://www.youtube.com/watch?v=vid",
+                title = "Dune",
+                score = 1.0,
+                audioLanguage = "de",
+            )
+
+        val encoded =
+            json.encodeToString(GhostEngine.RankedCandidate.serializer(), candidate)
+
+        assertTrue(encoded.contains("\"audio_language\":\"de\""))
+    }
+
+    @Test
+    fun `a candidate encoded before the field decodes as an unknown language`() {
+        val legacy = """{"index":0,"id":"vid","url":"u","title":"Dune","score":1.0}"""
+
+        val decoded =
+            json.decodeFromString(GhostEngine.RankedCandidate.serializer(), legacy)
+
+        assertEquals("", decoded.audioLanguage)
     }
 }

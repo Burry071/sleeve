@@ -52,6 +52,27 @@ object MatchOps {
         entries.filter { reviewable(it.second) }
 
     /**
+     * The songs a batch swap will re-download: one entry per row whose stored
+     * pick the user replaced, in row order. An unchanged pick is work the user
+     * kept, and a pending replacement is skipped because a second swap on top
+     * of it would orphan the first.
+     */
+    fun pendingSwaps(
+        flagged: List<Pair<Task, Task.State>>,
+        picks: Map<String, String>,
+    ): List<Pair<Task, MatchCandidate>> =
+        flagged.mapNotNull { (task, state) ->
+            val match = state.match ?: return@mapNotNull null
+            if (!reviewable(state) || match.phase == MatchPhase.SwapPending) {
+                return@mapNotNull null
+            }
+            val chosen =
+                match.candidates.firstOrNull { it.url == picks[task.uiKey] }
+                    ?: return@mapNotNull null
+            if (chosen.url == match.selectedUrl) null else task to chosen
+        }
+
+    /**
      * A held book that the gate resolved as a verified whole-book part set. The
      * hold is "nothing to download in one file", not "no source": the set covers
      * the book and the review sheet offers the parts.

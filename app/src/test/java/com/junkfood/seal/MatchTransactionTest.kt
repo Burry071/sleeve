@@ -1,10 +1,13 @@
 package com.junkfood.seal
 
+import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.MatchCandidate
+import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.SwapOutcome
 import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -146,6 +149,67 @@ class MatchTransactionTest {
         assertEquals(0L, only.duration)
         assertEquals("", only.durationText)
     }
+
+    @Test
+    fun `a batch swap re-downloads only the songs whose pick changed`() {
+        // Four songs in one playlist batch, two of them swapped in one screen.
+        val entries = (0..3).map { index -> song(index) to state(original(), index) }
+        val picks =
+            mapOf(
+                entries[0].first.uiKey to candidate(1, 40.0).url,
+                entries[1].first.uiKey to candidate(0, 62.0).url, // unchanged
+                entries[2].first.uiKey to candidate(1, 40.0).url,
+            )
+
+        val swaps = MatchOps.pendingSwaps(entries, picks)
+
+        assertEquals(listOf(0, 2), swaps.map { (task, _) -> songIndex(task) })
+        assertEquals(
+            setOf(1, 3),
+            entries.map { songIndex(it.first) }.toSet() -
+                swaps.map { (task, _) -> songIndex(task) }.toSet(),
+        )
+        // The parked pick of each re-downloaded song is the replacement itself.
+        assertTrue(swaps.all { (_, candidate) -> candidate.url.endsWith("id1") })
+    }
+
+    @Test
+    fun `a swap on top of a pending replacement is skipped`() {
+        val pending = original().withSelection(candidate(1, 40.0))
+        val entry = song(0) to state(pending, 0)
+        // A stale pick pointing back at the old candidate must not queue a
+        // second swap while the first replacement is still downloading.
+        val picks = mapOf(entry.first.uiKey to candidate(0, 62.0).url)
+
+        assertTrue(MatchOps.pendingSwaps(listOf(entry), picks).isEmpty())
+    }
+
+    @Test
+    fun `a confirmed pick is never re-queued by the sheet`() {
+        val confirmed = original().copy(flagged = false, acknowledged = true)
+        val entry = song(0) to state(confirmed, 0)
+        val picks = mapOf(entry.first.uiKey to candidate(1, 40.0).url)
+
+        assertTrue(MatchOps.pendingSwaps(listOf(entry), picks).isEmpty())
+    }
+
+    private fun song(index: Int): Task =
+        Task(
+            url = "metadata://Spotify/batch/$index",
+            type = Task.TypeInfo.MetadataTrack(index = index, title = "Song $index"),
+            preferences = DownloadPreferences.EMPTY,
+            batch = BatchInfo(id = "batch", title = "Mix", provider = "Spotify"),
+        )
+
+    private fun songIndex(task: Task): Int = (task.type as Task.TypeInfo.MetadataTrack).index
+
+    private fun state(match: MatchResult, index: Int): Task.State =
+        Task.State(
+            downloadState = Task.DownloadState.Completed("/tmp/song$index.m4a"),
+            videoInfo = null,
+            viewState = Task.ViewState(title = "Song $index"),
+            match = match,
+        )
 
     @Test
     fun `scoreLabel keeps one decimal instead of rounding to a whole percent`() {

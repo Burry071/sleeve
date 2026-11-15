@@ -5,6 +5,8 @@ import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.RestartableAction
+import com.junkfood.seal.ui.page.downloadv2.cataloguePageUrl
+import com.junkfood.seal.ui.page.downloadv2.metadataQuery
 import com.junkfood.seal.ui.page.downloadv2.metadataTitle
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 import org.junit.Assert.assertEquals
@@ -85,5 +87,47 @@ class MatchSplitCopyTest {
     @Test
     fun `a title alone carries no separator`() {
         assertEquals("Song", metadataTitle(Task.TypeInfo.MetadataTrack(title = " Song ")))
+    }
+
+    @Test
+    fun `the search query is the title and the byline`() {
+        val book =
+            Task.TypeInfo.MetadataTrack(
+                title = "Atomic Habits",
+                artist = "Narrator Name",
+                authors = "James Clear",
+            )
+        val song = Task.TypeInfo.MetadataTrack(title = "Song", artist = "Some Artist")
+
+        assertEquals("Atomic Habits James Clear", metadataQuery(book))
+        assertEquals("Song Some Artist", metadataQuery(song))
+        assertEquals("Song", metadataQuery(Task.TypeInfo.MetadataTrack(title = " Song ")))
+    }
+
+    @Test
+    fun `an Audible book opens on its catalogue search`() {
+        val book =
+            Task.TypeInfo.MetadataTrack(
+                provider = "Audible",
+                title = "Harry Potter & the Stone",
+                authors = "J.K. Rowling",
+            )
+
+        assertEquals(
+            "https://www.audible.com/search?keywords=Harry%20Potter%20%26%20the%20Stone%20J.K.%20Rowling",
+            cataloguePageUrl(book),
+        )
+    }
+
+    @Test
+    fun `no catalogue page without a provider or any terms`() {
+        assertEquals(
+            null,
+            cataloguePageUrl(Task.TypeInfo.MetadataTrack(provider = "Spotify", title = "Song")),
+        )
+        assertEquals(
+            null,
+            cataloguePageUrl(Task.TypeInfo.MetadataTrack(provider = "Audible", title = " ")),
+        )
     }
 }

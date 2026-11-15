@@ -52,6 +52,7 @@ import com.junkfood.seal.download.isOpen
 import com.junkfood.seal.download.phase
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
+import java.net.URLEncoder
 
 /**
  * Amber warning pair for the low-confidence badge. Green is reserved for the
@@ -73,6 +74,25 @@ internal fun metadataTitle(track: Task.TypeInfo.MetadataTrack): String =
 /** The catalogue title for a metadata task, or null for ordinary URL shares. */
 internal fun Task.metadataTitle(): String? =
     (type as? Task.TypeInfo.MetadataTrack)?.let(::metadataTitle)
+
+/** The picker's pre-filled search terms: the catalogue title and byline. */
+internal fun metadataQuery(track: Task.TypeInfo.MetadataTrack): String =
+    listOf(track.title, track.authors.ifBlank { track.artist })
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(" ")
+
+/**
+ * The catalogue page a book can be opened on, or null when the provider has
+ * none. A search URL, not a product page: the task keeps no product id, so
+ * this lands the user on the provider's own results for the same title.
+ */
+internal fun cataloguePageUrl(track: Task.TypeInfo.MetadataTrack): String? {
+    if (!track.provider.equals("Audible", ignoreCase = true)) return null
+    val terms = metadataQuery(track).takeIf { it.isNotBlank() } ?: return null
+    return "https://www.audible.com/search?keywords=" +
+        URLEncoder.encode(terms, "UTF-8").replace("+", "%20")
+}
 
 /**
  * One playlist download: a summary header with batch actions and compact song
@@ -132,21 +152,32 @@ fun PlaylistBatchCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (singleTrack == null) {
+                        // "Done" must not cover a row that shows Incomplete: a
+                        // warning-completed song is counted, and named, apart.
                         Text(
                             text =
-                                if (summary.failed > 0)
-                                    stringResource(
-                                        R.string.playlist_progress_failed,
-                                        summary.completed,
-                                        summary.total,
-                                        summary.failed,
-                                    )
-                                else
-                                    stringResource(
-                                        R.string.playlist_progress,
-                                        summary.completed,
-                                        summary.total,
-                                    ),
+                                when {
+                                    summary.failed > 0 ->
+                                        stringResource(
+                                            R.string.playlist_progress_failed,
+                                            summary.completed,
+                                            summary.total,
+                                            summary.failed,
+                                        )
+                                    summary.warned > 0 ->
+                                        stringResource(
+                                            R.string.playlist_progress_warned,
+                                            summary.completed,
+                                            summary.total,
+                                            summary.warned,
+                                        )
+                                    else ->
+                                        stringResource(
+                                            R.string.playlist_progress,
+                                            summary.completed,
+                                            summary.total,
+                                        )
+                                },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

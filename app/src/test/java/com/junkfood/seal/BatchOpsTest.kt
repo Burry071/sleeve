@@ -69,6 +69,7 @@ class BatchOpsTest {
         val summary = BatchOps.summary(map, batch.id)
         assertEquals(7, summary.total)
         assertEquals(1, summary.completed)
+        assertEquals(0, summary.warned)
         assertEquals(1, summary.failed)
         assertEquals(1, summary.canceled)
         assertEquals(4, summary.unfinished)
@@ -104,6 +105,22 @@ class BatchOpsTest {
             listOf("active", "failed", "done"),
             BatchOps.activityOrder(BatchOps.groups(map)).map { it.batch.id },
         )
+    }
+
+    @Test
+    fun `a warned completion is counted apart from the clean ones`() {
+        val entries =
+            listOf(
+                task(batch, 0) to state(Completed("/tmp/a.m4a")),
+                task(batch, 1) to state(Completed("/tmp/b.m4a", warning = "kept previous file")),
+                task(batch, 2) to state(Completed(null)),
+            )
+
+        val summary = BatchOps.summary(entries)
+
+        assertEquals(3, summary.completed)
+        assertEquals(1, summary.warned)
+        assertEquals(0, summary.failed)
     }
 
     @Test

@@ -8,7 +8,8 @@ like every other metadata source.
 
 Public surface (JSON strings, like sleeve_engine):
     resolve(url) -> '{"ok": true, "title": ..., "tracks":
-                     [{"title", "artist", "authors", "album", "durationMs"}]}'
+                     [{"title", "artist", "authors", "durationMs",
+                       "language"}]}'
     search(keywords) -> same shape
 
 urllib only (Chaquopy-safe).
@@ -37,6 +38,18 @@ def _api(url):
         return json.loads(resp.read().decode())
 
 
+def _language(value):
+    """One clean language token: "English (US)" / "en-US" -> "english" / "en".
+
+    The gate maps names and codes alike, so the resolver only has to stop the
+    region suffixes and casing from hiding the language.
+    """
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    return re.split(r"[\(\[]|[-_]", text)[0].strip()
+
+
 def _product_dto(product):
     authors = ", ".join(
         a.get("name", "") for a in (product.get("authors") or [])
@@ -53,7 +66,7 @@ def _product_dto(product):
         "artist": artist,
         "durationMs": int(minutes) * 60 * 1000,
         "authors": authors,
-        "language": product.get("language") or "",
+        "language": _language(product.get("language")),
     }
 
 

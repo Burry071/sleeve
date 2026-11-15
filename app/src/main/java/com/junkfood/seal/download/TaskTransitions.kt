@@ -60,6 +60,17 @@ internal object TaskTransitions {
         }
 
     /**
+     * Whether a relaunch may restart a task on its own. Only a process kill
+     * leaves a backup entry in flight, so an entry already stored as Canceled,
+     * Error or Completed was a decision the user made and stays parked.
+     */
+    fun resumesAfterProcessDeath(persisted: DownloadState): Boolean =
+        when (persisted) {
+            Idle, ReadyWithInfo, is FetchingInfo, is Running -> true
+            is Canceled, is Error, is Completed -> false
+        }
+
+    /**
      * A duplicate enqueue must not reset work in flight: the scheduler would
      * start a second transfer over the same output path. Terminal work is a new
      * submission and starts over.
@@ -81,6 +92,13 @@ internal object TaskTransitions {
         }
 
     /**
+     * A new search replaces the match and pick, so it is allowed only on a
+     * terminal row: tearing either out from under a worker is exactly what the
+     * transition table forbids.
+     */
+    fun acceptsSearchAgain(from: DownloadState?): Boolean = from is Canceled || from is Error
+
+    /**
      * A custom command has no extracted info to download, and its worker only
      * accepts an Idle task: resuming it through ReadyWithInfo would park it
      * forever, so it re-enters through the Idle lane instead.
@@ -91,12 +109,19 @@ internal object TaskTransitions {
             FetchInfo -> Idle
         }
 
-    /** The Canceled state a task of this kind enters, or null when not cancelable. */
+    /**
+     * The Canceled state a task of this kind enters, or null when not cancelable.
+     *
+     * Every branch records [Task.DownloadState.Canceled.byUser], because the only
+     * caller is a user action: cancel, delete, or Stop on a batch. Without it, a
+     * song stopped while still queued would be indistinguishable from one a
+     * process kill interrupted, and a relaunch would resume it.
+     */
     fun cancelTarget(from: DownloadState): DownloadState? =
         when (from) {
-            Idle -> Canceled(action = FetchInfo)
-            ReadyWithInfo -> Canceled(action = Download)
-            is FetchingInfo -> Canceled(action = from.action)
+            Idle -> Canceled(action = FetchInfo, byUser = true)
+            ReadyWithInfo -> Canceled(action = Download, byUser = true)
+            is FetchingInfo -> Canceled(action = from.action, byUser = true)
             is Running -> Canceled(action = from.action, progress = from.progress, byUser = true)
             else -> null
         }
