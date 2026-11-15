@@ -1,0 +1,14 @@
+2.1.0
+
+Audiobooks
+• Audible books export as one .m4b file with chapter markers; a long URL in the task name no longer stops the export.
+• A book that does not match its catalogue is held for review with a reason; verified split books download as checked parts.
+• A no-source verdict offers Search again and Open in Audible.
+
+Downloads
+• Playlist batches live in their own tab with Stop and Resume across the batch, and a relaunch resumes only the tasks a process kill left in flight.
+• Ghost downloads with "Save to SD card" land in the chosen folder without downloading the file twice.
+• A download no longer fails on sites that refuse a request with no browser identity.
+
+Settings
+• The SD-card folder row shows the granted folder immediately after you pick it.
