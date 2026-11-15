@@ -346,6 +346,8 @@ fun DownloadPageV2(
         },
         onReviewSwap = { selections -> downloader.swapMatches(selections) },
         onReviewParts = { task, parts -> downloader.enqueueParts(task, parts) },
+        onReviewSearchAgain = { task, query -> downloader.searchAgain(task, query) },
+        onReviewOpenUrl = { url -> uriHandler.openUri(url) },
         showInterruptedRestore = downloader.interruptedRestore,
         onDismissInterruptedRestore = downloader::dismissInterruptedRestore,
     ) { task, action ->
@@ -504,6 +506,8 @@ fun DownloadPageImplV2(
     onReviewAcceptAll: (String) -> Unit = {},
     onReviewSwap: suspend (List<Pair<Task, MatchCandidate>>) -> List<SwapResult> = { emptyList() },
     onReviewParts: suspend (Task, List<MatchCandidate>) -> Int = { _, _ -> 0 },
+    onReviewSearchAgain: suspend (Task, String) -> Boolean = { _, _ -> false },
+    onReviewOpenUrl: (String) -> Unit = {},
     showInterruptedRestore: Boolean = false,
     onDismissInterruptedRestore: () -> Unit = {},
     onActionPost: (Task, UiAction) -> Unit,
@@ -1001,6 +1005,8 @@ fun DownloadPageImplV2(
                 onDismissRequest = onReviewDismiss,
                 onSwap = onReviewSwap,
                 onDownloadParts = onReviewParts,
+                onSearchAgain = onReviewSearchAgain,
+                onOpenUrl = onReviewOpenUrl,
                 onAcceptAll = { onReviewAcceptAll(batchId) },
             )
         }

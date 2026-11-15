@@ -228,6 +228,35 @@ object DownloadUtil {
     /** A resolved catalogue track plus the cached candidates the review sheet needs. */
     data class MetadataResolution(val videoInfo: VideoInfo, val match: MatchResult)
 
+    /**
+     * What a catalogue track resolves to when the search produced nothing worth
+     * ranking. A dead end is still reviewable: the picker is where the user can
+     * paste a link, search again or open the catalogue page, so this becomes a
+     * held match with no candidates instead of a bare failed task. The row is
+     * titled from the catalogue so it never shows the synthetic task URL.
+     */
+    internal fun noSourceResolution(
+        metadata: Task.TypeInfo.MetadataTrack,
+        reason: String,
+    ): MetadataResolution =
+        MetadataResolution(
+            videoInfo =
+                VideoInfo(
+                    title = metadata.title,
+                    uploader = metadata.authors.ifBlank { metadata.artist },
+                    duration = metadata.durationMs.takeIf { it > 0 }?.div(1000.0),
+                    // Empty, not a fake URL: every consumer falls back to the
+                    // task URL and filters the synthetic metadata:// scheme out.
+                    originalUrl = "",
+                ),
+            match =
+                MatchResult(
+                    held = true,
+                    expectedDurationMs = metadata.durationMs,
+                    gateReason = reason,
+                ),
+        )
+
     internal fun GhostEngine.RankedCandidate.toMatchCandidate(): MatchCandidate =
         MatchCandidate(
             index = index,
@@ -378,6 +407,8 @@ object DownloadUtil {
         taskKey: String,
         preferences: DownloadPreferences,
         isActive: () -> Boolean = { true },
+        /** User-edited terms that replace the catalogue-built query. */
+        queryOverride: String = "",
     ): Result<MetadataResolution> =
         runCatching {
             val track =
@@ -389,7 +420,9 @@ object DownloadUtil {
                     authors = metadata.authors,
                     language = metadata.language,
                 )
-            val query = buildMetadataQuery(track, metadata.provider)
+            val query =
+                queryOverride.trim().takeIf { it.isNotBlank() }
+                    ?: buildMetadataQuery(track, metadata.provider)
             Log.i(TAG, "match query: $query")
 
             fun search(pool: String): List<PlaylistEntry> =
@@ -440,10 +473,15 @@ object DownloadUtil {
             if (!isActive()) return matchCanceled()
 
             if (ranked.isNullOrEmpty()) {
-                throw IllegalStateException(
-                    "No confident YouTube match for \"${track.title}\" by \"${track.artist}\"" +
+                // Nothing to rank is a reviewable hold, not a terminal error:
+                // the review sheet offers paste-link, search-again and the
+                // catalogue page for exactly this case.
+                val reason =
+                    "no confident match for \"${track.title}\" by \"${track.artist}\"" +
                         (rankError?.message?.let { ": $it" } ?: "")
-                )
+                Log.i(TAG, "$taskKey gate: no_source — $reason")
+                TaskAuditLog.append(taskKey, "gate: no_source — $reason")
+                return@runCatching noSourceResolution(metadata, reason)
             }
 
             val best = ranked.first()
@@ -458,9 +496,60 @@ object DownloadUtil {
                 } else {
                     null
                 }
-            val decision = gate?.let { decideGatePick(it, ranked) }
-            val pick = decision?.pick ?: best
-            val pickUrl = pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
+            var decision = gate?.let { decideGatePick(it, ranked) }
+            var pick = decision?.pick ?: best
+            var pickUrl = pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
+
+            // A held book still fetches the closest candidate's metadata (for
+            // display and the review sheet), but the caller must not write
+            // ReadyWithInfo, so no media bytes are requested.
+            var resolved =
+                fetchVideoInfoFromUrl(
+                        url = pickUrl,
+                        preferences = preferences,
+                        taskKey = taskKey,
+                    )
+                    .getOrThrow()
+            if (!isActive()) return matchCanceled()
+
+            // The flat search pool carries no track language; only the full
+            // extraction of the pick names one. An English book matched to a
+            // German dub must hold here, before the download stage is told to
+            // start, even though the first gate could not see the difference.
+            if (gate?.passed == true) {
+                val audioLanguage = resolved.audioLanguage()
+                if (audioLanguage.isNotBlank()) {
+                    val enriched =
+                        ranked.map { candidate ->
+                            if (candidate.id == pick.id) {
+                                candidate.copy(audioLanguage = audioLanguage)
+                            } else {
+                                candidate
+                            }
+                        }
+                    val second = audibleGate(taskKey, track, enriched)
+                    if (second != null && !second.passed) {
+                        val held2 = decideGatePick(second, enriched)
+                        decision = held2
+                        if (held2.pick.id != pick.id) {
+                            pick = held2.pick
+                            pickUrl =
+                                pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
+                            resolved =
+                                fetchVideoInfoFromUrl(
+                                        url = pickUrl,
+                                        preferences = preferences,
+                                        taskKey = taskKey,
+                                    )
+                                    .getOrThrow()
+                            if (!isActive()) return matchCanceled()
+                        } else {
+                            pick = held2.pick
+                        }
+                    }
+                }
+            }
+
             val held = decision?.held == true
             // Keep the passing pick visible even when it was below rank 3.
             val displayed =
@@ -500,18 +589,6 @@ object DownloadUtil {
                             )
                         }
                     }
-
-            // A held book still fetches the closest candidate's metadata (for
-            // display and the review sheet), but the caller must not write
-            // ReadyWithInfo, so no media bytes are requested.
-            val resolved =
-                fetchVideoInfoFromUrl(
-                        url = pickUrl,
-                        preferences = preferences,
-                        taskKey = taskKey,
-                    )
-                    .getOrThrow()
-            if (!isActive()) return matchCanceled()
             MetadataResolution(resolved, match)
         }
 

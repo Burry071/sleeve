@@ -69,6 +69,8 @@ fun MatchReviewSheet(
     onDismissRequest: () -> Unit,
     onSwap: suspend (List<Pair<Task, MatchCandidate>>) -> List<SwapResult>,
     onDownloadParts: suspend (Task, List<MatchCandidate>) -> Int = { _, _ -> 0 },
+    onSearchAgain: suspend (Task, String) -> Boolean = { _, _ -> false },
+    onOpenUrl: (String) -> Unit = {},
     onAcceptAll: () -> Unit,
 ) {
     val flagged = remember(entries) { MatchOps.flaggedEntries(entries) }
@@ -80,36 +82,24 @@ fun MatchReviewSheet(
         }
     }
     // A pick that differs from the stored selection is a swap; the batch is
-    // only "accepted" when nothing is queued to be replaced.
-    val swaps =
-        flagged.mapNotNull { (task, state) ->
-            val match = state.match ?: return@mapNotNull null
-            val chosen = match.candidates.firstOrNull { it.url == picks[task.uiKey] }
-            if (chosen != null && chosen.url != match.selectedUrl) task to chosen else null
-        }
+    // only "accepted" when nothing is queued to be replaced. Two held songs in
+    // one batch therefore each contribute their own row.
+    val swaps = MatchOps.pendingSwaps(flagged, picks)
 
     val scope = rememberCoroutineScope()
     var running by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<SwapResult>>(emptyList()) }
     var applyFailed by remember { mutableStateOf(false) }
-    var pastedUrl by remember { mutableStateOf("") }
-    // A single held book is the one case where a pasted full-book link is
-    // unambiguous. Multi-book batches stay on the candidate rows. Once a
-    // replacement is pending the phase leaves Held, so a second swap cannot be
-    // queued on top of the first.
-    val singleHeld =
-        flagged
-            .singleOrNull()
-            ?.takeIf { (_, state) ->
-                state.match.phase == MatchPhase.Held && state.match?.parts?.isEmpty() == true
-            }
-    val pastedUrlValid =
-        pastedUrl.trim().let { it.startsWith("http://") || it.startsWith("https://") }
+    var searchFailedFor by remember { mutableStateOf<String?>(null) }
+    // One paste field and one query field per row, keyed by the row's stable
+    // list key: two held songs in one batch must never share either.
+    val pastedLinks = remember(flagged) { mutableStateMapOf<String, String>() }
+    val queries = remember(flagged) { mutableStateMapOf<String, String>() }
 
-    fun usePastedLink() {
-        val task = singleHeld?.first ?: return
-        val url = pastedUrl.trim()
-        if (!pastedUrlValid || running) return
+    fun usePastedLink(task: Task) {
+        val url = pastedLinks[task.uiKey].orEmpty().trim()
+        val valid = url.startsWith("http://") || url.startsWith("https://")
+        if (!valid || running) return
         running = true
         results = emptyList()
         applyFailed = false
@@ -126,13 +116,31 @@ fun MatchReviewSheet(
                                 )
                         )
                     )
-                if (results.any { it.outcome == SwapOutcome.Queued }) pastedUrl = ""
+                if (results.any { it.outcome == SwapOutcome.Queued }) {
+                    pastedLinks.remove(task.uiKey)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
                 applyFailed = true
             } finally {
                 running = false
+            }
+        }
+    }
+
+    fun searchRow(task: Task) {
+        val track = task.type as? Task.TypeInfo.MetadataTrack ?: return
+        val query = (queries[task.uiKey] ?: metadataQuery(track)).trim()
+        if (query.isBlank() || running) return
+        searchFailedFor = null
+        scope.launch {
+            try {
+                if (!onSearchAgain(task, query)) searchFailedFor = task.uiKey
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                searchFailedFor = task.uiKey
             }
         }
     }
@@ -390,6 +398,86 @@ fun MatchReviewSheet(
                             }
                         }
                     }
+                    if (match.held) {
+                        // Two held books in one batch are two separate
+                        // problems, so every field below is keyed by this
+                        // row: typing a link or terms never leaks to another.
+                        val track = task.type as? Task.TypeInfo.MetadataTrack
+                        val busy = running || pending
+                        if (match.parts.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.match_paste_link_hint),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                OutlinedTextField(
+                                    value = pastedLinks[task.uiKey].orEmpty(),
+                                    onValueChange = { pastedLinks[task.uiKey] = it },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    placeholder = { Text("https://youtube.com/...") },
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = { usePastedLink(task) },
+                                    enabled =
+                                        !busy &&
+                                            pastedLinks[task.uiKey].orEmpty().trim().let {
+                                                it.startsWith("http://") ||
+                                                    it.startsWith("https://")
+                                            },
+                                ) {
+                                    Text(stringResource(R.string.match_use_link))
+                                }
+                            }
+                        }
+                        if (track != null) {
+                            val queryValue = queries[task.uiKey] ?: metadataQuery(track)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                OutlinedTextField(
+                                    value = queryValue,
+                                    onValueChange = { queries[task.uiKey] = it },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    label = { Text(stringResource(R.string.match_search_query_label)) },
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = { searchRow(task) },
+                                    enabled = !busy && queryValue.isNotBlank(),
+                                ) {
+                                    Text(stringResource(R.string.match_search_again))
+                                }
+                            }
+                            if (searchFailedFor == task.uiKey) {
+                                Text(
+                                    text = stringResource(R.string.match_search_failed),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            }
+                            cataloguePageUrl(track)?.let { url ->
+                                TextButton(
+                                    onClick = { onOpenUrl(url) },
+                                    enabled = !busy,
+                                    contentPadding = PaddingValues(0.dp),
+                                ) {
+                                    Text(stringResource(R.string.match_open_catalogue))
+                                }
+                            }
+                        }
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
@@ -436,35 +524,6 @@ fun MatchReviewSheet(
                 textAlign = TextAlign.End,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             )
-        }
-        singleHeld?.let { (_, _) ->
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Text(
-                    text = stringResource(R.string.match_paste_link_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = pastedUrl,
-                        onValueChange = { pastedUrl = it },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        enabled = !running,
-                        placeholder = { Text("https://youtube.com/...") },
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(
-                        onClick = { usePastedLink() },
-                        enabled = pastedUrlValid && !running,
-                    ) {
-                        Text(stringResource(R.string.match_use_link))
-                    }
-                }
-            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),

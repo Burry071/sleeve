@@ -113,6 +113,38 @@ class AsinExtractionTest(unittest.TestCase):
             ],
         )
 
+    def test_catalogue_language_reaches_the_track_as_one_token(self):
+        # The gate maps names and codes alike, so the region and casing must
+        # not hide the language the book was actually narrated in.
+        sleeve_audible._api = lambda url: {
+            "product": {
+                "title": "Der Hobbit",
+                "authors": [{"name": "J.R.R. Tolkien"}],
+                "narrators": [],
+                "runtime_length_min": 660,
+                "language": "German (DE)",
+            }
+        }
+        result = json.loads(sleeve_audible.resolve("B08G9PRS1K"))
+
+        self.assertEqual("german", result["tracks"][0]["language"])
+
+    def test_a_catalogue_without_a_language_reports_none(self):
+        result = json.loads(sleeve_audible.resolve("B08G9PRS1K"))
+
+        self.assertEqual("", result["tracks"][0]["language"])
+
+    def test_language_tokens_drop_their_region_and_case(self):
+        for raw, expected in (
+            ("English (US)", "english"),
+            ("en-US", "en"),
+            ("German", "german"),
+            ("", ""),
+            (None, ""),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(expected, sleeve_audible._language(raw))
+
 
 if __name__ == "__main__":
     unittest.main()

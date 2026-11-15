@@ -71,7 +71,25 @@ data class VideoInfo(
     @SerialName("requested_formats") val requestedFormats: List<Format>? = null,
     val filename: String? = null,
     @SerialName("_type") val type: String? = null,
+    /** Track language reported by the extractor; absent on most uploads. */
+    val language: String? = null,
 ) : YoutubeDLInfo
+
+/**
+ * The audio track's language as yt-dlp reports it: the top-level `language`
+ * when present, else the one language shared by every audio format. Empty
+ * means unknown — a multi-language upload names more than one, and an
+ * unknown language must never hold a download.
+ */
+fun VideoInfo.audioLanguage(): String {
+    language?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+    val codes =
+        formats.orEmpty()
+            .filter { it.containsAudio() || it.isAudioOnly() }
+            .mapNotNull { it.language?.trim()?.takeIf { code -> code.isNotBlank() } }
+            .distinct()
+    return codes.singleOrNull().orEmpty()
+}
 
 @Serializable
 data class Format(
@@ -93,6 +111,8 @@ data class Format(
     val tbr: Double? = null,
     @SerialName("filesize") val fileSize: Double? = null,
     @SerialName("filesize_approx") val fileSizeApprox: Double? = null,
+    /** Per-track language on multi-audio uploads; absent when unlabeled. */
+    val language: String? = null,
 ) {
     // The generic extractor reports direct links without codec fields, so a
     // null vcodec is "unknown", not "no video": classify by the container
@@ -159,6 +179,7 @@ data class RequestedDownload(
     @SerialName("filesize") val fileSize: Double? = null,
     @SerialName("filesize_approx") val fileSizeApprox: Double? = null,
     val filename: String? = null,
+    val language: String? = null,
 ) {
     fun toFormat(): Format =
         Format(
@@ -180,6 +201,7 @@ data class RequestedDownload(
             tbr = tbr,
             fileSize = fileSize,
             fileSizeApprox = fileSizeApprox,
+            language = language,
         )
 }
 

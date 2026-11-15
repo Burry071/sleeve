@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -288,6 +289,12 @@ object GhostEngine {
         val channel: String = "",
         /** Whole seconds; `0` means the ranker reported no duration. */
         val duration: Long = 0L,
+        /**
+         * Audio-track language of the upload, filled in from the full
+         * extraction when the gate gets a second look. Empty means unknown and
+         * must never hold a download.
+         */
+        @SerialName("audio_language") val audioLanguage: String = "",
     )
 
     /**

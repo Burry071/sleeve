@@ -210,6 +210,60 @@ class GateVerdictTest(unittest.TestCase):
         # still decide. This is the documented phase-1 limitation.
         self.assertEqual("pass", result["verdict"])
 
+    def test_a_dubbed_audio_track_holds_even_without_a_title_marker(self):
+        # The upload says nothing about its language in the title; only the
+        # extractor knows it is a German dub of an English book.
+        dub = candidate("Dune | Full Audiobook", 75_720, id="dub")
+        dub["audio_language"] = "german"
+        result = gate(
+            book("Dune", 75_720_000, "Frank Herbert", language="english"),
+            [dub],
+        )
+
+        self.assertEqual("hold", result["verdict"])
+        self.assertIn("language mismatch", result["reason"])
+        self.assertIn("German", result["reason"])
+        self.assertIn("English", result["reason"])
+
+    def test_a_matching_audio_track_with_a_region_still_passes(self):
+        # yt-dlp reports "en-US"; the catalogue says "English (US)". The
+        # region must not turn the same language into a conflict.
+        original = candidate("Dune | Full Audiobook", 75_720, id="en")
+        original["audio_language"] = "en-US"
+        result = gate(
+            book("Dune", 75_720_000, "Frank Herbert", language="english"),
+            [original],
+        )
+
+        self.assertEqual("pass", result["verdict"])
+        self.assertEqual("en", result["candidate_id"])
+
+    def test_an_unknown_audio_language_never_holds(self):
+        # An unlabelled upload must not be refused on a guess: no language is
+        # reported, so only duration and title decide.
+        for value in ("", "   ", "und"):
+            with self.subTest(audio_language=value):
+                upload = candidate("Dune | Full Audiobook", 75_720, id="unknown")
+                if value:
+                    upload["audio_language"] = value
+                result = gate(
+                    book("Dune", 75_720_000, "Frank Herbert", language="english"),
+                    [upload],
+                )
+                self.assertEqual("pass", result["verdict"])
+
+    def test_a_part_set_with_a_foreign_audio_track_holds(self):
+        parts = [dict(part) for part in DUNE_PARTS]
+        for part in parts:
+            part["audio_language"] = "de"
+        result = gate(
+            book("Dune", 75_720_000, "Frank Herbert", language="english"),
+            parts,
+        )
+
+        self.assertEqual("hold", result["verdict"])
+        self.assertIn("language mismatch", result["reason"])
+
     def test_a_summary_never_passes_even_at_full_runtime(self):
         result = gate(
             DUNE,

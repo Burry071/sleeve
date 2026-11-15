@@ -23,9 +23,11 @@ whole seconds. `candidate_id` stays empty on `split`: no single upload is the
 book, the set is.
 
 `track_json` is a resolved Audible track: {"title","artist","album",
-"durationMs",...}. `candidates_json` is the ranker's shortlist:
-[{"id","url","title","uploader","channel","duration"}], with `duration` in
-whole seconds and `durationMs` in milliseconds. The conversion happens exactly
+"durationMs","language",...}. `candidates_json` is the ranker's shortlist:
+[{"id","url","title","uploader","channel","duration","audio_language"}], with
+`duration` in whole seconds and `durationMs` in milliseconds. An empty
+`audio_language` means the track language is unknown and must never hold a
+candidate; a named language that differs from the book's holds it. The conversion happens exactly
 once, at the boundary in `_expected_seconds`: a 1000x mix-up looks like a
 duration mismatch and would hold every book.
 
@@ -194,7 +196,26 @@ _LANGUAGE_MARKERS = (
 
 
 def _normalize_language(value):
-    return _LANGUAGE_ALIASES.get(_fold(value).strip(), "")
+    """Language code from a catalogue name, a tag or a regioned tag.
+
+    "English", "english", "en" and "en-US" all name the same track; the
+    region suffix is dropped so a US/UK spellings never fake a mismatch.
+    """
+    text = _fold(value).strip()
+    text = re.split(r"[\(\[]|[-_]", text)[0].strip()
+    return _LANGUAGE_ALIASES.get(text, "")
+
+
+_LANGUAGE_NAMES = {
+    "en": "English", "de": "German", "es": "Spanish", "fr": "French",
+    "it": "Italian", "pt": "Portuguese", "ru": "Russian", "hi": "Hindi",
+    "ur": "Urdu", "ja": "Japanese", "zh": "Chinese", "pl": "Polish",
+    "nl": "Dutch", "tr": "Turkish",
+}
+
+
+def _language_label(code):
+    return _LANGUAGE_NAMES.get(code, code or "unknown")
 
 
 _LANGUAGE_QUALIFIER_RE = re.compile(
@@ -482,6 +503,7 @@ def _part_entries(checked):
                 "channel_key": " ".join(_fold(channel).split()),
                 "core": core,
                 "languages": tuple(sorted(item["languages"])),
+                "audio_language": item.get("audio_language") or "",
                 "narrator": item.get("narrator") or "",
                 "edition": item.get("edition") or "",
                 "seconds": item["seconds"],
@@ -593,6 +615,20 @@ def _evaluate_part_set(parts, expected_s, tolerance_s, expected_language):
         return None, (
             _PART_FAILURES["language"],
             'wrong-language part set ("%s")' % unique[0]["title"],
+        )
+
+    audio_conflicts = sorted(
+        {
+            p["audio_language"]
+            for p in unique
+            if expected_language and p["audio_language"] and p["audio_language"] != expected_language
+        }
+    )
+    if audio_conflicts:
+        return None, (
+            _PART_FAILURES["language"],
+            "language mismatch: audio track is %s, book is %s"
+            % (_language_label(audio_conflicts[0]), _language_label(expected_language)),
         )
 
     for part in unique:
@@ -763,6 +799,16 @@ def gate_audible(track_json, candidates_json):
             uploader = candidate.get("uploader") or ""
             seconds = _candidate_seconds(candidate.get("duration"))
             declared_languages = _language_declarations(candidate_title)
+            # The full extraction names the real audio track; the flat search
+            # does not, so this is often the only truthful signal.
+            audio_language = _normalize_language(candidate.get("audio_language"))
+            audio_conflict = (
+                audio_language
+                if expected_language
+                and audio_language
+                and audio_language != expected_language
+                else ""
+            )
             part_index, part_declared = _parse_part(candidate_title)
             checked.append(
                 {
@@ -778,9 +824,12 @@ def gate_audible(track_json, candidates_json):
                         title, candidate_title, track.get("artist") or ""
                     ),
                     "languages": declared_languages,
+                    "audio_language": audio_language,
+                    "audio_conflict": audio_conflict,
                     "language_conflict": _declared_conflict(
                         expected_language, declared_languages
-                    ),
+                    )
+                    or audio_conflict,
                     "junk": (
                         _is_junk(candidate_title, _JUNK_TITLE_RE)
                         or _is_junk(channel, _JUNK_CHANNEL_RE)
@@ -861,7 +910,13 @@ def gate_audible(track_json, candidates_json):
         elif not matching:
             reason = "no candidate with a matching title"
         elif wrong_language and len(wrong_language) == len(matching):
-            reason = 'wrong-language upload ("%s")' % wrong_language[0]["title"]
+            if wrong_language[0]["audio_conflict"]:
+                reason = "language mismatch: audio track is %s, book is %s" % (
+                    _language_label(wrong_language[0]["audio_conflict"]),
+                    _language_label(expected_language),
+                )
+            else:
+                reason = 'wrong-language upload ("%s")' % wrong_language[0]["title"]
         elif all(c["junk"] for c in matching):
             reason = "only junk uploads (summary/recap/review/etc.)"
         elif not any(c["seconds"] for c in matching):

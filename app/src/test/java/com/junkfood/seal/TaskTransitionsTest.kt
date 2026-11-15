@@ -219,13 +219,18 @@ class TaskTransitionsTest {
 
     @Test
     fun `cancel targets every unfinished state and no terminal one`() {
-        assertEquals(Canceled(RestartableAction.FetchInfo), TaskTransitions.cancelTarget(Idle))
+        // Every cancel is a user decision, including one on a song still queued:
+        // a relaunch must be able to tell it apart from a process kill.
         assertEquals(
-            Canceled(RestartableAction.Download),
+            Canceled(RestartableAction.FetchInfo, byUser = true),
+            TaskTransitions.cancelTarget(Idle),
+        )
+        assertEquals(
+            Canceled(RestartableAction.Download, byUser = true),
             TaskTransitions.cancelTarget(ReadyWithInfo),
         )
         assertEquals(
-            Canceled(RestartableAction.FetchInfo),
+            Canceled(RestartableAction.FetchInfo, byUser = true),
             TaskTransitions.cancelTarget(fetching),
         )
         assertEquals(
@@ -235,6 +240,29 @@ class TaskTransitionsTest {
         assertNull(TaskTransitions.cancelTarget(canceledFetch))
         assertNull(TaskTransitions.cancelTarget(errorDownload))
         assertNull(TaskTransitions.cancelTarget(completed))
+    }
+
+    @Test
+    fun `a relaunch resumes only what the process kill left in flight`() {
+        assertTrue(TaskTransitions.resumesAfterProcessDeath(Idle))
+        assertTrue(TaskTransitions.resumesAfterProcessDeath(ReadyWithInfo))
+        assertTrue(TaskTransitions.resumesAfterProcessDeath(fetching))
+        assertTrue(TaskTransitions.resumesAfterProcessDeath(running))
+        // Terminal entries are decisions, not casualties.
+        assertFalse(TaskTransitions.resumesAfterProcessDeath(canceledFetch))
+        assertFalse(TaskTransitions.resumesAfterProcessDeath(errorFetch))
+        assertFalse(TaskTransitions.resumesAfterProcessDeath(completed))
+    }
+
+    @Test
+    fun `searching again is allowed only on a terminal row`() {
+        assertTrue(TaskTransitions.acceptsSearchAgain(canceledFetch))
+        assertTrue(TaskTransitions.acceptsSearchAgain(errorDownload))
+        assertFalse(TaskTransitions.acceptsSearchAgain(Idle))
+        assertFalse(TaskTransitions.acceptsSearchAgain(fetching))
+        assertFalse(TaskTransitions.acceptsSearchAgain(ReadyWithInfo))
+        assertFalse(TaskTransitions.acceptsSearchAgain(running))
+        assertFalse(TaskTransitions.acceptsSearchAgain(completed))
     }
 
     @Test
