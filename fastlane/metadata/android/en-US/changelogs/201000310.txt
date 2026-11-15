@@ -1,0 +1,17 @@
+2.1.0-rc.1
+
+Audiobooks
+• Audible books can be exported as one .m4b file with chapter markers.
+• A book whose named audio-track language differs from the catalogue is held for review; an unknown language never holds.
+• A no-source verdict is a reviewable hold, with Search again and Open in Audible.
+
+Downloads
+• A relaunch resumes only the tasks a process kill left in flight; a cancelled task stays cancelled.
+• Warning-completed tracks are counted and named apart from clean ones in the batch header.
+• Media the download archive already lists is reported as already downloaded.
+
+Fixes
+• Playlist items stay pinned to the video they were enqueued from.
+• Two held songs in one batch no longer share or hide each other's input fields.
+• Ghost downloads finish into the chosen folder, and gallery links reach quick download again.
+• A failed replacement keeps the previous file and completes with a warning.
