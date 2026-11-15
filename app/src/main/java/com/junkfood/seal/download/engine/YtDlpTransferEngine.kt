@@ -57,11 +57,6 @@ internal object YtDlpTransferEngine : TransferEngine {
             // a cache file read once and removed. Reports a crashed run left
             // behind are stale by definition.
             val m4bPlanned = M4bPlan.applies(videoInfo, downloadPreferences)
-            if (m4bPlanned) {
-                context.cacheDir?.listFiles()?.forEach { stale ->
-                    if (stale.name.startsWith("m4b_path_${job.taskId}_")) stale.delete()
-                }
-            }
             for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
                 if (!job.isActive()) return Result.failure(CancellationException("task canceled"))
                 val processId = job.processIdFactory()
@@ -81,8 +76,7 @@ internal object YtDlpTransferEngine : TransferEngine {
                 val pathBuilder = StringBuilder()
                 val outputBuilder = StringBuilder()
                 val pathReport =
-                    if (m4bPlanned) File(context.cacheDir, "m4b_path_${job.taskId}_$processId.txt")
-                    else null
+                    if (m4bPlanned) M4bPlan.reportFile(context.cacheDir, job.taskId) else null
                 pathReport?.delete()
 
                 val attemptFailure =

@@ -5,6 +5,7 @@ import android.util.Log
 import com.junkfood.seal.download.CompletedNote
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 import java.io.File
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -101,6 +102,15 @@ data class M4bPlan(
     }
 
     companion object {
+        /** Task ids are raw URLs; only their digest is safe as a path component. */
+        fun reportFile(cacheDir: File, taskId: String): File {
+            val digest =
+                MessageDigest.getInstance("SHA-256")
+                    .digest(taskId.toByteArray(Charsets.UTF_8))
+                    .joinToString("") { "%02x".format(it) }
+            return File(cacheDir, "m4b_report_${digest.take(24)}.txt")
+        }
+
         /**
          * Whether the finished audio should become one chaptered audiobook:
          * the toggle is on, nothing else reshaped the file, the lane produced

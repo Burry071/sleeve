@@ -1,0 +1,11 @@
+2.1.0-rc.2
+
+Audiobooks
+• Audible books export to .m4b again; a long URL in the task name no longer stops the export.
+
+Downloads
+• Ghost downloads with "Save to SD card" on land in the chosen folder without downloading the file twice.
+• A download no longer fails on sites that refuse a request with no browser identity.
+
+Settings
+• The SD-card folder row shows the granted folder immediately after you pick it.
