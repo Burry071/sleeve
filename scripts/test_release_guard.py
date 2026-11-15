@@ -20,7 +20,7 @@ sealed class Version(val major: Int, val minor: Int, val patch: Int, val build: 
 }
 
 val currentVersion: Version =
-    Version.Beta(versionMajor = 2, versionMinor = 0, versionPatch = 0, versionBuild = 11)
+    Version.Beta(versionMajor = 2, versionMinor = 0, versionPatch = 0, versionBuild = 9)
 """
 
 STABLE_KT = """
@@ -40,7 +40,7 @@ val currentVersion: Version =
 
 GRADLE_KT = """
     defaultConfig {
-        versionCode = 200_000_310
+        versionCode = 200_000_290
     }
 """
 
@@ -64,9 +64,9 @@ def entry(tag, base, shipped, distributed=True, published=True, **extra):
 class ParseVersionKtTest(unittest.TestCase):
     def test_beta(self):
         spec = guard.parse_version_kt(VERSION_KT)
-        self.assertEqual(spec.name, "2.0.0-beta.11")
-        self.assertEqual(spec.tag, "v2.0.0-beta.11")
-        self.assertEqual(spec.code, 200_000_310)
+        self.assertEqual(spec.name, "2.0.0-beta.9")
+        self.assertEqual(spec.tag, "v2.0.0-beta.9")
+        self.assertEqual(spec.code, 200_000_290)
 
     def test_stable_has_no_build(self):
         spec = guard.parse_version_kt(STABLE_KT)
@@ -83,9 +83,43 @@ class ParseVersionKtTest(unittest.TestCase):
             guard.parse_version_kt("val something = 1")
 
 
+PRE_RELEASE_TEMPLATE = """
+val currentVersion: Version =
+    Version.{variant}(versionMajor = 2, versionMinor = 1, versionPatch = 0, versionBuild = {build})
+"""
+
+
+class PreReleaseBuildCapTest(unittest.TestCase):
+    def test_build_10_is_rejected(self):
+        for variant in ("Alpha", "Beta", "ReleaseCandidate"):
+            with self.subTest(variant=variant):
+                with self.assertRaises(guard.GuardError):
+                    guard.parse_version_kt(
+                        PRE_RELEASE_TEMPLATE.format(variant=variant, build=10)
+                    )
+
+    def test_build_zero_is_rejected(self):
+        for variant in ("Alpha", "Beta", "ReleaseCandidate"):
+            with self.subTest(variant=variant):
+                with self.assertRaises(guard.GuardError):
+                    guard.parse_version_kt(
+                        PRE_RELEASE_TEMPLATE.format(variant=variant, build=0)
+                    )
+
+    def test_build_nine_is_the_last_allowed(self):
+        spec = guard.parse_version_kt(PRE_RELEASE_TEMPLATE.format(variant="Beta", build=9))
+        self.assertEqual(spec.name, "2.1.0-beta.9")
+        self.assertEqual(spec.code, 201_000_290)
+
+    def test_rc_build_one(self):
+        spec = guard.parse_version_kt(PRE_RELEASE_TEMPLATE.format(variant="ReleaseCandidate", build=1))
+        self.assertEqual(spec.name, "2.1.0-rc.1")
+        self.assertEqual(spec.code, 201_000_310)
+
+
 class ParseGradleTest(unittest.TestCase):
     def test_underscores_are_stripped(self):
-        self.assertEqual(guard.parse_gradle_version_code(GRADLE_KT), 200_000_310)
+        self.assertEqual(guard.parse_gradle_version_code(GRADLE_KT), 200_000_290)
 
     def test_non_literal_fails(self):
         with self.assertRaises(guard.GuardError):
@@ -182,80 +216,80 @@ class CheckReleaseTest(unittest.TestCase):
         return guard.parse_version_kt(VERSION_KT)
 
     def record(self):
-        return make_record([entry("v2.0.0-beta.10", 200_000_300, 200_000_302)])
+        return make_record([entry("v2.0.0-beta.8", 200_000_280, 200_000_282)])
 
     def codes(self):
-        return {"arm64-v8a": 200_000_312}
+        return {"arm64-v8a": 200_000_292}
 
     def levels(self, issues):
         return [issue.level for issue in issues]
 
     def test_pass(self):
         issues = guard.check_release(
-            "v2.0.0-beta.11",
+            "v2.0.0-beta.9",
             self.spec(),
-            200_000_310,
+            200_000_290,
             self.codes(),
             self.record(),
-            ["v2.0.0-beta.10"],
+            ["v2.0.0-beta.8"],
         )
         self.assertNotIn("fail", self.levels(issues))
 
     def test_tag_mismatch_fails(self):
         issues = guard.check_release(
-            "v2.0.0-beta.12", self.spec(), 200_000_310, self.codes(), self.record(), None
+            "v2.0.0-beta.10", self.spec(), 200_000_290, self.codes(), self.record(), None
         )
         self.assertIn("fail", self.levels(issues))
 
     def test_gradle_mismatch_fails(self):
         issues = guard.check_release(
-            "v2.0.0-beta.11", self.spec(), 200_000_300, self.codes(), self.record(), None
+            "v2.0.0-beta.9", self.spec(), 200_000_280, self.codes(), self.record(), None
         )
         self.assertIn("fail", self.levels(issues))
 
     def test_non_monotonic_code_fails(self):
-        record = make_record([entry("v2.0.0-beta.10", 200_000_300, 200_000_312)])
+        record = make_record([entry("v2.0.0-beta.8", 200_000_280, 200_000_292)])
         issues = guard.check_release(
-            "v2.0.0-beta.11", self.spec(), 200_000_310, self.codes(), record, None
+            "v2.0.0-beta.9", self.spec(), 200_000_290, self.codes(), record, None
         )
         self.assertIn("fail", self.levels(issues))
 
     def test_already_published_tag_fails(self):
         issues = guard.check_release(
-            "v2.0.0-beta.10",
+            "v2.0.0-beta.8",
             self.spec(),
-            200_000_300,
+            200_000_280,
             self.codes(),
             self.record(),
-            ["v2.0.0-beta.10"],
+            ["v2.0.0-beta.8"],
         )
         self.assertIn("fail", self.levels(issues))
 
     def test_stale_record_fails(self):
         issues = guard.check_release(
-            "v2.0.0-beta.11",
+            "v2.0.0-beta.9",
             self.spec(),
-            200_000_310,
+            200_000_290,
             self.codes(),
             self.record(),
-            ["v2.0.0-beta.10", "v2.0.0-beta.9"],
+            ["v2.0.0-beta.8", "v2.0.0-beta.7"],
         )
         self.assertIn("fail", self.levels(issues))
 
     def test_recorded_deletion_is_not_a_failure(self):
         record = make_record(
             [
-                entry("v2.0.0-beta.10", 200_000_300, 200_000_302),
-                entry("v2.0.0-beta.7", 200_000_270, 200_000_272, published=False, release_deleted=True),
+                entry("v2.0.0-beta.8", 200_000_280, 200_000_282),
+                entry("v2.0.0-beta.6", 200_000_260, 200_000_262, published=False, release_deleted=True),
             ]
         )
         issues = guard.check_release(
-            "v2.0.0-beta.11",
+            "v2.0.0-beta.9",
             self.spec(),
-            200_000_310,
+            200_000_290,
             self.codes(),
             record,
-            ["v2.0.0-beta.10"],
+            ["v2.0.0-beta.8"],
         )
         self.assertNotIn("fail", self.levels(issues))
         self.assertIn("info", self.levels(issues))

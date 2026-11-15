@@ -48,6 +48,14 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    // Reproducible releases: the Play "dependency metadata" block embeds a
+    // build-stamped protobuf in the archive, so two builds of the same commit
+    // would differ. Sleeve is not distributed through Play.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig {
         applicationId = "com.sleeve.app"
         minSdk = 24

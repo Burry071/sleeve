@@ -33,6 +33,32 @@ automated release.
 12. do not claim a release successful until the actual distribution path is verified.
     - Operational meaning: success means an end-to-end fetch through the real distribution path.
 
+## Version naming and numbering
+
+Version names are `X.Y.Z`, `X.Y.Z-alpha.N`, `X.Y.Z-beta.N` or `X.Y.Z-rc.N`. The
+tag is the name with a `v` prefix, and `currentVersion` in
+`buildSrc/src/main/kotlin/Version.kt` is the only place either is written.
+
+- **The 2.1.0 line, in order.** `v2.1.0-rc.1` next, then `v2.1.0` as the stable
+  release published with `--latest`. No further beta builds of 2.1.0.
+- **Hard cap on N.** A pre-release line stops at **9**: `alpha.1`–`alpha.9`,
+  `beta.1`–`beta.9`, `rc.1`–`rc.9`. `Version.kt` refuses to construct anything
+  outside `1..9`, and `scripts/release_guard.py` rejects such a `currentVersion`
+  before CI builds. If a line reaches 9, cut the next version instead of
+  shipping a tenth build.
+- **After 2.1.0**, drop the pre-release suffixes and pick the digit by the change
+  that is shipping:
+  - **PATCH** (`2.1.1`) — a fix with no new behaviour to configure.
+  - **MINOR** (`2.2.0`) — a backward-compatible feature.
+  - **MAJOR** (`3.0.0`) — a change that breaks something a user relies on
+    (settings, storage format, update path).
+- **Never** ship a pre-release build of a version that already went stable, and
+  never reuse a version name or code that was ever distributed — rule 2.
+- **Version codes follow the name.** `Version.kt` computes the code from
+  major/minor/patch/build plus a channel offset (alpha 100, beta 200, rc 300,
+  stable 400, build step 10), and `app/build.gradle.kts` must carry that same
+  literal (`check(versionCode == currentVersionCode)`). Do not hand-pick codes.
+
 ## Release artifacts
 
 Every tag ships three signed standalone APKs:

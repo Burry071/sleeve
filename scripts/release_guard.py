@@ -59,6 +59,9 @@ MAJOR = 100_000_000
 MINOR = 1_000_000
 PATCH = 10_000
 BUILD = 10
+# Pre-release lines stop at build 9 (Version.kt enforces the same cap); a tenth
+# build of the same X.Y.Z would mean the line should have been cut already.
+MAX_PRE_RELEASE_BUILD = 9
 VARIANT_OFFSETS = {
     "Alpha": 100,
     "Beta": 200,
@@ -120,6 +123,11 @@ def parse_version_kt(text: str) -> VersionSpec:
     build = args.get("versionBuild", 0)
     if variant == "Stable" and build:
         raise GuardError("a Stable version must not set versionBuild")
+    if variant != "Stable" and not 1 <= build <= MAX_PRE_RELEASE_BUILD:
+        raise GuardError(
+            f"{variant} versionBuild must be 1..{MAX_PRE_RELEASE_BUILD}, got {build}; "
+            "pre-release lines stop at build 9 (see Version.kt and RELEASE.md)"
+        )
     code = (
         major * MAJOR
         + minor * MINOR

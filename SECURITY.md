@@ -18,6 +18,11 @@ Use GitHub's private security advisory for this repository:
 
 https://github.com/Burry071/sleeve/security/advisories/new
 
+Private Vulnerability Reporting is enabled on this repo, so the Security tab
+also shows a **Report a vulnerability** button that opens the same private
+advisory. If neither is reachable, open a public issue that says only "security
+report, please contact me privately" and wait — do not put the details in it.
+
 Please do not open a public issue for an unfixed vulnerability. A useful report
 includes the app version and version code (Settings → About copies them), what
 you did, what happened, and a proof of concept if you have one. You will get a
@@ -31,6 +36,9 @@ reply on the advisory, and any fix ships in a new release.
   expose a signed-in session to another app or to shared storage.
 - **The share and quick-download surface.** Share targets, quick-download
   intents, the activity that receives them, and notifications with actions.
+- **Request targeting.** A way to make Sleeve issue a request to a host of an
+  attacker's choosing — including the local network or the device itself — when
+  the link you gave it did not name that host.
 
 ## What Sleeve already guarantees
 
@@ -51,6 +59,14 @@ reply on the advisory, and any fix ships in a new release.
 - **A forged quick-download launch cannot use your session.** Quick mode runs
   without cookies, and share launches stop at a confirmation sheet instead of
   queueing directly.
+- **URLs taken from page content are screened.** When Sleeve follows a media URL
+  it pulled out of a page, the URL must be `http`/`https` and its host must not be
+  loopback, link-local, a private range, or an IPv6 unique-local address
+  (`localhost`, `127.`, `10.`, `0.`, `169.254.`, `192.168.`, `172.16/12`,
+  `[::1]`, `[fc..]`, `[fd..]`, `[fe80..)`). This blocks a page from steering a
+  download at your router or at another app on the device. Upstream yt-dlp and
+  gallery-dl make their own requests, so their network behaviour is theirs, not
+  this guard's.
 
 ## Not a vulnerability
 
