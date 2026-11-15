@@ -270,6 +270,21 @@
       "published": true,
       "distributed": true,
       "verified_at": "2026-11-15T13:53:18Z"
+    },
+    {
+      "tag": "v2.1.0",
+      "version_name": "2.1.0",
+      "base_version_code": 201000400,
+      "shipped_version_code": 201000400,
+      "asset_name": "Sleeve-arm64-release.apk",
+      "asset_size": 64425159,
+      "sha256": "ad71a03244d9d1767e540fd3c6d2f1d3b2ca7492ed2e4a11c1d40f36b1b7c5e3",
+      "cert_sha256": "2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3",
+      "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.0/Sleeve-arm64-release.apk",
+      "published_at": "2026-11-15T15:09:24Z",
+      "published": true,
+      "distributed": true,
+      "verified_at": "2026-11-15T15:16:00Z"
     }
   ]
 }
