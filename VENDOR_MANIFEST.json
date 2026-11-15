@@ -1,0 +1,39 @@
+{
+  "$comment": "Exact versions of the third-party code that ships inside the APK but is not resolved by Gradle. Hand-maintained; update whenever a bundled package is replaced. Licenses and upstream links live in THIRD_PARTY.md.",
+  "generated": "2026-11-15",
+  "chaquopy": {
+    "runtime": "Python 3.13 (Chaquopy)",
+    "vendorLocation": "app/src/main/python/",
+    "relocationPolicy": "Packages stay at the top level of app/src/main/python/. Moving them under app/src/main/python/vendor/ would change sys.path import resolution for gallery_dl and its dependencies; a relocation would need a matching vendor/ entry on the Chaquopy source set and a re-test of every Python entry point, so it is deliberately not done."
+  },
+  "pythonPackages": [
+    { "name": "gallery_dl", "version": "1.32.18", "location": "app/src/main/python/gallery_dl", "evidence": "__version__ in gallery_dl/version.py" },
+    { "name": "requests", "version": "2.34.2", "location": "app/src/main/python/requests", "evidence": "__version__ in requests/__version__.py" },
+    { "name": "urllib3", "version": "2.8.0", "location": "app/src/main/python/urllib3", "evidence": "__version__ in urllib3/_version.py" },
+    { "name": "certifi", "version": "2026.10.23", "location": "app/src/main/python/certifi", "evidence": "__version__ in certifi/__init__.py" },
+    { "name": "charset_normalizer", "version": "3.5.2", "location": "app/src/main/python/charset_normalizer", "evidence": "__version__ in charset_normalizer/version.py" },
+    { "name": "idna", "version": "3.20", "location": "app/src/main/python/idna", "evidence": "__version__ in idna/package_data.py" }
+  ],
+  "nativeBinaries": [
+    {
+      "name": "yt-dlp",
+      "version": "2024.09.27",
+      "providedBy": "youtubedl-android 0.17.3",
+      "location": "AAR payload (res/raw/ytdlp), initialized into the app's private filesDir at first run",
+      "evidence": "__version__ in the ytdlp payload of the youtubedl-android 0.17.3 AAR"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "7.0 line (libavformat 61.1.100)",
+      "providedBy": "youtubedl-android 0.17.3",
+      "location": "libffmpeg.so / libffprobe.so per ABI (jni payload extracted from the AAR)",
+      "evidence": "libavformat version string in the AAR's libffmpeg.zip.so payload; the shipping CLI carries no version banner"
+    },
+    {
+      "name": "N_m3u8DL-RE",
+      "version": "0.6.0-beta (android-bionic, 2026-06-29 build)",
+      "location": "app/src/main/jniLibs/arm64-v8a/libnm3u8dlre.so, app/src/main/jniLibs/x86_64/libnm3u8dlre.so",
+      "evidence": "SHA-256 pins recorded in THIRD_PARTY.md"
+    }
+  ]
+}

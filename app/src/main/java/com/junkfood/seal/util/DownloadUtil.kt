@@ -1,60 +1,39 @@
 package com.junkfood.seal.util
 
-import android.os.Build
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteDatabase.OPEN_READONLY
-import android.media.MediaCodecList
 import android.util.Log
-import android.webkit.CookieManager
 import androidx.annotation.CheckResult
-import com.junkfood.seal.App
-import com.junkfood.seal.App.Companion.audioDownloadDir
 import com.junkfood.seal.App.Companion.context
-import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.R
 import com.junkfood.seal.database.objects.CommandTemplate
-import com.junkfood.seal.database.objects.DownloadedVideoInfo
 import com.junkfood.seal.download.CompletedNote
 import com.junkfood.seal.download.MatchCandidate
-import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.Task
-import com.junkfood.seal.download.TaskAuditLog
+import com.junkfood.seal.download.engine.DirectMedia
+import com.junkfood.seal.download.engine.DownloadSettingsSnapshot
+import com.junkfood.seal.download.engine.ExtractionClients
+import com.junkfood.seal.download.engine.GhostHttpTransferEngine
+import com.junkfood.seal.download.engine.Nm3u8TransferEngine
+import com.junkfood.seal.download.engine.TransferJob
+import com.junkfood.seal.download.engine.YtDlpTransferEngine
+import com.junkfood.seal.download.engine.isSafeRemoteUrl as engineUrlIsSafe
+import com.junkfood.seal.download.engine.uniqueFileName as engineUniqueFileName
 import com.junkfood.seal.ghostengine.GhostEngine
-import com.junkfood.seal.ghostengine.GhostEngine.TaskState
 import com.junkfood.seal.ui.page.settings.network.Cookie
 import com.junkfood.seal.util.FileUtil.getArchiveFile
 import com.junkfood.seal.util.FileUtil.getConfigFile
 import com.junkfood.seal.util.FileUtil.getCookieFile
-import com.junkfood.seal.util.FileUtil.getExternalTempDir
-import com.junkfood.seal.util.FileUtil.getFileName
-import com.junkfood.seal.util.FileUtil.getSdcardTempDir
-import com.junkfood.seal.util.FileUtil.moveFilesToSdcard
 import com.junkfood.seal.util.PreferenceUtil.COOKIE_HEADER
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.PreferenceUtil.getString
-import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.yausername.youtubedl_android.YoutubeDL
-import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
-import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.roundToInt
 
 object DownloadUtil {
 
@@ -67,9 +46,9 @@ object DownloadUtil {
         const val PATH = "path"
     }
 
-    private val jsonFormat = Json { ignoreUnknownKeys = true }
+    internal val jsonFormat = Json { ignoreUnknownKeys = true }
 
-    private const val TAG = "DownloadUtil"
+    internal const val TAG = "DownloadUtil"
 
     const val BASENAME = "%(title).200B"
 
@@ -86,17 +65,15 @@ object DownloadUtil {
 
     const val OUTPUT_TEMPLATE_ID = "$BASENAME $ID$EXTENSION"
 
-    private const val OUTPUT_TEMPLATE_CLIPS = "$BASENAME [$CLIP_TIMESTAMP]$EXTENSION"
+    internal const val OUTPUT_TEMPLATE_CLIPS = "$BASENAME [$CLIP_TIMESTAMP]$EXTENSION"
 
-    private const val OUTPUT_TEMPLATE_CHAPTERS =
+    internal const val OUTPUT_TEMPLATE_CHAPTERS =
         "chapter:$BASENAME/%(section_number)d - %(section_title).200B$EXTENSION"
 
-    private const val OUTPUT_TEMPLATE_SPLIT = "$BASENAME/$OUTPUT_TEMPLATE_DEFAULT"
+    internal const val OUTPUT_TEMPLATE_SPLIT = "$BASENAME/$OUTPUT_TEMPLATE_DEFAULT"
 
-    private const val PLAYLIST_TITLE_SUBDIRECTORY_PREFIX = "%(playlist)s/"
+    internal const val PLAYLIST_TITLE_SUBDIRECTORY_PREFIX = "%(playlist)s/"
 
-    private const val CROP_ARTWORK_COMMAND =
-        """--ppa "ffmpeg: -c:v mjpeg -vf crop=\"'if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'\"""""
 
     @CheckResult
     fun getPlaylistOrVideoInfo(
@@ -151,111 +128,32 @@ object DownloadUtil {
             }
         }
 
-    /**
-     * Normalized YouTube query for a catalogue track. Audible tracks get the
-     * quoted-title form: their [GhostEngine.SpotifyTrack.artist] carries the
-     * narrator roll ("Author (narrated by A, B, ... 12 names)"), which drags
-     * the search away from the actual audiobook upload.
-     */
     internal fun buildMetadataQuery(
         track: GhostEngine.SpotifyTrack,
         provider: String = "",
-    ): String =
-        if (provider.equals(AUDIBLE_PROVIDER, ignoreCase = true)) buildAudibleQuery(track)
-        else
-            listOf(track.artist, track.title, "audio")
-                .filter { it.isNotBlank() }
-                .joinToString(separator = " ")
-                .let(::collapse)
+    ): String = MetadataMatch.buildMetadataQuery(track, provider)
 
-    /** "<exact title>" <authors> audiobook — falls back to the quoted title. */
-    internal fun buildAudibleQuery(track: GhostEngine.SpotifyTrack): String {
-        val title =
-            collapse(track.title.replace('"', ' ')).takeIf { it.isNotBlank() }?.let { "\"$it\"" }
-        val authors = collapse(track.authors).takeIf { it.isNotBlank() }
-        return listOfNotNull(title, authors, "audiobook").joinToString(separator = " ")
-    }
+    internal fun buildAudibleQuery(track: GhostEngine.SpotifyTrack): String =
+        MetadataMatch.buildAudibleQuery(track)
 
-    private fun collapse(value: String): String = Regex("\\s+").replace(value, " ").trim()
-
-    private const val AUDIBLE_PROVIDER = "Audible"
-
-    /**
-     * The ranker scores candidates 0-100. Anything under 60 is not a confident
-     * match, so the plain-YouTube pool is searched as well.
-     */
-    private const val WIDEN_BELOW_SCORE = 60.0
-
-    /** A missing or weak YouTube Music match widens to a plain YouTube search. */
     internal fun shouldWidenSearch(bestScore: Double?): Boolean =
-        bestScore == null || bestScore < WIDEN_BELOW_SCORE
+        MetadataMatch.shouldWidenSearch(bestScore)
 
-    /**
-     * Picks the winner between the YouTube Music pool and the plain-YouTube
-     * pool, keeping the top [limit] candidates for the review sheet. A
-     * floor-rejected music pool arrives here as an empty list, so the widening
-     * leg still runs. [isActive] is polled before the second search and after
-     * it, so a cancel never leaves that search running.
-     */
     internal fun matchBestCandidates(
         isActive: () -> Boolean,
         musicSearch: () -> List<GhostEngine.RankedCandidate>,
         wideSearch: () -> List<GhostEngine.RankedCandidate>,
         limit: Int = 3,
-    ): List<GhostEngine.RankedCandidate>? {
-        val music = musicSearch().sortedByDescending { it.score }
-        if (!isActive()) return null
-        val pools =
-            if (shouldWidenSearch(music.firstOrNull()?.score)) {
-                val wide = wideSearch().sortedByDescending { it.score }
-                if (!isActive()) return null
-                music + wide
-            } else {
-                music
-            }
-        val merged =
-            pools
-                .sortedByDescending { it.score }
-                .distinctBy { it.url.ifBlank { it.id } }
-                .take(limit)
-        return merged.ifEmpty { null }
-    }
-
-    /** Cancellation bail-out for [resolveMetadataTrack]; returned, never thrown. */
-    private fun <T> matchCanceled(): Result<T> =
-        Result.failure(IllegalStateException("match canceled"))
+    ): List<GhostEngine.RankedCandidate>? =
+        MetadataMatch.matchBestCandidates(isActive, musicSearch, wideSearch, limit)
 
     /** A resolved catalogue track plus the cached candidates the review sheet needs. */
     data class MetadataResolution(val videoInfo: VideoInfo, val match: MatchResult)
 
-    /**
-     * What a catalogue track resolves to when the search produced nothing worth
-     * ranking. A dead end is still reviewable: the picker is where the user can
-     * paste a link, search again or open the catalogue page, so this becomes a
-     * held match with no candidates instead of a bare failed task. The row is
-     * titled from the catalogue so it never shows the synthetic task URL.
-     */
     internal fun noSourceResolution(
         metadata: Task.TypeInfo.MetadataTrack,
         reason: String,
-    ): MetadataResolution =
-        MetadataResolution(
-            videoInfo =
-                VideoInfo(
-                    title = metadata.title,
-                    uploader = metadata.authors.ifBlank { metadata.artist },
-                    duration = metadata.durationMs.takeIf { it > 0 }?.div(1000.0),
-                    // Empty, not a fake URL: every consumer falls back to the
-                    // task URL and filters the synthetic metadata:// scheme out.
-                    originalUrl = "",
-                ),
-            match =
-                MatchResult(
-                    held = true,
-                    expectedDurationMs = metadata.durationMs,
-                    gateReason = reason,
-                ),
-        )
+    ): MetadataResolution = MetadataMatch.noSourceResolution(metadata, reason)
 
     internal fun GhostEngine.RankedCandidate.toMatchCandidate(): MatchCandidate =
         MatchCandidate(
@@ -269,13 +167,6 @@ object DownloadUtil {
             channel = channel,
             duration = duration,
         )
-
-    /**
-     * One part of a split as the review sheet's candidate row. The set is not
-     * ranked: `score` stays 0 so no part can win a sort or read as a
-     * confidence figure. The channel doubles as uploader, because a part has
-     * no separate owner in the gate's reply.
-     */
     internal fun GhostEngine.AudiblePart.toMatchCandidate(): MatchCandidate =
         MatchCandidate(
             index = index,
@@ -287,31 +178,6 @@ object DownloadUtil {
             channel = channel,
             duration = durationSeconds,
         )
-
-    /** Logs every ranker score so the pick is auditable on the device later. */
-    private fun logMatch(taskKey: String, track: GhostEngine.SpotifyTrack, ranked: List<MatchCandidate>, flagged: Boolean) {
-        val header = "match: \"${track.title}\" by \"${track.artist}\" — ${ranked.size} candidate(s)"
-        Log.i(TAG, "$taskKey $header")
-        TaskAuditLog.append(taskKey, header)
-        ranked.forEachIndexed { i, c ->
-            val why = c.reasons.joinToString(", ")
-            val line =
-                "match: #${i + 1} ${c.percent}% \"${c.title}\"" + if (why.isBlank()) "" else " ($why)"
-            Log.i(TAG, "$taskKey $line")
-            TaskAuditLog.append(taskKey, line)
-        }
-        val verdict =
-            if (flagged) {
-                val top = ranked.first()
-                val gap = if (ranked.size > 1) top.score - ranked[1].score else 100.0
-                "match: flagged — top ${top.percent}%, gap ${gap.roundToInt()}% (review after the batch)"
-            } else {
-                "match: confident — top ${ranked.first().percent}%"
-            }
-        Log.i(TAG, "$taskKey $verdict")
-        TaskAuditLog.append(taskKey, verdict)
-    }
-
     /** One gate decision: the candidate to use and whether it must be held. */
     internal data class GateDecision(
         val pick: GhostEngine.RankedCandidate,
@@ -324,83 +190,11 @@ object DownloadUtil {
         val parts: List<GhostEngine.AudiblePart> = emptyList(),
     )
 
-    /**
-     * Runs the audible gate and records its verdict in the audit log. Returns
-     * null when the gate itself failed: the caller then keeps the existing
-     * ranker behaviour, because a broken gate must not block every Audible
-     * download.
-     */
-    private fun audibleGate(
-        taskKey: String,
-        track: GhostEngine.SpotifyTrack,
-        ranked: List<GhostEngine.RankedCandidate>,
-    ): GhostEngine.AudibleGateResult? {
-        val attempt = GhostEngine.gateAudibleCandidates(track, ranked)
-        val gate = attempt.getOrNull()
-        if (gate == null) {
-            val reason =
-                attempt.exceptionOrNull()?.message?.takeIf { it.isNotBlank() } ?: "unknown error"
-            Log.w(TAG, "$taskKey audible gate unavailable: $reason")
-            TaskAuditLog.append(taskKey, "gate: unavailable — $reason; using rank #1")
-            return null
-        }
-        val line =
-            "gate: ${gate.verdict} — ${gate.reason.ifBlank { "no reason" }}" +
-                if (gate.passed) {
-                    " (pick ${(gate.ratio * 100).roundToInt()}% of book)"
-                } else {
-                    " (best ${(gate.bestRatio * 100).roundToInt()}% of book)"
-                }
-        Log.i(TAG, "$taskKey $line")
-        TaskAuditLog.append(taskKey, line)
-        return gate
-    }
-
-    /**
-     * Maps a gate verdict onto the candidate this task will use. A pass may
-     * name a candidate the ranker did not put first: the gate, not the score,
-     * decides identity. A hold still fetches metadata for display, but from
-     * the closest candidate instead of the ranker's favourite. A split is a
-     * hold with a plan: no single upload may download, but the complete part
-     * set the gate verified is carried along so it can be queued.
-     */
     internal fun decideGatePick(
         gate: GhostEngine.AudibleGateResult,
         ranked: List<GhostEngine.RankedCandidate>,
-    ): GateDecision {
-        val fallback = ranked.first()
-        if (!gate.passed) {
-            val display = ranked.firstOrNull { it.id == gate.bestId } ?: fallback
-            val reason = gate.reason.ifBlank { "gate held the pick" }
-            return GateDecision(
-                pick = display,
-                held = true,
-                reason = reason,
-                // Only a split names the uploads that together are the book;
-                // a plain hold must never look like a plan.
-                parts = if (gate.splittable) gate.parts else emptyList(),
-            )
-        }
-        val passing =
-            ranked.firstOrNull { it.id == gate.candidateId }
-                ?: return GateDecision(
-                    fallback,
-                    held = true,
-                    reason = "gate returned an unknown candidate",
-                )
-        return GateDecision(passing, held = false)
-    }
+    ): GateDecision = MetadataMatch.decideGatePick(gate, ranked)
 
-    /**
-     * spotDL-pattern matching for one catalogue track: rank a YouTube Music pool,
-     * widen when confidence is low, then resolve the winner through the normal
-     * extractor so the download stage reuses the winning client.
-     *
-     * [isActive] is polled between the legs. A cancel destroys the in-flight
-     * yt-dlp process, which reads as a failed (empty) search here; without the
-     * poll the widening leg and the extraction would spawn two more processes
-     * that no later cancel can reach.
-     */
     @CheckResult
     fun resolveMetadataTrack(
         metadata: Task.TypeInfo.MetadataTrack,
@@ -410,187 +204,7 @@ object DownloadUtil {
         /** User-edited terms that replace the catalogue-built query. */
         queryOverride: String = "",
     ): Result<MetadataResolution> =
-        runCatching {
-            val track =
-                GhostEngine.SpotifyTrack(
-                    title = metadata.title,
-                    artist = metadata.artist,
-                    album = metadata.album,
-                    durationMs = metadata.durationMs,
-                    authors = metadata.authors,
-                    language = metadata.language,
-                )
-            val query =
-                queryOverride.trim().takeIf { it.isNotBlank() }
-                    ?: buildMetadataQuery(track, metadata.provider)
-            Log.i(TAG, "match query: $query")
-
-            fun search(pool: String): List<PlaylistEntry> =
-                getPlaylistOrVideoInfo(
-                        playlistURL = "$pool:$query",
-                        downloadPreferences = preferences,
-                        silent = true,
-                        processId = taskKey,
-                    )
-                    .map { it as? PlaylistResult }
-                    .getOrElse { null }
-                    ?.entries
-                    .orEmpty()
-
-            var rankError: Throwable? = null
-            // Audible must see the whole search pool: a full-book upload can
-            // sit below rank 3, and a 12-part set needs more than 10 rows. The
-            // gate supports up to 20 parts; 30 leaves room for duplicates.
-            val audible = metadata.provider.equals("audible", ignoreCase = true)
-            val poolLimit = if (audible) 30 else 3
-            val widePool = if (audible) "ytsearch30" else "ytsearch10"
-
-            // A floor rejection is a failed ranking, not a fatal error: the
-            // plain-YouTube pool still needs its chance before the task fails.
-            fun ranked(pool: String): List<GhostEngine.RankedCandidate> {
-                val candidates = search(pool)
-                if (candidates.isEmpty()) return emptyList()
-                return GhostEngine.rankCandidatesWithAlternatives(
-                        track = track,
-                        candidatesJson = jsonFormat.encodeToString(candidates),
-                        strictness = RANKING_STRICTNESS.getInt(),
-                        topN = poolLimit,
-                    )
-                    .onFailure { rankError = it }
-                    .getOrElse { emptyList() }
-            }
-
-            val ranked =
-                matchBestCandidates(
-                    isActive = isActive,
-                    musicSearch = { ranked("ytmsearch5") },
-                    wideSearch = { ranked(widePool) },
-                    limit = poolLimit,
-                )
-
-            // A canceled first leg degrades to an empty pool, so stop before
-            // extraction spawns a process no later cancel can reach.
-            if (!isActive()) return matchCanceled()
-
-            if (ranked.isNullOrEmpty()) {
-                // Nothing to rank is a reviewable hold, not a terminal error:
-                // the review sheet offers paste-link, search-again and the
-                // catalogue page for exactly this case.
-                val reason =
-                    "no confident match for \"${track.title}\" by \"${track.artist}\"" +
-                        (rankError?.message?.let { ": $it" } ?: "")
-                Log.i(TAG, "$taskKey gate: no_source — $reason")
-                TaskAuditLog.append(taskKey, "gate: no_source — $reason")
-                return@runCatching noSourceResolution(metadata, reason)
-            }
-
-            val best = ranked.first()
-
-            // Precision gate: an Audible book must prove its identity and its
-            // full length before any media request. Other providers keep the
-            // ranker-only path exactly as before. A gate failure falls back to
-            // the ranker and leaves a warning in the audit log.
-            val gate =
-                if (metadata.provider.equals("audible", ignoreCase = true)) {
-                    audibleGate(taskKey, track, ranked)
-                } else {
-                    null
-                }
-            var decision = gate?.let { decideGatePick(it, ranked) }
-            var pick = decision?.pick ?: best
-            var pickUrl = pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
-
-            // A held book still fetches the closest candidate's metadata (for
-            // display and the review sheet), but the caller must not write
-            // ReadyWithInfo, so no media bytes are requested.
-            var resolved =
-                fetchVideoInfoFromUrl(
-                        url = pickUrl,
-                        preferences = preferences,
-                        taskKey = taskKey,
-                    )
-                    .getOrThrow()
-            if (!isActive()) return matchCanceled()
-
-            // The flat search pool carries no track language; only the full
-            // extraction of the pick names one. An English book matched to a
-            // German dub must hold here, before the download stage is told to
-            // start, even though the first gate could not see the difference.
-            if (gate?.passed == true) {
-                val audioLanguage = resolved.audioLanguage()
-                if (audioLanguage.isNotBlank()) {
-                    val enriched =
-                        ranked.map { candidate ->
-                            if (candidate.id == pick.id) {
-                                candidate.copy(audioLanguage = audioLanguage)
-                            } else {
-                                candidate
-                            }
-                        }
-                    val second = audibleGate(taskKey, track, enriched)
-                    if (second != null && !second.passed) {
-                        val held2 = decideGatePick(second, enriched)
-                        decision = held2
-                        if (held2.pick.id != pick.id) {
-                            pick = held2.pick
-                            pickUrl =
-                                pick.url.ifBlank { "https://www.youtube.com/watch?v=" + pick.id }
-                            resolved =
-                                fetchVideoInfoFromUrl(
-                                        url = pickUrl,
-                                        preferences = preferences,
-                                        taskKey = taskKey,
-                                    )
-                                    .getOrThrow()
-                            if (!isActive()) return matchCanceled()
-                        } else {
-                            pick = held2.pick
-                        }
-                    }
-                }
-            }
-
-            val held = decision?.held == true
-            // Keep the passing pick visible even when it was below rank 3.
-            val displayed =
-                (listOf(pick) + ranked)
-                    .distinctBy { it.url.ifBlank { it.id } }
-                    .take(3)
-            val matchCandidates = displayed.map { it.toMatchCandidate() }
-            val flagged = MatchOps.isLowConfidence(matchCandidates)
-            logMatch(taskKey, track, matchCandidates, flagged)
-            // The split plan the gate verified. Top-3 display above stays the
-            // same; these are the uploads that together are the book, so they
-            // are kept apart from the ranked rows instead of competing with
-            // them for a slot.
-            val partPlan =
-                if (held) decision?.parts.orEmpty().map { it.toMatchCandidate() } else emptyList()
-            val match =
-                MatchResult(
-                        candidates = matchCandidates,
-                        // A held book has no pick yet. The review sheet reads
-                        // `selectedUrl` as "already chosen" and disables Apply
-                        // for that row, so preselecting the displayed candidate
-                        // would make the only sensible override impossible.
-                        // Any row the user taps is then an explicit choice.
-                        selectedUrl = if (held) "" else pickUrl,
-                        selectedScore = if (held) 0.0 else pick.score,
-                        flagged = flagged,
-                    )
-                    .let { base ->
-                        if (!held) {
-                            base
-                        } else {
-                            base.copy(
-                                held = true,
-                                expectedDurationMs = metadata.durationMs,
-                                gateReason = decision?.reason.orEmpty(),
-                                parts = partPlan,
-                            )
-                        }
-                    }
-            MetadataResolution(resolved, match)
-        }
+        MetadataMatch.resolveMetadataTrack(metadata, taskKey, preferences, isActive, queryOverride)
 
     @CheckResult
     private fun getVideoInfo(
@@ -632,7 +246,7 @@ object DownloadUtil {
                 // The download stage re-extracts with the same clients that
                 // won here; a mismatch could fail a task that just worked.
                 if (taskKey != null && clients != null) {
-                    successfulExtractionClients[taskKey] = clients
+                    ExtractionClients.record(taskKey, clients)
                 }
                 val request =
                     YoutubeDLRequest(url)
@@ -907,54 +521,8 @@ object DownloadUtil {
         this.addOption("--download-archive", context.getArchiveFile().absolutePath)
 
     @CheckResult
-    fun getCookieListFromDatabase(): Result<List<Cookie>> = runCatching {
-        CookieManager.getInstance().run {
-            if (!hasCookies()) throw Exception("There is no cookies in the database!")
-            flush()
-        }
-        SQLiteDatabase.openDatabase(
-                context.dataDir.resolve("app_webview/Default/Cookies").absolutePath,
-                null,
-                OPEN_READONLY,
-            )
-            .run {
-                val projection =
-                    arrayOf(
-                        CookieScheme.HOST,
-                        CookieScheme.EXPIRY,
-                        CookieScheme.PATH,
-                        CookieScheme.NAME,
-                        CookieScheme.VALUE,
-                        CookieScheme.SECURE,
-                    )
-                val cookieList = mutableListOf<Cookie>()
-                query("cookies", projection, null, null, null, null, null).run {
-                    while (moveToNext()) {
-                        val expiry = getLong(getColumnIndexOrThrow(CookieScheme.EXPIRY))
-                        val name = getString(getColumnIndexOrThrow(CookieScheme.NAME))
-                        val value = getString(getColumnIndexOrThrow(CookieScheme.VALUE))
-                        val path = getString(getColumnIndexOrThrow(CookieScheme.PATH))
-                        val secure = getLong(getColumnIndexOrThrow(CookieScheme.SECURE)) == 1L
-                        val hostKey = getString(getColumnIndexOrThrow(CookieScheme.HOST))
+    fun getCookieListFromDatabase(): Result<List<Cookie>> = CookieStore.listFromDatabase()
 
-                        val host = if (hostKey[0] != '.') ".$hostKey" else hostKey
-                        cookieList.add(
-                            Cookie(
-                                domain = host,
-                                name = name,
-                                value = value,
-                                path = path,
-                                secure = secure,
-                                expiry = expiry,
-                            )
-                        )
-                    }
-                    close()
-                }
-                close()
-                cookieList
-            }
-    }
 
     fun List<Cookie>.toCookiesFileContent(): String =
         this.fold(StringBuilder(COOKIE_HEADER)) { acc, cookie ->
@@ -967,69 +535,6 @@ object DownloadUtil {
 
     private fun YoutubeDLRequest.enableAria2c(): YoutubeDLRequest =
         this.addOption("--downloader", "libaria2c.so")
-
-    private fun YoutubeDLRequest.addOptionsForVideoDownloads(
-        downloadPreferences: DownloadPreferences
-    ): YoutubeDLRequest =
-        this.apply {
-            downloadPreferences.run {
-                addOption("--add-metadata")
-                addOption("--no-embed-info-json")
-                // "direct" is the direct-lane marker, not a yt-dlp format id.
-                // When such a task falls back to yt-dlp (e.g. a manifest URL
-                // with the Ghost engine off), the format sorter must pick the
-                // format — `-f direct` always fails format selection.
-                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
-                    addOption("-f", formatIdString)
-                    if (mergeAudioStream) {
-                        addOption("--audio-multistreams")
-                    }
-                } else {
-                    applyFormatSorter(this, toFormatSorter())
-                }
-                if (downloadSubtitle) {
-                    if (autoSubtitle) {
-                        addOption("--write-auto-subs")
-                        if (!autoTranslatedSubtitles) {
-                            addOption("--extractor-args", "youtube:skip=translated_subs")
-                        }
-                    }
-                    subtitleLanguage
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { addOption("--sub-langs", it) }
-                    if (embedSubtitle) {
-                        addOption("--embed-subs")
-                        if (keepSubtitle) {
-                            addOption("--write-subs")
-                        }
-                    } else {
-                        addOption("--write-subs")
-                    }
-                    when (convertSubtitle) {
-                        CONVERT_ASS -> addOption("--convert-subs", "ass")
-                        CONVERT_SRT -> addOption("--convert-subs", "srt")
-                        CONVERT_VTT -> addOption("--convert-subs", "vtt")
-                        CONVERT_LRC -> addOption("--convert-subs", "lrc")
-                        else -> {}
-                    }
-                }
-                if (mergeToMkv || PREFER_MP4.getBoolean()) {
-                    val target =
-                        when {
-                            // The explicit toggle always wins over "Prefer MP4".
-                            MERGE_OUTPUT_MKV.getBoolean() -> "mkv"
-                            PREFER_MP4.getBoolean() -> "mp4/mkv"
-                            else -> "mkv" // merge forced by embedded subtitles
-                        }
-                    addOption("--remux-video", target)
-                    addOption("--merge-output-format", target)
-                }
-                if (embedThumbnail) {
-                    addOption("--embed-thumbnail")
-                }
-                if (videoClips.isEmpty()) addOption("--embed-chapters")
-            }
-        }
 
     @CheckResult
     private fun DownloadPreferences.toAudioFormatSorter(): String =
@@ -1102,126 +607,23 @@ object DownloadUtil {
             delimiter = ",",
         )
 
-    private fun YoutubeDLRequest.addOptionsForAudioDownloads(
-        id: String,
-        preferences: DownloadPreferences,
-        playlistUrl: String,
-    ): YoutubeDLRequest =
-        this.apply {
-            with(preferences) {
-                addOption("-x")
-                if (downloadSubtitle) {
-                    addOption("--write-subs")
-
-                    if (autoSubtitle) {
-                        addOption("--write-auto-subs")
-                        if (!autoTranslatedSubtitles) {
-                            addOption("--extractor-args", "youtube:skip=translated_subs")
-                        }
-                    }
-                    subtitleLanguage
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { addOption("--sub-langs", it) }
-                    when (convertSubtitle) {
-                        CONVERT_ASS -> addOption("--convert-subs", "ass")
-                        CONVERT_SRT -> addOption("--convert-subs", "srt")
-                        CONVERT_VTT -> addOption("--convert-subs", "vtt")
-                        CONVERT_LRC -> addOption("--convert-subs", "lrc")
-                        else -> {}
-                    }
-                }
-                if (formatIdString.isNotEmpty() && formatIdString != DIRECT_FORMAT_ID) {
-                    addOption("-f", formatIdString)
-                    if (mergeAudioStream) {
-                        addOption("--audio-multistreams")
-                    }
-                } else if (convertAudio) {
-                    when (audioConvertFormat) {
-                        CONVERT_MP3 -> {
-                            addOption("--audio-format", "mp3")
-                        }
-
-                        CONVERT_M4A -> {
-                            addOption("--audio-format", "m4a")
-                        }
-                    }
-                } else {
-                    applyFormatSorter(preferences, toAudioFormatSorter())
-                }
-
-                if (embedMetadata) {
-                    addOption("--embed-metadata")
-                    addOption("--embed-thumbnail")
-                    addOption("--convert-thumbnails", "jpg")
-
-                    if (cropArtwork) {
-                        val configFile = context.getConfigFile(id)
-                        FileUtil.writeContentToFile(CROP_ARTWORK_COMMAND, configFile)
-                        addOption("--config", configFile.absolutePath)
-                    }
-                }
-                addOption("--parse-metadata", "%(release_year,upload_date)s:%(meta_date)s")
-
-                if (playlistUrl.isNotEmpty()) {
-                    addOption("--parse-metadata", "%(album,playlist,title)s:%(meta_album)s")
-                    addOption("--parse-metadata", "%(track_number,playlist_index)d:%(meta_track)s")
-                } else {
-                    addOption("--parse-metadata", "%(album,title)s:%(meta_album)s")
-                }
-            }
-        }
-
-    private fun insertInfoIntoDownloadHistory(
-        videoInfo: VideoInfo,
-        filePaths: List<String>,
-    ): List<String> =
-        filePaths.onEach {
-            DatabaseUtil.insertInfo(videoInfo.toDownloadedVideoInfo(videoPath = it))
-        }
-
-    private fun VideoInfo.toDownloadedVideoInfo(
-        id: Int = 0,
-        videoPath: String,
-    ): DownloadedVideoInfo =
-        this.run {
-            DownloadedVideoInfo(
-                id = id,
-                videoTitle = title,
-                videoAuthor = uploader ?: channel ?: uploaderId.toString(),
-                videoUrl = webpageUrl ?: originalUrl.toString(),
-                thumbnailUrl = thumbnail.toHttpsUrl(),
-                videoPath = videoPath,
-                extractor = extractorKey,
-            )
-        }
-
-    private fun insertSplitChapterIntoHistory(videoInfo: VideoInfo, filePaths: List<String>) =
-        filePaths.onEach {
-            DatabaseUtil.insertInfo(
-                videoInfo.toDownloadedVideoInfo(videoPath = it).copy(videoTitle = it.getFileName())
-            )
-        }
-
-    /** processId -> embedded-engine task id, for cancellation routing. */
-    private val ghostTasks = ConcurrentHashMap<String, String>()
-
-    /** @return true when an engine task was registered for this id and cancelled. */
-    fun cancelGhostTask(taskId: String): Boolean =
-        ghostTasks.remove(taskId)?.also { GhostEngine.cancel(it) } != null
-
-    /** Client set that last won extraction, per task key (YouTube ladder). */
-    private val successfulExtractionClients = ConcurrentHashMap<String, String>()
-
-    /** Live N_m3u8DL-RE processes by task id, so cancel can kill them. */
-    private val nreProcesses = ConcurrentHashMap<String, Process>()
+    /** @return true when a lane registered this id and cancelled it. */
+    fun cancelGhostTask(taskId: String): Boolean = GhostHttpTransferEngine.cancel(taskId)
 
     /** @return true when a running N_m3u8DL-RE process was terminated. */
-    fun cancelNm3u8DlRe(taskId: String): Boolean =
-        (nreProcesses.remove(taskId)?.also { it.destroy() }) != null
+    fun cancelNm3u8DlRe(taskId: String): Boolean = Nm3u8TransferEngine.cancel(taskId)
 
+    /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
+    internal fun isSafeRemoteUrl(url: String): Boolean = engineUrlIsSafe(url)
+
+    /**
+     * First free "name.ext", "name (1).ext", … inside [dir]. Files under
+     * Download/Sleeve survive re-installs, and a name owned by another app UID
+     * cannot be replaced (EPERM), so never plan to overwrite one.
+     */
+    internal fun uniqueFileName(dir: String, name: String): String = engineUniqueFileName(dir, name)
 
     /** Extensions that mark a direct file as audio for directory routing. */
-    private val DIRECT_AUDIO_EXTS = AUDIO_FILE_EXTENSIONS
 
     /** Extensions that mark a bare direct media link (a CDN asset such as
      * instagram.fbcdn/…jpg or video.twimg/…mp4?tag=29). These must bypass
@@ -1237,568 +639,6 @@ object DownloadUtil {
     fun isDirectMediaUrl(url: String): Boolean = DirectMediaRules.isDirectMediaUrl(url)
 
     fun isDirectImageUrl(url: String): Boolean = DirectMediaRules.isDirectImageUrl(url)
-
-    /** Remote-URL guard shared by engine and N_m3u8DL-RE routes. */
-    private val PRIVATE_HOST_RE =
-        Regex(
-            "^(localhost|127\\.|10\\.|0\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\." +
-                "|\\[::1\\]|\\[fc|\\[fd|\\[fe80)",
-            RegexOption.IGNORE_CASE,
-        )
-
-    /** Shared with the direct-lane resolvers: page content decides what gets fetched. */
-    internal fun isSafeRemoteUrl(url: String): Boolean {
-        if (!url.startsWith("http://") && !url.startsWith("https://")) return false
-        val rest = url.substringAfter("://")
-        // Bracketed IPv6 hosts must not be split on ':' (would leave "[" and
-        // bypass the blocklist).
-        val hostPart =
-            if (rest.startsWith("["))
-                rest.substringBefore(']')
-            else
-                rest.substringBefore('/').substringBefore(':')
-        // Match the pattern against the token as-is: IPv6 alternatives in the
-        // blocklist are written bracketed ("[::1]", "[fc", "[fd").
-        return hostPart.length > 2 && !PRIVATE_HOST_RE.containsMatchIn(hostPart)
-    }
-
-    private val ELF_MACHINES =
-        mapOf(
-            "arm64-v8a" to 183L, // EM_AARCH64
-            "x86_64" to 62L, // EM_X86_64
-        )
-
-    /** True when the bundled ELF binary matches one of the device's ABIs. */
-    private fun canExecuteElf(file: File): Boolean {
-        if (!file.exists()) return false
-        return runCatching {
-            val header = file.inputStream().use { it.readNBytes(20) }
-            if (header.size < 20 || header[0] != 0x7F.toByte() || header[1] != 'E'.code.toByte())
-                return false
-            val machine = ((header[19].toLong() and 0xFF) shl 8) or (header[18].toLong() and 0xFF)
-            val abi =
-                Build.SUPPORTED_ABIS.firstOrNull { ELF_MACHINES.containsKey(it) }
-                    ?: return false
-            ELF_MACHINES[abi] == machine
-        }.getOrDefault(false)
-    }
-
-    private fun nativeBinary(name: String): File? {
-        val dir = App.context.applicationInfo.nativeLibraryDir ?: return null
-        val f = File(dir, name)
-        return if (f.exists()) f else null
-    }
-
-    /**
-     * First free "name.ext", "name (1).ext", … inside [dir]. Files under
-     * Download/Sleeve survive re-installs, and a name owned by another app UID
-     * cannot be replaced (EPERM), so never plan to overwrite one.
-     */
-    internal fun uniqueFileName(dir: String, name: String): String {
-        if (!File(dir, name).exists()) return name
-        val stem = name.substringBeforeLast('.', name)
-        val suffix = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
-        var index = 1
-        while (true) {
-            val candidate = "$stem ($index)$suffix"
-            if (!File(dir, candidate).exists()) return candidate
-            index++
-        }
-    }
-
-    /**
-     * HLS/DASH handoff to the bundled N_m3u8DL-RE (Ghost-Downloader's binary,
-     * GPL-3.0): multi-threaded segment download, AES-128 decryption, muxing.
-     * Manifest URLs only; everything else fails open to yt-dlp.
-     *
-     * @return null when this download was NOT handled (caller falls back).
-     */
-    private suspend fun runNm3u8DlReIfEligible(
-        videoInfo: VideoInfo,
-        preferences: DownloadPreferences,
-        taskId: String,
-        progressCallback: ((Float, Long, String) -> Unit)?,
-        isActive: () -> Boolean = { true },
-        onNote: (CompletedNote) -> Unit = {},
-        onLocalDurationMs: (Long) -> Unit = {},
-    ): Result<List<String>>? {
-        if (!GHOST_ENGINE.getBoolean()) return null
-        val bin =
-            nativeBinary("libnm3u8dlre.so")
-                ?.takeIf { canExecuteElf(it) }
-                ?: return null.also {
-                    Log.d(TAG, "N_m3u8DL-RE skipped: binary missing or wrong arch")
-                }
-
-        val manifestUrl =
-            with(preferences) {
-                if (downloadPlaylist ||
-                        extractAudio ||
-                        convertAudio ||
-                        sponsorBlock ||
-                        createThumbnail ||
-                        cropArtwork ||
-                        embedThumbnail ||
-                        downloadSubtitle ||
-                        embedSubtitle ||
-                        keepSubtitle ||
-                        autoSubtitle ||
-                        autoTranslatedSubtitles ||
-                        convertSubtitle != 0 ||
-                        aria2c ||
-                        rateLimit ||
-                        cookies ||
-                        sdcard ||
-                        useDownloadArchive ||
-                        videoClips.isNotEmpty() ||
-                        splitByChapter
-                ) {
-                    Log.d(TAG, "N_m3u8DL-RE skipped: yt-dlp post-processing requested")
-                    return null
-                }
-                if (formatIdString.contains('+')) return null
-
-                val manifestish =
-                    (videoInfo.requestedFormats.orEmpty() + videoInfo.formats.orEmpty())
-                        .filter { !it.url.isNullOrBlank() }
-                        .filter {
-                            val lower = it.url!!.lowercase()
-                            listOf("m3u8", "mpd", "manifest").any { k -> k in lower }
-                        }
-                val pick =
-                    if (formatIdString.isNotEmpty())
-                        manifestish.firstOrNull { it.formatId == formatIdString }
-                    else
-                        manifestish.maxByOrNull { it.tbr ?: it.fileSizeApprox ?: 0.0 }
-                pick?.url ?: return null
-            }
-            if (!isSafeRemoteUrl(manifestUrl)) {
-                Log.w(TAG, "N_m3u8DL-RE skipped: unsafe manifest url")
-                return null
-            }
-
-        val baseName =
-            preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
-                .ifBlank { "download" }
-                .let { sanitizeSegment(it) }
-        val downloadDir =
-            if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
-        // The copy below overwrites, but Scoped Storage refuses a replace that
-        // crosses app ownership (a file left by another install): copyTo then
-        // throws EPERM and the lane falls back to yt-dlp for nothing. Land
-        // beside the existing file instead, like every other lane does.
-        val fileName =
-            uniqueFileName(
-                downloadDir,
-                "$baseName.mp4", // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
-            )
-
-        val workDir =
-            File(App.context.cacheDir, "nm3re_$taskId").apply { mkdirs() }
-        val args =
-            mutableListOf(
-                bin.absolutePath,
-                manifestUrl,
-                "--save-dir=${workDir.absolutePath}",
-                "--save-name=media",
-                "--tmp-dir=${File(workDir, "tmp").apply { mkdirs() }.absolutePath}",
-                "--thread-count=8",
-                "--download-retry-count=3",
-                "--http-request-timeout=30",
-                "--concurrent-download=true",
-                "--binary-merge=true",
-                "--del-after-done=true",
-                "--no-log=true",
-                "--no-ansi-color=true",
-                "--disable-update-check=true",
-                "--use-system-proxy=false",
-                "--auto-selection",
-            )
-        nativeBinary("libffmpeg.so")?.let {
-            args.add("--ffmpeg-binary-path=${it.absolutePath}")
-        }
-
-        Log.i(TAG, "N_m3u8DL-RE took over $taskId -> $manifestUrl")
-        val process =
-            runCatching {
-                ProcessBuilder(args)
-                    .apply { redirectErrorStream(true) }
-                    .start()
-            }.getOrElse {
-                Log.w(TAG, "N_m3u8DL-RE unavailable, falling back to yt-dlp: ${it.message}")
-                workDir.deleteRecursively()
-                return null
-            }
-        // Registered so a task cancel can terminate the process; waitFor
-        // below would otherwise block until the transfer finishes.
-        nreProcesses[taskId] = process
-        val nreStartedAtMs = System.currentTimeMillis()
-
-        // Stream-copy done; the produced file is the largest under workDir.
-        val produced =
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    val percent = Regex("\\[(\\d{1,3}(?:\\.\\d+)?)%").find(line)
-                    if (percent != null) {
-                        progressCallback?.invoke(
-                            percent.groupValues[1].toFloatOrNull() ?: 0f,
-                            0,
-                            "N_m3u8DL-RE: ${line.takeLast(80)}",
-                        )
-                    }
-                }
-                workDir
-                    .walkTopDown()
-                    .filter { it.isFile && !it.relativeTo(workDir).path.startsWith("tmp") }
-                    .maxByOrNull { it.length() }
-            }
-        val code = runCatching { process.waitFor() }.getOrDefault(-1)
-        nreProcesses.remove(taskId)
-        if (code != 0 || produced == null || produced.length() == 0L) {
-            Log.w(TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
-            workDir.deleteRecursively()
-            return null
-        }
-
-        val target = File(downloadDir, fileName)
-        runCatching {
-            produced.copyTo(target, overwrite = true)
-            produced.delete()
-        }
-        workDir.deleteRecursively()
-
-        if (preferences.embedMetadata) {
-            embedMetadataWithFfmpeg(
-                filePath = target.absolutePath,
-                videoInfo = videoInfo,
-                preferences = preferences,
-            )
-        }
-        return onFinishDownloading(
-            preferences = preferences,
-            videoInfo = videoInfo,
-            downloadPath = downloadDir,
-            sdcardUri = preferences.sdcardUri,
-            startedAtMs = nreStartedAtMs,
-            produced = target,
-            isActive = isActive,
-            onNote = onNote,
-            onLocalDurationMs = onLocalDurationMs,
-        )
-    }
-
-    /**
-     * Ghost engine handoff (Ghost Downloader ADR-0007 pattern): yt-dlp extracts,
-     * the embedded engine transfers the bytes. Eligible only when the selected
-     * format is a single progressive HTTP stream and nothing requires yt-dlp's
-     * post-processing; anything else fails open to the stock path.
-     *
-     * @return null when this download was NOT handled (caller falls back to yt-dlp).
-     */
-    private suspend fun runGhostDownloadIfEligible(
-        videoInfo: VideoInfo,
-        preferences: DownloadPreferences,
-        taskId: String,
-        progressCallback: ((Float, Long, String) -> Unit)?,
-        isActive: () -> Boolean = { true },
-        onNote: (CompletedNote) -> Unit = {},
-        onLocalDurationMs: (Long) -> Unit = {},
-    ): Result<List<String>>? {
-        if (!GHOST_ENGINE.getBoolean() && !preferences.galleryDirect) {
-            Log.d(TAG, "Ghost handoff skipped: engine disabled")
-            return null
-        }
-        if (preferences.galleryDirect) {
-            Log.d(TAG, "Ghost handoff: gallery direct item")
-        }
-        Log.d(TAG, "Ghost handoff check: taskId=$taskId formatIdString=${preferences.formatIdString}")
-
-        val eligibleFormat =
-            with(preferences) {
-                if (downloadPlaylist ||
-                        extractAudio ||
-                        convertAudio ||
-                        sponsorBlock ||
-                        createThumbnail ||
-                        cropArtwork ||
-                        embedThumbnail ||
-                        downloadSubtitle ||
-                        embedSubtitle ||
-                        keepSubtitle ||
-                        autoSubtitle ||
-                        autoTranslatedSubtitles ||
-                        convertSubtitle != 0 ||
-                        aria2c ||
-                        rateLimit ||
-                        cookies ||
-                        useDownloadArchive ||
-                        videoClips.isNotEmpty() ||
-                        splitByChapter
-                ) {
-                    Log.d(TAG, "Ghost handoff skipped: yt-dlp post-processing requested")
-                    return null
-                }
-                if (formatIdString.contains('+')) {
-                    Log.d(TAG, "Ghost handoff skipped: merged video+audio formats")
-                    return null
-                }
-
-                val formats =
-                    (videoInfo.requestedFormats.orEmpty() + videoInfo.formats.orEmpty())
-                        .filter { !it.url.isNullOrBlank() }
-                        .distinctBy { it.formatId to it.url }
-                Log.d(
-                    TAG,
-                    "Ghost handoff formats: ids=${formats.map { it.formatId }} requestedIds=${videoInfo.requestedFormats?.map { it.formatId }}",
-                )
-                val candidate =
-                    if (formatIdString.isNotEmpty())
-                        formats.firstOrNull { it.formatId == formatIdString }
-                            ?: formats.firstOrNull {
-                                it.formatId != null && formatIdString.startsWith(it.formatId!!)
-                            }
-                    else formats.singleOrNull()
-                if (candidate == null) {
-                    Log.d(TAG, "Ghost handoff skipped: no matching single format")
-                    return null
-                }
-                // A single selected format is the exact file yt-dlp would save —
-                // unknown codecs (generic extractor reports acodec=null) are fine.
-
-                val url = candidate.url!!
-                if (!isSafeRemoteUrl(url)) {
-                    Log.d(TAG, "Ghost handoff skipped: unsafe url")
-                    return null
-                }
-                val lower = url.lowercase()
-                if (listOf("m3u8", "mpd", "manifest", "hls", "dash").any { it in lower }) {
-                    Log.d(TAG, "Ghost handoff skipped: segmented manifest url")
-                    return null
-                }
-                candidate
-            }
-
-        val ext = eligibleFormat.ext?.takeIf { it.isNotBlank() } ?: "bin"
-        val baseName =
-            preferences.newTitle.ifEmpty { videoInfo.filename ?: videoInfo.title }
-                .ifBlank { "download" }
-                .let { sanitizeSegment(it) }
-        val downloadDir =
-            if (preferences.privateDirectory) App.privateDownloadDir
-            else
-                if (eligibleFormat.isAudioOnly()) audioDownloadDir else videoDownloadDir
-        // The engine writes atomically with a rename, which fails with EPERM
-        // when the destination already exists and belongs to another install
-        // (shared Download/Sleeve keeps files across app re-installs). Pick a
-        // free name instead of overwriting, the same way yt-dlp lands a new
-        // file beside an existing one.
-        // videoInfo.filename already carries the container (direct links name
-        // the file after the URL), so appending ext again wrote "clip.mp4.mp4".
-        val fileName =
-            uniqueFileName(
-                downloadDir,
-                if (baseName.endsWith(".$ext", ignoreCase = true)) baseName
-                else "$baseName.$ext",
-            )
-
-        // Gallery/embed items carry a per-item Referer from the resolver;
-        // prefer it, and reconstruct from what is available here otherwise:
-        // the extraction page (yt-dlp formats), falling back to the canonical
-        // instagram referer for instagram CDN hosts, which reject signed
-        // media without it. Direct items keep the media url as their page,
-        // which is not a referer — skip those.
-        val mediaUrl = eligibleFormat.url!!
-        val pageReferer =
-            listOfNotNull(videoInfo.webpageUrl, videoInfo.originalUrl)
-                .firstOrNull { it.isNotBlank() && it != mediaUrl }
-        val referer =
-            preferences.referer.ifBlank {
-                if (mediaUrl.contains("cdninstagram") || mediaUrl.contains("fbcdn")) {
-                    "https://www.instagram.com/"
-                } else {
-                    pageReferer
-                }
-            }
-        val engineHeaders =
-            if (referer.isNullOrBlank()) {
-                mapOf("User-Agent" to preferences.userAgentString)
-            } else {
-                mapOf(
-                    "User-Agent" to preferences.userAgentString,
-                    "Referer" to referer,
-                )
-            }
-        val enqueued =
-            runBlocking {
-                GhostEngine.download(
-                    url = mediaUrl,
-                    headers = engineHeaders,
-                    outputDir = downloadDir,
-                    fileName = fileName,
-                )
-            }
-        val engineTaskId =
-            enqueued.getOrElse {
-                Log.w(TAG, "Ghost engine unavailable, falling back to yt-dlp: ${it.message}")
-                return null
-            }
-        ghostTasks[taskId] = engineTaskId
-        Log.i(TAG, "Ghost engine took over $taskId -> $engineTaskId ($fileName)")
-        val engineStartedAtMs = System.currentTimeMillis()
-
-        val outcome =
-            runBlocking {
-                // progressFlow is a UI mirror only: the terminal verdict is the
-                // value watch() returns for THIS task. Reading the flow after
-                // await() raced a newer task's snapshot into this decision.
-                val bridge =
-                    launch(Dispatchers.IO) {
-                        GhostEngine.progressFlow.collect { p ->
-                            if (p?.taskId != engineTaskId) return@collect
-                            if (p.totalBytes > 0) {
-                                progressCallback?.invoke(
-                                    p.downloadedBytes * 100f / p.totalBytes,
-                                    0,
-                                    "Ghost: %.1f / %.1f MB • %.1f MB/s".format(
-                                        p.downloadedBytes / 1_048_576.0,
-                                        p.totalBytes / 1_048_576.0,
-                                        p.speedBps / 1_048_576.0,
-                                    ),
-                                )
-                            } else if (p.state == TaskState.RUNNING) {
-                                progressCallback?.invoke(-1f, 0, "Ghost: downloading…")
-                            }
-                        }
-                    }
-                val terminal = GhostEngine.watch(engineTaskId)
-                bridge.cancel()
-                terminal
-            }
-        ghostTasks.remove(taskId)
-
-        if (outcome?.state == TaskState.COMPLETED) {
-            // The engine reporting COMPLETED is not proof of a file: verify the
-            // exact output exists and is non-empty before history/UI claim it.
-            val produced = File(downloadDir, fileName)
-            if (!produced.isFile || produced.length() == 0L) {
-                Log.w(TAG, "Ghost reported COMPLETED without output: ${produced.absolutePath}")
-                return Result.failure(
-                    YoutubeDLException("Ghost engine: no output file produced")
-                )
-            }
-            if (preferences.embedMetadata) {
-                embedMetadataWithFfmpeg(
-                    filePath = produced.absolutePath,
-                    videoInfo = videoInfo,
-                    preferences = preferences,
-                )
-            }
-            return onFinishDownloading(
-                preferences = preferences,
-                videoInfo = videoInfo,
-                downloadPath = downloadDir,
-                sdcardUri = preferences.sdcardUri,
-                startedAtMs = engineStartedAtMs,
-                produced = produced,
-                isActive = isActive,
-                onNote = onNote,
-                onLocalDurationMs = onLocalDurationMs,
-            )
-        }
-
-        val reason =
-            outcome?.error?.ifBlank { outcome.state.name.lowercase() } ?: "unknown"
-        Log.w(TAG, "Ghost engine failed for $taskId: $reason")
-        // A failed transfer leaves either a single-stream partial, the
-        // staging file, or the segment directory; none is media, and a
-        // later retry would scan them as output. Drop them now.
-        File(downloadDir).listFiles()?.forEach { file ->
-            if (file.name == fileName || file.name.startsWith("$fileName.")) {
-                file.deleteRecursively()
-            }
-        }
-        return Result.failure(YoutubeDLException("Ghost engine: $reason"))
-    }
-
-    /**
-     * Best-effort metadata embed for engine-transferred files, restoring the
-     * embedMetadata post-processing the stock yt-dlp path would have run.
-     * Stream-copies (-c copy) so the transfer bytes are untouched; any ffmpeg
-     * failure keeps the original file.
-     */
-    private fun embedMetadataWithFfmpeg(
-        filePath: String,
-        videoInfo: VideoInfo,
-        preferences: DownloadPreferences,
-    ) {
-        val ffmpeg =
-            File(App.context.applicationInfo.nativeLibraryDir ?: return, "libffmpeg.so")
-                .takeIf { it.exists() } ?: return
-        val inFile = File(filePath)
-        if (!inFile.exists()) return
-        // Keep the real extension on the temp file so ffmpeg can pick the muxer.
-        val tmpOut =
-            File(
-                inFile.parentFile,
-                inFile.nameWithoutExtension + ".meta_tmp." + inFile.extension,
-            )
-
-        val title = preferences.newTitle.ifEmpty { videoInfo.title }
-        val artist = videoInfo.uploader ?: videoInfo.channel ?: ""
-        val args =
-            mutableListOf(
-                ffmpeg.absolutePath,
-                "-y",
-                "-i",
-                inFile.absolutePath,
-                "-map",
-                "0",
-                "-c",
-                "copy",
-                "-metadata",
-                "title=$title",
-                "-metadata",
-                "artist=$artist",
-                "-metadata",
-                "album_artist=$artist",
-                "-metadata",
-                "comment=Sleeve",
-                tmpOut.absolutePath,
-            )
-        runCatching {
-            val proc =
-                ProcessBuilder(args)
-                    .apply {
-                        // libc++_shared.so and the libav* libs live in the
-                        // extracted ffmpeg package, where yt-dlp's own ffmpeg
-                        // invocations also load them from.
-                        environment()["LD_LIBRARY_PATH"] =
-                            File(
-                                App.context.noBackupFilesDir,
-                                "youtubedl-android/packages/ffmpeg/usr/lib",
-                            )
-                                .absolutePath
-                        redirectErrorStream(true)
-                    }
-                    .start()
-            val output = proc.inputStream.bufferedReader().readText()
-            val code = proc.waitFor()
-            if (code == 0 && tmpOut.exists() && tmpOut.length() > 0) {
-                if (inFile.delete() && tmpOut.renameTo(inFile)) {
-                    Log.i(TAG, "ffmpeg: metadata embedded into ${inFile.name}")
-                } else {
-                    Log.w(TAG, "ffmpeg: could not replace original")
-                    tmpOut.delete()
-                }
-            } else {
-                Log.w(TAG, "ffmpeg: exit $code ${output.takeLast(300)}")
-                tmpOut.delete()
-            }
-        }.onFailure {
-            Log.w(TAG, "ffmpeg: embed failed: ${it.message}")
-            tmpOut.delete()
-        }
-    }
 
     @CheckResult
     suspend fun downloadVideo(
@@ -1843,557 +683,71 @@ object DownloadUtil {
 
         if (!isActive()) return Result.failure(CancellationException("task canceled"))
 
-        with(downloadPreferences) {
-            val url =
-                playlistUrl.ifEmpty {
-                    videoInfo.originalUrl
-                        ?: videoInfo.webpageUrl
-                        ?: return Result.failure(
-                            Throwable(context.getString(R.string.fetch_info_error_msg))
-                        )
-                }
+        val url =
+            playlistUrl.ifEmpty {
+                videoInfo.originalUrl
+                    ?: videoInfo.webpageUrl
+                    ?: return Result.failure(
+                        Throwable(context.getString(R.string.fetch_info_error_msg))
+                    )
+            }
 
-            // HLS/DASH first: the bundled N_m3u8DL-RE handles segmented
-            // manifests; direct progressive files fall through to the engine.
-            runNm3u8DlReIfEligible(
+        // One settings snapshot for the whole task: no lane re-reads
+        // preference statics mid-transfer, and every rung sees the same data.
+        val job =
+            TransferJob(
                 videoInfo = videoInfo,
-                preferences = downloadPreferences,
+                settings = DownloadSettingsSnapshot.capture(downloadPreferences),
+                url = url,
                 taskId = taskId,
+                playlistUrl = playlistUrl,
+                playlistItem = playlistItem,
                 progressCallback = progressCallback,
+                processIdFactory = processIdFactory,
+                onProcessStarted = onProcessStarted,
                 isActive = isActive,
+                m4bTagOverrides = m4bTagOverrides,
                 onNote = onNote,
                 onLocalDurationMs = onLocalDurationMs,
-            )?.let { return it }
+            )
 
-            // Ghost engine handoff: when the embedded engine can transfer this
-            // download itself, it reports progress through the same callback and
-            // finishes through the same history insertion as the yt-dlp path.
-            // A failed handoff must not end the task: CDNs can reject the plain
-            // transfer (googlevideo answers 403 for range GETs) while yt-dlp
-            // succeeds with its own headers, so fall through to that ladder.
-            runGhostDownloadIfEligible(
-                    videoInfo = videoInfo,
-                    preferences = downloadPreferences,
-                    taskId = taskId,
-                    progressCallback = progressCallback,
-                    isActive = isActive,
-                    onNote = onNote,
-                    onLocalDurationMs = onLocalDurationMs,
-                )
-                ?.let { ghostResult ->
-                    if (ghostResult.isSuccess) return ghostResult
-                    Log.w(
-                        TAG,
-                        "Ghost handoff failed, retrying via yt-dlp: ${ghostResult.exceptionOrNull()?.message}",
-                    )
-                }
+        // HLS/DASH first: the bundled N_m3u8DL-RE handles segmented
+        // manifests; direct progressive files fall through to the engine.
+        Nm3u8TransferEngine.transfer(job)?.let { return it }
 
-            // The download re-extracts, so the winning info-fetch client set
-            // goes first. That win is no media win: SABR-era YouTube can 403
-            // the media GET of a client that claimed the info fine
-            // ("android_vr client https formats require a GVS PO Token",
-            // "SABR-only streaming"). Any failure rotates down the ladder:
-            // yt-dlp's own client selection next, then the no-JS "tv" rung.
-            val downloadClientLadder: List<String?> =
-                listOf(
-                    successfulExtractionClients[taskId] ?: "android_vr,android,ios",
-                    null,
-                    "tv",
-                )
-            val downloadStartedAtMs = System.currentTimeMillis()
-            // The export needs the exact file THIS attempt wrote, not a guess
-            // from the folder. Asking yt-dlp for it is additive; the report is
-            // a cache file read once and removed. Reports a crashed run left
-            // behind are stale by definition.
-            val m4bPlanned = M4bPlan.applies(videoInfo, downloadPreferences)
-            if (m4bPlanned) {
-                context.cacheDir?.listFiles()?.forEach { stale ->
-                    if (stale.name.startsWith("m4b_path_${taskId}_")) stale.delete()
-                }
-            }
-            for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
-                if (!isActive()) return Result.failure(CancellationException("task canceled"))
-                val processId = processIdFactory()
-                onProcessStarted(processId)
-                val request = YoutubeDLRequest(url).maybeRedditUserAgent(url)
-                if (clients != null) {
-                    Log.i(TAG, "download attempt ${attemptIndex + 1}: player_client=$clients")
-                    request.addOption("--extractor-args", "youtube:player_client=$clients")
-                } else {
-                    Log.i(TAG, "download attempt ${attemptIndex + 1}: yt-dlp default clients")
-                }
-                val pathBuilder = StringBuilder()
-                val outputBuilder = StringBuilder()
-                val pathReport =
-                    if (m4bPlanned) File(context.cacheDir, "m4b_path_${taskId}_$processId.txt")
-                    else null
-                pathReport?.delete()
-
-                val attemptFailure =
-                    request
-                    .apply {
-                        addOption("--no-mtime")
-                        //                addOption("-v")
-                        if (cookies) {
-                            enableCookies(userAgentString)
-                        }
-                        if (galleryDirect) {
-                            // Engine declined this direct item and we fell back to
-                            // yt-dlp: without the page referer the generic
-                            // extractor gets 403 from instagram CDN hosts.
-                            val directReferer =
-                                referer.ifBlank {
-                                    if (
-                                        url.contains("cdninstagram") || url.contains("fbcdn")
-                                    ) {
-                                        "https://www.instagram.com/"
-                                    } else {
-                                        ""
-                                    }
-                                }
-                            if (directReferer.isNotBlank()) {
-                                addOption("--add-headers", "Referer:$directReferer")
-                            }
-                        }
-                        if (restrictFilenames) {
-                            addOption("--restrict-filenames")
-                        }
-                        if (proxy) {
-                            enableProxy(proxyUrl)
-                        }
-                        if (forceIpv4) {
-                            addOption("-4")
-                        }
-                        if (debug) {
-                            addOption("-v")
-                        }
-                        if (useDownloadArchive) {
-                            val archiveFile = context.getArchiveFile()
-                            if (
-                                ArchiveIndex.contains(
-                                    archiveFile,
-                                    videoInfo.extractorKey,
-                                    videoInfo.id,
-                                )
-                            ) {
-                                // Returned, not thrown: this site has no
-                                // surrounding try/catch, and a throw would
-                                // escape the caller's onFailure and wedge the
-                                // task in Running.
-                                return Result.failure(
-                                    DownloadErrorMessages.AlreadyDownloadedError(
-                                        extractorKey = videoInfo.extractorKey,
-                                        id = videoInfo.id,
-                                        message = context.getString(R.string.download_archive_error),
-                                    )
-                                )
-                            } else {
-                                useDownloadArchive()
-                            }
-                        }
-
-                        if (rateLimit && maxDownloadRate.isNumberInRange(1, 1000000)) {
-                            addOption("-r", "${maxDownloadRate}K")
-                        }
-
-                        if (playlistItem != 0 && downloadPlaylist) {
-                            addOption("--playlist-items", playlistItem)
-                            if (subdirectoryPlaylistTitle && !videoInfo.playlist.isNullOrEmpty()) {
-                                outputBuilder.append(PLAYLIST_TITLE_SUBDIRECTORY_PREFIX)
-                            }
-                            //                    addOption("--compat-options",
-                            // "no-youtube-unavailable-videos")
-                        } else {
-                            addOption("--no-playlist")
-                        }
-
-                        if (aria2c) {
-                            enableAria2c()
-                        } else if (concurrentFragments > 1) {
-                            addOption("--concurrent-fragments", concurrentFragments)
-                        }
-
-                        if (extractAudio || (videoInfo.vcodec == "none")) {
-                            if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
-                            else pathBuilder.append(audioDownloadDir)
-                            addOptionsForAudioDownloads(
-                                id = videoInfo.id,
-                                preferences = downloadPreferences,
-                                playlistUrl = playlistUrl,
-                            )
-                        } else {
-                            if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
-                            else pathBuilder.append(videoDownloadDir)
-                            addOptionsForVideoDownloads(downloadPreferences)
-                        }
-                        if (sponsorBlock) {
-                            addOption("--sponsorblock-remove", sponsorBlockCategory)
-                        }
-
-                        if (createThumbnail) {
-                            addOption("--write-thumbnail")
-                            addOption("--convert-thumbnails", "png")
-                        }
-                        if (subdirectoryExtractor) {
-                            pathBuilder.append("/${videoInfo.extractorKey}")
-                        }
-
-                        if (sdcard) {
-                            addOption("-P", context.getSdcardTempDir(videoInfo.id).absolutePath)
-                        } else {
-                            addOption("-P", pathBuilder.toString())
-                        }
-
-                        videoClips.forEach {
-                            addOption(
-                                "--download-sections",
-                                "*%d-%d".format(locale = Locale.US, it.start, it.end),
-                            )
-                        }
-                        if (newTitle.isNotEmpty()) {
-                            addCommands(listOf("--replace-in-metadata", "title", ".+", newTitle))
-                        }
-                        if (Build.VERSION.SDK_INT > 23 && !sdcard)
-                            addOption("-P", "temp:" + getExternalTempDir())
-
-                        if (splitByChapter) {
-                            addOption("-o", OUTPUT_TEMPLATE_CHAPTERS)
-                            addOption("--split-chapters")
-                        }
-
-                        // Generic/direct links make yt-dlp use the whole URL as
-                        // the video id, so a template containing [%(id)s] (the
-                        // default) produces 700-char filenames and Errno 36 on
-                        // CDN shares. Trim the final name (extension preserved)
-                        // at the source; 80 chars keeps even fullwidth names
-                        // inside ext4's 255-byte component limit.
-                        addOption("--trim-filenames", "80")
-
-                        val output =
-                            if (splitByChapter) {
-                                OUTPUT_TEMPLATE_SPLIT
-                            } else if (videoClips.isEmpty()) {
-                                outputTemplate
-                            } else {
-                                OUTPUT_TEMPLATE_CLIPS
-                            }
-
-                        addOption("-o", outputBuilder.append(output).toString())
-
-                        if (pathReport != null) {
-                            addCommands(
-                                listOf(
-                                    "--print-to-file",
-                                    "after_move:filepath",
-                                    pathReport.absolutePath,
-                                )
-                            )
-                        }
-
-                        for (s in request.buildCommand()) Log.d(TAG, s)
-                    }
-                    .runCatching {
-                        YoutubeDL.getInstance()
-                            .execute(
-                                request = this,
-                                processId = processId,
-                                callback = progressCallback,
-                            )
-                    }
-                    .exceptionOrNull()
-                val produced =
-                    pathReport?.let { report ->
-                        val outDir =
-                            if (sdcard) context.getSdcardTempDir(videoInfo.id)
-                            else File(pathBuilder.toString())
-                        M4bPlan.producedFrom(report, outDir)
-                    }
-                pathReport?.delete()
-                if (attemptFailure == null) {
-                    return onFinishDownloading(
-                        preferences = this,
-                        videoInfo = videoInfo,
-                        downloadPath = pathBuilder.toString(),
-                        sdcardUri = sdcardUri,
-                        startedAtMs = downloadStartedAtMs,
-                        produced = produced,
-                        m4bTagOverrides = m4bTagOverrides,
-                        isActive = isActive,
-                        onNote = onNote,
-                        onLocalDurationMs = onLocalDurationMs,
-                    )
-                }
-                val failureMessage = attemptFailure.message.orEmpty()
-                // Extraction success is no media success: the parallel info
-                // call never touches the media host. Any rung-1/rung-2 failure
-                // costs one more attempt; the next rung re-extracts fresh.
-                if (attemptIndex < downloadClientLadder.lastIndex) {
-                    Log.w(
-                        TAG,
-                        "player_client=${clients ?: "<yt-dlp default>"} failure: " +
-                            "$failureMessage; rotating extraction clients",
-                    )
-                    successfulExtractionClients.remove(taskId)
-                    continue
-                }
-                if (
-                    sponsorBlock &&
-                        failureMessage.contains(
-                            "Unable to communicate with SponsorBlock API",
-                        )
-                ) {
-                    attemptFailure.printStackTrace()
-                    return onFinishDownloading(
-                        preferences = this,
-                        videoInfo = videoInfo,
-                        downloadPath = pathBuilder.toString(),
-                        sdcardUri = sdcardUri,
-                        startedAtMs = downloadStartedAtMs,
-                        produced = produced,
-                        m4bTagOverrides = m4bTagOverrides,
-                        isActive = isActive,
-                        onNote = onNote,
-                        onLocalDurationMs = onLocalDurationMs,
-                    )
-                }
-                Log.e(
-                    TAG,
-                    "download failed on player_client=${clients ?: "<yt-dlp default>"}: " +
-                        "$failureMessage",
-                )
-                return Result.failure(attemptFailure)
-            }
-            // Every rung returns above; kept for exhaustiveness.
-            return Result.failure(IllegalStateException("download failed"))
+        // Ghost engine handoff: when the embedded engine can transfer this
+        // download itself, it reports progress through the same callback and
+        // finishes through the same history insertion as the yt-dlp path.
+        // A failed handoff must not end the task: CDNs can reject the plain
+        // transfer (googlevideo answers 403 for range GETs) while yt-dlp
+        // succeeds with its own headers, so fall through to that ladder.
+        GhostHttpTransferEngine.transfer(job)?.let { ghostResult ->
+            if (ghostResult.isSuccess) return ghostResult
+            Log.w(
+                TAG,
+                "Ghost handoff failed, retrying via yt-dlp: ${ghostResult.exceptionOrNull()?.message}",
+            )
         }
+
+        // The stock ladder claims every job it is given.
+        return YtDlpTransferEngine.transfer(job)
+            ?: Result.failure(IllegalStateException("download failed"))
     }
-
-    /**
-     * The single finish line every lane goes through. Runs under
-     * [NonCancellable]: once a lane has reported its file, the export, the
-     * scratch rename, the source removal, the media scan and the insert form
-     * one publish decision that a cancel must not tear in half.
-     */
-    private suspend fun onFinishDownloading(
-        preferences: DownloadPreferences,
-        videoInfo: VideoInfo,
-        downloadPath: String,
-        sdcardUri: String,
-        startedAtMs: Long? = null,
-        /** The exact file this lane wrote; null when the lane cannot name it. */
-        produced: File? = null,
-        m4bTagOverrides: M4bTagOverrides? = null,
-        isActive: () -> Boolean = { true },
-        onNote: (CompletedNote) -> Unit = {},
-        onLocalDurationMs: (Long) -> Unit = {},
-    ): Result<List<String>> =
-        withContext(NonCancellable) {
-            preferences.run {
-                val fileName =
-                    (preferences.newTitle.ifEmpty {
-                        videoInfo.filename
-                            ?: videoInfo.requestedDownloads?.firstOrNull()?.filename
-                            ?: videoInfo.title
-                    }).substringBefore('?').take(150)
-
-                Log.d(TAG, "onFinishDownloading: $fileName")
-
-                val source = produced?.takeIf { it.isFile && it.length() > 0L }
-                var exported: File? = null
-                var exportPlan: M4bPlan? = null
-                if (M4bPlan.applies(videoInfo, preferences)) {
-                    when {
-                        // Planned, but the lane could not name its file: there
-                        // is nothing to feed ffmpeg, and what landed is not the
-                        // .m4b the user asked for.
-                        source == null -> onNote(CompletedNote.M4B_NOT_EXPORTED)
-                        source.extension.equals("m4b", ignoreCase = true) -> Unit
-                        else -> {
-                            val plan =
-                                M4bPlan(
-                                    source = source,
-                                    chapters = videoInfo.chapters.orEmpty(),
-                                    tags =
-                                        M4bTags.from(videoInfo, m4bTagOverrides).let { tags ->
-                                            tags.copy(title = newTitle.ifEmpty { tags.title })
-                                        },
-                                    copyAudio =
-                                        source.extension.lowercase() == "m4a" ||
-                                            source.extension.lowercase() == "mp4",
-                                    ownedDir = sdcard,
-                                )
-                            val result = exportToM4b(context, plan, isActive)
-                            result.noteOnFailure()?.let(onNote)
-                            when (result) {
-                                is M4bExportResult.Verified -> {
-                                    exportPlan = plan
-                                    exported = result.out
-                                }
-                                M4bExportResult.Cancelled ->
-                                    return@run Result.failure(
-                                        CancellationException("m4b export cancelled"),
-                                    )
-                                M4bExportResult.Failed -> Unit
-                            }
-                        }
-                    }
-                }
-
-                // (b)+(c) The verified scratch becomes the published name, and
-                // the source it replaces goes away. A rename that fails keeps
-                // the source and downgrades the whole export to a note.
-                val plan = exportPlan
-                if (plan != null && exported != null) {
-                    if (plan.scratch.isFile && !plan.scratch.renameTo(exported)) {
-                        Log.w(TAG, "m4b: could not rename ${plan.scratch.name}")
-                        plan.scratch.delete()
-                        exported = null
-                    }
-                    if (exported != null && !exported.isFile) exported = null
-                    if (exported != null) {
-                        source?.delete()
-                    } else {
-                        onNote(CompletedNote.M4B_NOT_EXPORTED)
-                    }
-                }
-
-                // One local measurement, before any SD move: the Audible check
-                // compares this instead of re-reading a file that the move may
-                // already have taken away.
-                val local = exported ?: source
-                onLocalDurationMs(local?.let { AudioVerify.durationMs(context, it) } ?: 0L)
-
-                val savedFiles =
-                    if (sdcard) {
-                        var exportUri: String? = null
-                        moveFilesToSdcard(
-                                sdcardUri = sdcardUri,
-                                tempPath = context.getSdcardTempDir(videoInfo.id),
-                                onCopied = { copiedName, destUri ->
-                                    if (copiedName == exported?.name) exportUri = destUri
-                                },
-                            )
-                            .map { paths ->
-                                val uri = exportUri
-                                if (uri != null) listOf(uri) + paths.filter { it != uri } else paths
-                            }
-                    } else {
-                        Result.success(
-                                FileUtil.scanFileToMediaLibraryPostDownload(
-                                    title = fileName,
-                                    downloadDir = downloadPath,
-                                    // The disk filename can fail the title match
-                                    // (--trim-filenames 80, sanitized quick-download
-                                    // titles): a title-only scan returns an empty list
-                                    // and the history insert never runs, silently
-                                    // dropping the completed task from Downloads.
-                                    // Files modified since the download started are
-                                    // the real match.
-                                    modifiedAfterMs = startedAtMs,
-                                    // Gallery/photo items are pictures, not thumbnail
-                                    // sidecars: keep them in the completed set.
-                                    keepImages = galleryDirect,
-                                )
-                            )
-                            .map { paths ->
-                                val target = exported?.absolutePath
-                                if (target != null) listOf(target) + paths.filter { it != target }
-                                else paths
-                            }
-                    }
-                savedFiles.fold(
-                    onSuccess = { paths ->
-                        Log.d(TAG, "history insert: ${paths.size} file(s) $paths")
-                        when {
-                            // Private mode deliberately keeps files out of history.
-                            privateMode -> Result.success(emptyList())
-                            // No output means the transfer did not really finish.
-                            // Reporting success here would render the card as
-                            // "Downloaded" with no file behind it.
-                            paths.isEmpty() ->
-                                Result.failure(
-                                    IllegalStateException(
-                                        context.getString(R.string.download_error_msg)
-                                    )
-                                )
-                            splitByChapter ->
-                                Result.success(insertSplitChapterIntoHistory(videoInfo, paths))
-                            else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
-                        }
-                    },
-                    onFailure = { Result.failure(it) },
-                )
-            }
-        }
-
-    /**
-     * Best-effort content length for a direct media URL via a bounded HEAD
-     * request; 0 means unknown. Callers run on background dispatchers
-     * (DownloaderV2.prepare launches on Dispatchers.Default). No fallback
-     * guess is made when the server withholds Content-Length.
-     */
-    private fun fetchContentLength(url: String): Long =
-        runCatching {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.requestMethod = "HEAD"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)")
-            val len = if (conn.responseCode in 200..299) conn.contentLengthLong else -1L
-            conn.disconnect()
-            if (len > 0) len else 0L
-        }.getOrDefault(0L)
 
     /**
      * Minimal VideoInfo for a raw media URL (gallery-dl item, sniffed page
      * asset): one synthetic "direct" format so the Ghost handoff transfers the
-     * bytes without yt-dlp extraction. [contentLength] is injectable for
-     * tests; production resolves it with a bounded HEAD so the queue card
-     * shows the real size instead of a defaulting "0.00 MB".
+     * bytes without yt-dlp extraction. The bounded HEAD probe behind the
+     * default keeps the queue card's size real instead of a booked zero.
      */
     fun buildDirectVideoInfo(
         url: String,
         title: String,
         contentLength: Long = fetchContentLength(url),
-    ): VideoInfo? {
-        if (!isSafeRemoteUrl(url)) return null
-        val cleanUrl = url.substringBefore('#').substringBefore('?').substringBefore('？')
-        val path = cleanUrl.substringBefore('?').substringAfterLast('/')
-        val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }
-        // Format.isAudioOnly() treats a null vcodec as audio-only, which would
-        // file every direct image/video under the audio dir; classify by the
-        // file extension instead.
-        val directVcodec = if (ext in DIRECT_AUDIO_EXTS) "none" else "h264"
-        val baseName =
-            title.ifBlank { path }.ifBlank { cleanUrl }.let { sanitizeSegment(it) }
-        val fullName = if (ext != null && !baseName.endsWith(".$ext")) "$baseName.$ext" else baseName
-        // requestedFormats = the chosen file: ViewState.videoFormats and the
-        // ghost-handoff candidate read requestedFormats first, and an empty
-        // list would label the task "audio" in the queue header.
-        val directFormat =
-            Format(
-                formatId = "direct",
-                ext = ext,
-                url = url,
-                vcodec = directVcodec,
-            )
-        return VideoInfo(
-            id = Integer.toHexString(url.hashCode()),
-            title = baseName,
-            webpageUrl = url,
-            originalUrl = url,
-            extractor = "sleeve-direct",
-            extractorKey = "SleeveDirect",
-            ext = ext ?: "bin",
-            filename = fullName,
-            formats = listOf(directFormat),
-            requestedFormats = listOf(directFormat),
-            // Content-Length from the HEAD probe; 0 stays 0 (unknown) — the
-            // size is never invented.
-            fileSizeApprox = if (contentLength > 0) contentLength.toDouble() else .0,
-        )
-    }
+    ): VideoInfo? = DirectMedia.buildDirectVideoInfo(url, title, contentLength)
+
+    private fun fetchContentLength(url: String): Long = DirectMedia.fetchContentLength(url)
+
 
     @CheckResult
     fun executeCustomCommandTask(
@@ -2436,21 +790,7 @@ object DownloadUtil {
         }
     }
 
-    private fun checkIfAv1HardwareAccelerated(): Boolean {
-        if (PreferenceUtil.containsKey(AV1_HARDWARE_ACCELERATED)) {
-            return AV1_HARDWARE_ACCELERATED.getBoolean()
-        } else {
-            val res =
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                    false
-                } else {
-                    MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-                        info.supportedTypes.any { it.equals("video/av01", ignoreCase = true) } &&
-                            info.isHardwareAccelerated
-                    }
-                }
-            AV1_HARDWARE_ACCELERATED.updateBoolean(res)
-            return res
-        }
-    }
+    private fun checkIfAv1HardwareAccelerated(): Boolean =
+        DeviceCapabilities.av1HardwareAccelerated()
+
 }
