@@ -231,11 +231,6 @@ jobs:
           "downgrade" and updates keep working. Check any file against `SHA256SUMS`
           with `sha256sum -c SHA256SUMS`.
 
-          ## Known issues
-
-          - Restoring the queue after the app is killed and relaunched brings the
-            tasks back but does not continue them — press Resume on the task.
-
           ## Metered networks, as measured
 
           Tested on Wi-Fi marked metered: the "Allow downloading with cellular?"
