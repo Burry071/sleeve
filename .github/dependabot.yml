@@ -1,0 +1,31 @@
+# Weekly dependency updates, grouped so the Kotlin/Compose and
+# Android/androidx toolchains move as one reviewable PR each instead of a
+# stream of single-artifact bumps.
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      kotlin-and-compose:
+        patterns:
+          - "org.jetbrains.kotlin*"
+          - "org.jetbrains.compose*"
+          - "*compose*"
+          - "com.google.devtools.ksp*"
+          - "androidx.compose*"
+      android-androidx:
+        patterns:
+          - "com.android.tools.build*"
+          - "androidx.*"
+          - "com.google.android.*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
