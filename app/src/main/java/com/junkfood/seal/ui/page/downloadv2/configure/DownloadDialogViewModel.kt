@@ -60,7 +60,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         data class PlaylistSelection(val result: PlaylistResult) : SelectionState
 
-        data class FormatSelection(val info: VideoInfo) : SelectionState
+        /** [audioOnly] is the type the user picked before the fetch; the
+         * format page honours it instead of re-reading the global preference. */
+        data class FormatSelection(val info: VideoInfo, val audioOnly: Boolean = false) :
+            SelectionState
 
         data class MetadataTracks(
             val provider: String,
@@ -264,7 +267,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     .onSuccess { info ->
                         withContext(Dispatchers.Main) {
                             mSelectionStateFlow.update {
-                                SelectionState.FormatSelection(info = info)
+                                SelectionState.FormatSelection(info = info, audioOnly = audioOnly)
                             }
                             hideDialog()
                         }

@@ -14,15 +14,34 @@ import java.util.concurrent.ConcurrentHashMap
  */
 internal const val TRANSFER_TAG = "DownloadUtil"
 
+/**
+ * Extraction rungs, cheapest first. yt-dlp's own client selection needs no JS
+ * runtime and is not the set a bot check recognises; the TV/embedded pair
+ * shares a challenge path with the web player, and visionOS is the quiet one.
+ */
+internal val YOUTUBE_CLIENT_LADDER: List<String?> =
+    listOf(null, "tv,web_embedded", "visionos")
+
+/** The winning rung first (it may be null), then every rung not yet tried. */
+internal fun downloadClientLadder(recorded: String?, hasRecordedWin: Boolean): List<String?> =
+    if (hasRecordedWin) listOf(recorded) + YOUTUBE_CLIENT_LADDER.filter { it != recorded }
+    else YOUTUBE_CLIENT_LADDER
+
 /** Client set that last won extraction, per task key (YouTube ladder). */
 internal object ExtractionClients {
+    /** A null win (yt-dlp's default set) needs a value in the map to be remembered. */
+    private const val DEFAULT_CLIENT = "\u0000"
+
     private val wins = ConcurrentHashMap<String, String>()
 
-    fun record(taskKey: String, clients: String) {
-        wins[taskKey] = clients
+    fun record(taskKey: String, clients: String?) {
+        wins[taskKey] = clients ?: DEFAULT_CLIENT
     }
 
-    fun get(taskKey: String): String? = wins[taskKey]
+    fun get(taskKey: String): String? = wins[taskKey]?.takeIf { it != DEFAULT_CLIENT }
+
+    /** True once any rung won, including the null one. */
+    fun hasWin(taskKey: String): Boolean = wins.containsKey(taskKey)
 
     fun clear(taskKey: String) {
         wins.remove(taskKey)

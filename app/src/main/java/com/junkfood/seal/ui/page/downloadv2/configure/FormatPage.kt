@@ -101,16 +101,21 @@ import com.junkfood.seal.ui.page.download.VideoSelectionSlider
 import com.junkfood.seal.ui.page.settings.general.DialogCheckBoxItem
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.ui.theme.generateLabelColor
+import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
+import com.junkfood.seal.util.AUDIO_CONVERT
+import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.Chapter
 import com.junkfood.seal.util.EMBED_SUBTITLE
-import com.junkfood.seal.util.EXTRACT_AUDIO
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.MERGE_MULTI_AUDIO_STREAM
 import com.junkfood.seal.util.MERGE_OUTPUT_MKV
 import com.junkfood.seal.util.PREFER_MP4
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getString
+import com.junkfood.seal.util.PreferenceUtil.updateBoolean
+import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.PreferenceUtil.updateString
+import com.junkfood.seal.util.SPLIT_BY_CHAPTER
 import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.SUBTITLE_LANGUAGE
 import com.junkfood.seal.util.SubtitleFormat
@@ -139,11 +144,11 @@ private data class FormatConfig(
 fun FormatPage(
     modifier: Modifier = Modifier,
     videoInfo: VideoInfo,
+    audioOnly: Boolean = false,
     downloader: DownloaderV2 = koinInject(),
     onNavigateBack: () -> Unit = {},
 ) {
     if (videoInfo.formats.isNullOrEmpty()) return
-    val audioOnly = EXTRACT_AUDIO.getBoolean()
     val mergeAudioStream = MERGE_MULTI_AUDIO_STREAM.getBoolean()
     val subtitleLanguageRegex = SUBTITLE_LANGUAGE.getString()
     val downloadSubtitle = SUBTITLE.getBoolean()
@@ -184,6 +189,7 @@ fun FormatPage(
                     newTitle = newTitle,
                     selectedSubtitles = selectedSubtitles,
                     selectedAutoCaptions = selectedAutoCaptions,
+                    audioOnly = audioOnly,
                 )
             )
 
@@ -321,13 +327,19 @@ private fun FormatPageImpl(
     var videoAudioItemLimit by remember { mutableIntStateOf(6) }
 
     val isSuggestedFormatAvailable =
-        !videoInfo.requestedFormats.isNullOrEmpty() || !videoInfo.requestedDownloads.isNullOrEmpty()
+        !audioOnly &&
+            (!videoInfo.requestedFormats.isNullOrEmpty() ||
+                !videoInfo.requestedDownloads.isNullOrEmpty())
 
     var isSuggestedFormatSelected by remember { mutableStateOf(isSuggestedFormatAvailable) }
 
     var selectedVideoAudioFormat by remember { mutableIntStateOf(NOT_SELECTED) }
     var selectedVideoOnlyFormat by remember { mutableIntStateOf(NOT_SELECTED) }
-    val selectedAudioOnlyFormats = remember { mutableStateListOf<Int>() }
+    val selectedAudioOnlyFormats = remember {
+        mutableStateListOf<Int>().apply { if (audioOnly && audioOnlyFormats.isNotEmpty()) add(0) }
+    }
+    var convertAudio by remember { mutableStateOf(AUDIO_CONVERT.getBoolean()) }
+    val audioFallback = audioOnly && audioOnlyFormats.isEmpty()
     val context = LocalContext.current
 
     val uriHandler = LocalUriHandler.current
@@ -350,7 +362,9 @@ private fun FormatPageImpl(
         }
 
     var isClippingVideo by remember { mutableStateOf(false) }
-    var isSplittingVideo by remember { mutableStateOf(false) }
+    // The sheet's "Split chapters" chip writes this preference; the per-download
+    // toggle starts where the user left it and can still override it here.
+    var isSplittingVideo by remember { mutableStateOf(SPLIT_BY_CHAPTER.getBoolean()) }
     val isSplitByChapterAvailable = !videoInfo.chapters.isNullOrEmpty()
 
     val videoDurationRange = 0f..(videoInfo.duration?.toFloat() ?: 0f)
@@ -657,6 +671,32 @@ private fun FormatPageImpl(
                     }
                 }
 
+            if (audioOnlyFormats.isNotEmpty())
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        VideoFilterChip(
+                            selected = !convertAudio,
+                            onClick = {
+                                convertAudio = false
+                                AUDIO_CONVERT.updateBoolean(false)
+                            },
+                            label = stringResource(R.string.audio_source_original),
+                        )
+                        VideoFilterChip(
+                            selected = convertAudio,
+                            onClick = {
+                                convertAudio = true
+                                AUDIO_CONVERSION_FORMAT.updateInt(CONVERT_MP3)
+                                AUDIO_CONVERT.updateBoolean(true)
+                            },
+                            label = stringResource(R.string.audio_source_mp3),
+                        )
+                    }
+                }
+
             itemsIndexed(
                 audioOnlyFormats.subList(
                     fromIndex = 0,
@@ -727,14 +767,17 @@ private fun FormatPageImpl(
                     }
                 }
             }
-            if (videoAudioFormats.isNotEmpty()) {
+            if ((!audioOnly || audioFallback) && videoAudioFormats.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(top = 16.dp).padding(horizontal = 12.dp),
                     ) {
                         FormatSubtitle(
-                            text = stringResource(R.string.video),
+                            text =
+                                if (audioFallback)
+                                    stringResource(R.string.video_fallback_extracts_audio)
+                                else stringResource(R.string.video),
                             modifier = Modifier.weight(1f).padding(vertical = 4.dp),
                         )
                         ClickableTextAction(

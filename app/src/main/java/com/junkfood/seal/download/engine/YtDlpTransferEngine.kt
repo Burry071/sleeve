@@ -39,17 +39,16 @@ internal object YtDlpTransferEngine : TransferEngine {
         val downloadPreferences = job.preferences
 
         with(downloadPreferences) {
-            // The download re-extracts, so the winning info-fetch client set
-            // goes first. That win is no media win: SABR-era YouTube can 403
-            // the media GET of a client that claimed the info fine
-            // ("android_vr client https formats require a GVS PO Token",
-            // "SABR-only streaming"). Any failure rotates down the ladder:
-            // yt-dlp's own client selection next, then the no-JS "tv" rung.
-            val downloadClientLadder: List<String?> =
-                listOf(
-                    ExtractionClients.get(job.taskId) ?: "android_vr,android,ios",
-                    null,
-                    "tv",
+            // The download re-extracts, so the winning info-fetch rung goes
+            // first — including a null win, which is yt-dlp's own selection.
+            // That win is no media win: SABR-era YouTube can 403 the media GET
+            // of a client that claimed the info fine ("SABR-only streaming").
+            // Any failure rotates down the ladder; the rung list is fixed up
+            // front so a cancel or a rotation cannot change what comes next.
+            val ladder: List<String?> =
+                downloadClientLadder(
+                    recorded = ExtractionClients.get(job.taskId),
+                    hasRecordedWin = ExtractionClients.hasWin(job.taskId),
                 )
             val downloadStartedAtMs = System.currentTimeMillis()
             // The export needs the exact file THIS attempt wrote, not a guess
@@ -57,7 +56,7 @@ internal object YtDlpTransferEngine : TransferEngine {
             // a cache file read once and removed. Reports a crashed run left
             // behind are stale by definition.
             val m4bPlanned = M4bPlan.applies(videoInfo, downloadPreferences)
-            for ((attemptIndex, clients) in downloadClientLadder.withIndex()) {
+            for ((attemptIndex, clients) in ladder.withIndex()) {
                 if (!job.isActive()) return Result.failure(CancellationException("task canceled"))
                 val processId = job.processIdFactory()
                 job.onProcessStarted(processId)
@@ -277,7 +276,7 @@ internal object YtDlpTransferEngine : TransferEngine {
                 // Extraction success is no media success: the parallel info
                 // call never touches the media host. Any rung-1/rung-2 failure
                 // costs one more attempt; the next rung re-extracts fresh.
-                if (attemptIndex < downloadClientLadder.lastIndex) {
+                if (attemptIndex < ladder.lastIndex) {
                     Log.w(
                         TRANSFER_TAG,
                         "player_client=${clients ?: "<yt-dlp default>"} failure: " +
