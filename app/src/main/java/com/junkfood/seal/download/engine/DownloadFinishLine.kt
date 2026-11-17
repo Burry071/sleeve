@@ -119,6 +119,14 @@ internal suspend fun onFinishDownloading(
             val local = exported ?: source
             onLocalDurationMs(local?.let { AudioVerify.durationMs(context, it) } ?: 0L)
 
+            // --split-chapters publishes one file per chapter and leaves the
+            // unsplit master beside them. Remove it only once a chapter file
+            // actually landed, so a split that produced nothing keeps the one
+            // artifact that did.
+            if (splitByChapter && removeSplitMaster(source, downloadPath, startedAtMs)) {
+                Log.d(TRANSFER_TAG, "split: removed unsplit master ${source?.name}")
+            }
+
             val savedFiles =
                 if (sdcard) {
                     var exportUri: String? = null
@@ -181,6 +189,26 @@ internal suspend fun onFinishDownloading(
             )
         }
     }
+
+private val SPLIT_MEDIA_EXTENSIONS = setOf("mp4", "mkv", "webm", "m4a", "mp3", "opus", "ogg")
+
+/**
+ * Deletes the unsplit master of a chapter split, but only after a sibling
+ * media file written by this download exists. Without a start time, or with
+ * no sibling output, the master is the only proof the download landed, so it
+ * stays.
+ */
+private fun removeSplitMaster(master: File?, downloadPath: String, startedAtMs: Long?): Boolean {
+    if (master == null || !master.isFile || startedAtMs == null) return false
+    val hasChapterOutput =
+        File(downloadPath).walkTopDown().any { candidate ->
+            candidate.isFile &&
+                candidate.absolutePath != master.absolutePath &&
+                candidate.extension.lowercase() in SPLIT_MEDIA_EXTENSIONS &&
+                candidate.lastModified() >= startedAtMs
+        }
+    return hasChapterOutput && master.delete()
+}
 
 private fun insertInfoIntoDownloadHistory(
     videoInfo: VideoInfo,

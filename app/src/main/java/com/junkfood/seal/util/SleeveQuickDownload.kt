@@ -52,6 +52,11 @@ object SleeveQuickDownload {
     ): DownloadUtil.DownloadPreferences =
         preferences(anonymous).copy(
             galleryDirect = true,
+            // A direct item is the final artifact: no audio extraction and no
+            // conversion postprocessors on a file that is already what was
+            // asked for.
+            extractAudio = false,
+            convertAudio = false,
             newTitle = item.filename.substringBeforeLast('.').ifBlank {
                 item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
             },

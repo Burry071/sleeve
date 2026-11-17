@@ -25,6 +25,7 @@ object TaskFactory {
         newTitle: String,
         selectedSubtitles: List<String>,
         selectedAutoCaptions: List<String>,
+        audioOnly: Boolean = false,
     ): TaskWithState {
         val fileSize =
             formatList.fold(.0) { acc, format ->
@@ -38,7 +39,9 @@ object TaskFactory {
 
         val audioOnlyFormats = formatList.filter { it.isAudioOnly() }
         val videoFormats = formatList.filter { it.containsVideo() }
-        val audioOnly = audioOnlyFormats.isNotEmpty() && videoFormats.isEmpty()
+        // The picked download type wins; a hand-picked list is only a fallback
+        // signal for callers that never had a type (the playlist lane).
+        val extractsAudio = audioOnly || (audioOnlyFormats.isNotEmpty() && videoFormats.isEmpty())
         val mergeAudioStream = audioOnlyFormats.size > 1
         val formatId = formatList.joinToString(separator = "+") { it.formatId.toString() }
 
@@ -54,7 +57,7 @@ object TaskFactory {
                         splitByChapter = splitByChapter,
                         newTitle = newTitle,
                         mergeAudioStream = mergeAudioStream,
-                        extractAudio = extractAudio || audioOnly,
+                        extractAudio = extractAudio || extractsAudio,
                     )
                 }
                 .run {

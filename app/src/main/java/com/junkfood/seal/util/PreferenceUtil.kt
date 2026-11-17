@@ -44,6 +44,7 @@ const val CONFIGURE = "configure"
 const val DARK_THEME_VALUE = "dark_theme_value"
 const val AUDIO_CONVERT = "audio_convert"
 const val AUDIO_CONVERSION_FORMAT = "audio_convert_format"
+const val SPLIT_BY_CHAPTER = "split_by_chapter"
 const val AUDIO_FORMAT = "audio_format_preferred"
 const val AUDIO_QUALITY = "audio_quality"
 const val VIDEO_FORMAT = "video_format"
@@ -237,6 +238,7 @@ private val BooleanPreferenceDefaults =
         PLAYLIST_NUMBERING to false,
         PREFER_MP4 to false,
         EXPORT_M4B to false,
+        SPLIT_BY_CHAPTER to false,
     )
 
 private val IntPreferenceDefaults =
@@ -249,7 +251,7 @@ private val IntPreferenceDefaults =
         WELCOME_DIALOG to 1,
         AUDIO_CONVERSION_FORMAT to NOT_SPECIFIED,
         VIDEO_QUALITY to NOT_SPECIFIED,
-        VIDEO_FORMAT to FORMAT_QUALITY,
+        VIDEO_FORMAT to FORMAT_COMPATIBILITY,
         RANKING_STRICTNESS to 1,
         UPDATE_CHANNEL to STABLE,
         CONVERT_SUBTITLE to NOT_SPECIFIED,

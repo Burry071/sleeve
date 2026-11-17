@@ -15,6 +15,7 @@ import com.junkfood.seal.download.engine.ExtractionClients
 import com.junkfood.seal.download.engine.GhostHttpTransferEngine
 import com.junkfood.seal.download.engine.Nm3u8TransferEngine
 import com.junkfood.seal.download.engine.TransferJob
+import com.junkfood.seal.download.engine.YOUTUBE_CLIENT_LADDER
 import com.junkfood.seal.download.engine.YtDlpTransferEngine
 import com.junkfood.seal.download.engine.isSafeRemoteUrl as engineUrlIsSafe
 import com.junkfood.seal.download.engine.uniqueFileName as engineUniqueFileName
@@ -88,11 +89,8 @@ object DownloadUtil {
             }
             val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
             with(request) {
-                // Native YouTube clients: no JS runtime on Android.
-                addOption(
-                    "--extractor-args",
-                    "youtube:player_client=android_vr,android,ios",
-                )
+                // Flat playlist browsing carries no formats, so it runs on
+                // yt-dlp's own client selection like every other rung.
                 //            addOption("--compat-options", "no-youtube-unavailable-videos")
                 addOption("--flat-playlist")
                 addOption("--dump-single-json")
@@ -226,41 +224,32 @@ object DownloadUtil {
     ): Result<VideoInfo> {
         with(preferences) {
             // Extraction clients rotate on failure: YouTube's bot checks and
-            // rate limits are client-specific, so a request the native clients
-            // refuse often succeeds on the TV client or yt-dlp's own default.
+            // rate limits are client-specific, so a request yt-dlp's default
+            // selection refuses often succeeds on the TV/embedded pair.
             // Cancellation always stops the ladder.
-            val clientLadder =
-                when {
-                    url.contains("youtube.com", true) || url.contains("youtu.be", true) ->
-                        listOf(
-                            "android_vr,android,ios", // native clients, no JS needed
-                            "tv", // yt-dlp TV client, different challenge path
-                            null, // yt-dlp's own client selection
-                        )
-
-                    else -> listOf<String?>(null)
-                }
+            val isYoutube = url.contains("youtube.com", true) || url.contains("youtu.be", true)
+            val clientLadder: List<String?> = if (isYoutube) YOUTUBE_CLIENT_LADDER else listOf(null)
 
             var lastFailure: Throwable? = null
             clientLadder.forEach { clients ->
-                // The download stage re-extracts with the same clients that
-                // won here; a mismatch could fail a task that just worked.
-                if (taskKey != null && clients != null) {
-                    ExtractionClients.record(taskKey, clients)
-                }
+                val youtubeArgs =
+                    buildList {
+                            if (clients != null) add("player_client=$clients")
+                            if (autoSubtitle && !autoTranslatedSubtitles) {
+                                add("skip=translated_subs")
+                            }
+                        }
+                        .joinToString(separator = ";")
                 val request =
                     YoutubeDLRequest(url)
                         .maybeRedditUserAgent(url)
                         .apply {
                             addOption("-o", BASENAME)
-                            if (clients != null) {
-                                // No JS runtime exists on Android, so YouTube web
-                                // clients degrade (nsig throttling, missing formats).
-                                // Native clients need no JavaScript.
-                                addOption(
-                                    "--extractor-args",
-                                    "youtube:player_client=$clients",
-                                )
+                            // One argument per extractor: a second
+                            // "youtube:…" option would have to be merged by
+                            // yt-dlp, and its precedence is not documented.
+                            if (youtubeArgs.isNotEmpty()) {
+                                addOption("--extractor-args", "youtube:$youtubeArgs")
                             }
                             if (restrictFilenames) {
                                 addOption("--restrict-filenames")
@@ -283,9 +272,6 @@ object DownloadUtil {
                             }*/
                             if (autoSubtitle) {
                                 addOption("--write-auto-subs")
-                                if (!autoTranslatedSubtitles) {
-                                    addOption("--extractor-args", "youtube:skip=translated_subs")
-                                }
                             }
                             if (playlistIndex != null) {
                                 addOption("--playlist-items", playlistIndex)
@@ -298,7 +284,13 @@ object DownloadUtil {
                             addOption("--socket-timeout", "5")
                         }
                 val result = getVideoInfo(request, taskKey)
-                if (result.isSuccess) return result
+                if (result.isSuccess) {
+                    // Only a rung that worked is worth replaying at download
+                    // time; a null win must be replayable too, so it is
+                    // recorded as a win rather than skipped.
+                    if (taskKey != null) ExtractionClients.record(taskKey, clients)
+                    return result
+                }
                 lastFailure = result.exceptionOrNull()
                 if (lastFailure is YoutubeDL.CanceledException) return Result.failure(lastFailure!!)
                 Log.w(
@@ -472,7 +464,7 @@ object DownloadUtil {
                     sdcardUri = SDCARD_URI.getString(),
                     embedThumbnail = EMBED_THUMBNAIL.getBoolean(),
                     videoClips = emptyList(),
-                    splitByChapter = false,
+                    splitByChapter = SPLIT_BY_CHAPTER.getBoolean(),
                     debug = DEBUG.getBoolean(),
                     proxy = PROXY.getBoolean(),
                     proxyUrl = PROXY_URL.getString(),

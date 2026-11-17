@@ -124,6 +124,7 @@ import com.junkfood.seal.util.AUDIO_CONVERT
 import com.junkfood.seal.util.AUDIO_FORMAT
 import com.junkfood.seal.util.AUDIO_QUALITY
 import com.junkfood.seal.util.COOKIES
+import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.CUSTOM_COMMAND
 import com.junkfood.seal.util.CookieFileStatus
 import com.junkfood.seal.util.DatabaseUtil
@@ -139,8 +140,10 @@ import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
+import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
+import com.junkfood.seal.util.SPLIT_BY_CHAPTER
 import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.TEMPLATE_ID
 import com.junkfood.seal.util.THUMBNAIL
@@ -479,6 +482,7 @@ fun FormatPage(
         FormatPage(
             modifier = modifier,
             videoInfo = state.info,
+            audioOnly = state.audioOnly,
             onNavigateBack = { close() },
         )
     }
@@ -537,9 +541,17 @@ private fun ConfigurePage(
     var showTemplateSelectionDialog by remember { mutableStateOf(false) }
     var showTemplateCreatorDialog by remember { mutableStateOf(false) }
     var showTemplateEditorDialog by remember { mutableStateOf(false) }
-    val template by
-        remember(showTemplateCreatorDialog, showTemplateSelectionDialog, showTemplateEditorDialog) {
-            mutableStateOf(PreferenceUtil.getTemplate())
+    val templateList by PreferenceUtil.templateListStateFlow.collectAsStateWithLifecycle()
+    // Never block composition on the template table: re-resolve the selection
+    // from the observable list whenever the DB or a dialog changes.
+    val template =
+        remember(
+            templateList,
+            showTemplateCreatorDialog,
+            showTemplateSelectionDialog,
+            showTemplateEditorDialog,
+        ) {
+            templateList.find { it.id == TEMPLATE_ID.getInt() } ?: templateList.firstOrNull()
         }
 
     LaunchedEffect(selectedType) {
@@ -591,7 +603,7 @@ private fun ConfigurePage(
                             confirmationCallback = { scope.launch { TEMPLATE_ID.updateInt(it) } },
                         )
                     }
-                    if (showTemplateEditorDialog) {
+                    if (showTemplateEditorDialog && template != null) {
                         CommandTemplateDialog(
                             commandTemplate = template,
                             onDismissRequest = { showTemplateEditorDialog = false },
@@ -605,7 +617,7 @@ private fun ConfigurePage(
                         item {
                             ButtonChip(
                                 icon = Icons.Outlined.Code,
-                                label = template.name,
+                                label = template?.name.orEmpty(),
                                 onClick = { showTemplateSelectionDialog = true },
                             )
                         }
@@ -619,7 +631,11 @@ private fun ConfigurePage(
                         item {
                             ButtonChip(
                                 icon = Icons.Outlined.Edit,
-                                label = stringResource(id = R.string.edit_template, template.name),
+                                label =
+                                    stringResource(
+                                        id = R.string.edit_template,
+                                        template?.name.orEmpty(),
+                                    ),
                                 onClick = { showTemplateEditorDialog = true },
                             )
                         }
@@ -670,15 +686,21 @@ private fun ConfigurePage(
                 }
             },
             onTaskStart = {
-                onConfigSave(
-                    config.copy(
-                        useFormatSelection = useFormatSelection,
-                        downloadType = selectedType,
+                template?.let { selectedTemplate ->
+                    onConfigSave(
+                        config.copy(
+                            useFormatSelection = useFormatSelection,
+                            downloadType = selectedType,
+                        )
                     )
-                )
-                onActionPost(
-                    Action.RunCommand(url = url, template = template, preferences = preferences)
-                )
+                    onActionPost(
+                        Action.RunCommand(
+                            url = url,
+                            template = selectedTemplate,
+                            preferences = preferences,
+                        )
+                    )
+                }
             },
         )
     }
@@ -730,7 +752,7 @@ fun ConfigurePagePlaylistVariant(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 isQuickDownload = false,
                 preference = preferences,
-                selectedType = Audio,
+                selectedType = selectedType,
                 onPreferenceUpdate = {
                     onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
                 },
@@ -744,7 +766,7 @@ fun ConfigurePagePlaylistVariant(
             useFormatSelection = false,
             onCancel = onDismissRequest,
             onDownload = {
-                onDownload(initialDownloadType)
+                onDownload(selectedType)
                 onDismissRequest()
             },
             onFetchInfo = { throw IllegalStateException() },
@@ -766,6 +788,8 @@ private fun AdditionalSettings(
     val cookiesProfiles by DatabaseUtil.getCookiesFlow().collectAsStateWithLifecycle(emptyList())
     var showCookiesDialog by rememberSaveable { mutableStateOf(false) }
     var cookieStatus by remember { mutableStateOf<CookieFileStatus?>(null) }
+    var convertAudio by remember(preference) { mutableStateOf(preference.convertAudio) }
+    var splitByChapter by remember(preference) { mutableStateOf(preference.splitByChapter) }
     LaunchedEffect(Unit) {
         cookieStatus = withContext(Dispatchers.IO) { with(FileUtil) { context.readCookieStatus() } }
     }
@@ -804,6 +828,43 @@ private fun AdditionalSettings(
                     onPreferenceUpdate()
                 },
                 label = stringResource(R.string.create_thumbnail),
+            )
+        }
+
+        if (selectedType == Audio) {
+            Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                VideoFilterChip(
+                    selected = !convertAudio,
+                    onClick = {
+                        convertAudio = false
+                        AUDIO_CONVERT.updateBoolean(false)
+                        onPreferenceUpdate()
+                    },
+                    label = stringResource(R.string.audio_source_original),
+                )
+                VideoFilterChip(
+                    selected = convertAudio,
+                    onClick = {
+                        convertAudio = true
+                        AUDIO_CONVERSION_FORMAT.updateInt(CONVERT_MP3)
+                        AUDIO_CONVERT.updateBoolean(true)
+                        onPreferenceUpdate()
+                    },
+                    label = stringResource(R.string.audio_source_mp3),
+                )
+            }
+        }
+
+        Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            VideoFilterChip(
+                selected = splitByChapter,
+                enabled = selectedType != Command,
+                onClick = {
+                    splitByChapter = !splitByChapter
+                    SPLIT_BY_CHAPTER.updateBoolean(splitByChapter)
+                    onPreferenceUpdate()
+                },
+                label = stringResource(R.string.split_chapters_toggle),
             )
         }
 

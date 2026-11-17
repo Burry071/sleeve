@@ -215,18 +215,16 @@ internal fun YoutubeDLRequest.addOptionsForAudioDownloads(
             if (mergeAudioStream) {
                 request.addOption("--audio-multistreams")
             }
-        } else if (convertAudio) {
-            when (audioConvertFormat) {
-                CONVERT_MP3 -> {
-                    request.addOption("--audio-format", "mp3")
-                }
-
-                CONVERT_M4A -> {
-                    request.addOption("--audio-format", "m4a")
-                }
-            }
-        } else {
+        } else if (!convertAudio) {
             request.applyFormatSorter(settings.preferences, audioFormatSorter(settings.preferences))
+        }
+        // Conversion is a postprocessor, not a format pick: a user-chosen
+        // audio format still has to come out as MP3/M4A when they asked for it.
+        if (convertAudio) {
+            when (audioConvertFormat) {
+                CONVERT_MP3 -> request.addOption("--audio-format", "mp3")
+                CONVERT_M4A -> request.addOption("--audio-format", "m4a")
+            }
         }
 
         if (embedMetadata) {
