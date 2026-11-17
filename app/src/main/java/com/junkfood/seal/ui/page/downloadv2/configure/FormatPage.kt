@@ -101,21 +101,17 @@ import com.junkfood.seal.ui.page.download.VideoSelectionSlider
 import com.junkfood.seal.ui.page.settings.general.DialogCheckBoxItem
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.ui.theme.generateLabelColor
-import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
-import com.junkfood.seal.util.AUDIO_CONVERT
-import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.Chapter
 import com.junkfood.seal.util.EMBED_SUBTITLE
 import com.junkfood.seal.util.Format
+import com.junkfood.seal.util.FormatSelectionPolicy
 import com.junkfood.seal.util.MERGE_MULTI_AUDIO_STREAM
 import com.junkfood.seal.util.MERGE_OUTPUT_MKV
 import com.junkfood.seal.util.PREFER_MP4
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getString
-import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.PreferenceUtil.updateString
-import com.junkfood.seal.util.SPLIT_BY_CHAPTER
 import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.SUBTITLE_LANGUAGE
 import com.junkfood.seal.util.SubtitleFormat
@@ -135,6 +131,7 @@ private data class FormatConfig(
     val formatList: List<Format>,
     val videoClips: List<VideoClip>,
     val splitByChapter: Boolean,
+    val convertAudio: Boolean,
     val newTitle: String,
     val selectedSubtitles: List<String>,
     val selectedAutoCaptions: List<String>,
@@ -145,6 +142,8 @@ fun FormatPage(
     modifier: Modifier = Modifier,
     videoInfo: VideoInfo,
     audioOnly: Boolean = false,
+    splitByChapter: Boolean = false,
+    convertAudio: Boolean = false,
     downloader: DownloaderV2 = koinInject(),
     onNavigateBack: () -> Unit = {},
 ) {
@@ -170,6 +169,8 @@ fun FormatPage(
         videoInfo = videoInfo,
         onNavigateBack = onNavigateBack,
         audioOnly = audioOnly,
+        initialSplitByChapter = splitByChapter,
+        initialConvertAudio = convertAudio,
         mergeAudioStream = !audioOnly && mergeAudioStream,
         selectedSubtitleCodes = initialSelectedSubtitles,
         isClippingAvailable = VIDEO_CLIP.getBoolean() && (videoInfo.duration ?: .0) >= 0,
@@ -186,6 +187,7 @@ fun FormatPage(
                     formatList = formatList,
                     videoClips = videoClips,
                     splitByChapter = splitByChapter,
+                    convertAudio = convertAudio,
                     newTitle = newTitle,
                     selectedSubtitles = selectedSubtitles,
                     selectedAutoCaptions = selectedAutoCaptions,
@@ -304,6 +306,8 @@ private fun FormatPageImpl(
     modifier: Modifier = Modifier,
     videoInfo: VideoInfo = VideoInfo(),
     audioOnly: Boolean = false,
+    initialSplitByChapter: Boolean = false,
+    initialConvertAudio: Boolean = false,
     mergeAudioStream: Boolean = false,
     isClippingAvailable: Boolean = false,
     selectedSubtitleCodes: Set<String>,
@@ -326,19 +330,29 @@ private fun FormatPageImpl(
     var audioOnlyItemLimit by remember { mutableIntStateOf(6) }
     var videoAudioItemLimit by remember { mutableIntStateOf(6) }
 
-    val isSuggestedFormatAvailable =
-        !audioOnly &&
-            (!videoInfo.requestedFormats.isNullOrEmpty() ||
-                !videoInfo.requestedDownloads.isNullOrEmpty())
+    val suggestedFormats =
+        remember(videoInfo, audioOnly) {
+            FormatSelectionPolicy.suggestedFormats(videoInfo, audioOnly)
+        }
 
-    var isSuggestedFormatSelected by remember { mutableStateOf(isSuggestedFormatAvailable) }
+    val isSuggestedFormatAvailable = !audioOnly && suggestedFormats.isNotEmpty()
+
+    // Starts on the suggested set whenever there is one, so the CTA is never stranded
+    // by an extractor that reports formats but no requestedFormats.
+    var isSuggestedFormatSelected by remember { mutableStateOf(suggestedFormats.isNotEmpty()) }
 
     var selectedVideoAudioFormat by remember { mutableIntStateOf(NOT_SELECTED) }
     var selectedVideoOnlyFormat by remember { mutableIntStateOf(NOT_SELECTED) }
     val selectedAudioOnlyFormats = remember {
-        mutableStateListOf<Int>().apply { if (audioOnly && audioOnlyFormats.isNotEmpty()) add(0) }
+        mutableStateListOf<Int>().apply {
+            if (audioOnly) {
+                FormatSelectionPolicy.bestAudioIndex(audioOnlyFormats)
+                    .takeIf { it != NOT_SELECTED }
+                    ?.let(::add)
+            }
+        }
     }
-    var convertAudio by remember { mutableStateOf(AUDIO_CONVERT.getBoolean()) }
+    var convertAudio by remember { mutableStateOf(initialConvertAudio) }
     val audioFallback = audioOnly && audioOnlyFormats.isEmpty()
     val context = LocalContext.current
 
@@ -362,9 +376,8 @@ private fun FormatPageImpl(
         }
 
     var isClippingVideo by remember { mutableStateOf(false) }
-    // The sheet's "Split chapters" chip writes this preference; the per-download
-    // toggle starts where the user left it and can still override it here.
-    var isSplittingVideo by remember { mutableStateOf(SPLIT_BY_CHAPTER.getBoolean()) }
+    // The sheet's split chip seeds this session's value; the toggle here can still change it.
+    var isSplittingVideo by remember { mutableStateOf(initialSplitByChapter) }
     val isSplitByChapterAvailable = !videoInfo.chapters.isNullOrEmpty()
 
     val videoDurationRange = 0f..(videoInfo.duration?.toFloat() ?: 0f)
@@ -389,14 +402,11 @@ private fun FormatPageImpl(
 
     val lazyGridState = rememberLazyGridState()
 
-    val formatList: List<Format> by remember {
+    val formatList: List<Format> by remember(suggestedFormats) {
         derivedStateOf {
             mutableListOf<Format>().apply {
                 if (isSuggestedFormatSelected) {
-                    videoInfo.requestedFormats?.let { addAll(it) }
-                        ?: videoInfo.requestedDownloads?.forEach {
-                            it.requestedFormats?.let { addAll(it) }
-                        }
+                    addAll(suggestedFormats)
                 } else {
                     selectedAudioOnlyFormats.forEach { index ->
                         add(audioOnlyFormats.elementAt(index))
@@ -450,6 +460,7 @@ private fun FormatPageImpl(
                                         if (isClippingVideo) listOf(VideoClip(videoClipDuration))
                                         else emptyList(),
                                     splitByChapter = isSplittingVideo,
+                                    convertAudio = convertAudio,
                                     newTitle = videoTitle,
                                     selectedSubtitles = selectedSubtitles,
                                     selectedAutoCaptions = selectedAutoCaptions,
@@ -642,6 +653,7 @@ private fun FormatPageImpl(
                         SuggestedFormatItem(
                             modifier = Modifier.weight(1f),
                             videoInfo = videoInfo,
+                            formats = suggestedFormats,
                             selected = isSuggestedFormatSelected,
                             onClick = onClick,
                         )
@@ -649,7 +661,8 @@ private fun FormatPageImpl(
                 }
             }
 
-            if (audioOnlyFormats.isNotEmpty())
+            fun audioSection() {
+                if (audioOnlyFormats.isEmpty()) return
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -671,81 +684,74 @@ private fun FormatPageImpl(
                     }
                 }
 
-            if (audioOnlyFormats.isNotEmpty())
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        VideoFilterChip(
-                            selected = !convertAudio,
-                            onClick = {
-                                convertAudio = false
-                                AUDIO_CONVERT.updateBoolean(false)
-                            },
-                            label = stringResource(R.string.audio_source_original),
-                        )
-                        VideoFilterChip(
-                            selected = convertAudio,
-                            onClick = {
-                                convertAudio = true
-                                AUDIO_CONVERSION_FORMAT.updateInt(CONVERT_MP3)
-                                AUDIO_CONVERT.updateBoolean(true)
-                            },
-                            label = stringResource(R.string.audio_source_mp3),
-                        )
-                    }
-                }
-
-            itemsIndexed(
-                audioOnlyFormats.subList(
-                    fromIndex = 0,
-                    toIndex = min(audioOnlyItemLimit, audioOnlyFormats.size),
-                )
-            ) { index, formatInfo ->
-                FormatItem(
-                    formatInfo = formatInfo,
-                    duration = duration,
-                    selected = selectedAudioOnlyFormats.contains(index),
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    outlineColor = MaterialTheme.colorScheme.secondary,
-                    onLongClick = { formatInfo.url.share() },
-                ) {
-                    if (selectedAudioOnlyFormats.contains(index)) {
-                        selectedAudioOnlyFormats.remove(index)
-                    } else {
-                        if (!mergeAudioStream) {
-                            selectedAudioOnlyFormats.clear()
+                if (audioOnly)
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            VideoFilterChip(
+                                selected = !convertAudio,
+                                onClick = { convertAudio = false },
+                                label = stringResource(R.string.audio_source_original),
+                            )
+                            VideoFilterChip(
+                                selected = convertAudio,
+                                onClick = { convertAudio = true },
+                                label = stringResource(R.string.audio_source_mp3),
+                            )
                         }
-                        isSuggestedFormatSelected = false
-                        selectedAudioOnlyFormats.add(index)
+                    }
+
+                itemsIndexed(
+                    audioOnlyFormats.subList(
+                        fromIndex = 0,
+                        toIndex = min(audioOnlyItemLimit, audioOnlyFormats.size),
+                    )
+                ) { index, formatInfo ->
+                    FormatItem(
+                        formatInfo = formatInfo,
+                        duration = duration,
+                        selected = selectedAudioOnlyFormats.contains(index),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        outlineColor = MaterialTheme.colorScheme.secondary,
+                        onLongClick = { formatInfo.url.share() },
+                    ) {
+                        if (selectedAudioOnlyFormats.contains(index)) {
+                            selectedAudioOnlyFormats.remove(index)
+                        } else {
+                            if (!mergeAudioStream) {
+                                selectedAudioOnlyFormats.clear()
+                            }
+                            isSuggestedFormatSelected = false
+                            selectedAudioOnlyFormats.add(index)
+                        }
                     }
                 }
             }
 
-            if (!audioOnly) {
-                if (videoOnlyFormats.isNotEmpty())
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = 16.dp).padding(horizontal = 12.dp),
-                        ) {
-                            FormatSubtitle(
-                                text = stringResource(R.string.video_only),
-                                color = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.weight(1f).padding(vertical = 4.dp),
-                            )
+            fun videoWithoutAudioSection() {
+                if (videoOnlyFormats.isEmpty()) return
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 16.dp).padding(horizontal = 12.dp),
+                    ) {
+                        FormatSubtitle(
+                            text = stringResource(R.string.video_only),
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+                        )
 
-                            ClickableTextAction(
-                                visible = videoOnlyItemLimit < videoOnlyFormats.size,
-                                text =
-                                    stringResource(R.string.show_all_items, videoOnlyFormats.size),
-                            ) {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                                videoOnlyItemLimit = Int.MAX_VALUE
-                            }
+                        ClickableTextAction(
+                            visible = videoOnlyItemLimit < videoOnlyFormats.size,
+                            text = stringResource(R.string.show_all_items, videoOnlyFormats.size),
+                        ) {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            videoOnlyItemLimit = Int.MAX_VALUE
                         }
                     }
+                }
                 itemsIndexed(
                     videoOnlyFormats.subList(0, min(videoOnlyItemLimit, videoOnlyFormats.size))
                 ) { index, formatInfo ->
@@ -762,12 +768,27 @@ private fun FormatPageImpl(
                             else {
                                 selectedVideoAudioFormat = NOT_SELECTED
                                 isSuggestedFormatSelected = false
+                                // A silent video needs an audio track; pair one so the task
+                                // cannot silently save as video-only.
+                                FormatSelectionPolicy.audioPairIndex(
+                                        selectedAudioOnlyFormats,
+                                        audioOnlyFormats,
+                                    )
+                                    .takeIf { it != NOT_SELECTED }
+                                    ?.let { pair ->
+                                        if (!selectedAudioOnlyFormats.contains(pair)) {
+                                            if (!mergeAudioStream) selectedAudioOnlyFormats.clear()
+                                            selectedAudioOnlyFormats.add(pair)
+                                        }
+                                    }
                                 index
                             }
                     }
                 }
             }
-            if ((!audioOnly || audioFallback) && videoAudioFormats.isNotEmpty()) {
+
+            fun videoSection() {
+                if (videoAudioFormats.isEmpty()) return
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -809,6 +830,20 @@ private fun FormatPageImpl(
                     }
                 }
             }
+
+            FormatSelectionPolicy.sectionOrder(
+                    audioOnly = audioOnly,
+                    hasVideoAudio = videoAudioFormats.isNotEmpty(),
+                    hasVideoOnly = videoOnlyFormats.isNotEmpty(),
+                    hasAudioOnly = audioOnlyFormats.isNotEmpty(),
+                )
+                .forEach { section ->
+                    when (section) {
+                        FormatSelectionPolicy.Section.Video -> videoSection()
+                        FormatSelectionPolicy.Section.VideoWithoutAudio -> videoWithoutAudioSection()
+                        FormatSelectionPolicy.Section.Audio -> audioSection()
+                    }
+                }
 
             if (!audioOnly && audioOnlyFormats.isNotEmpty() && videoOnlyFormats.isNotEmpty())
                 item(span = { GridItemSpan(maxLineSpan) }) {

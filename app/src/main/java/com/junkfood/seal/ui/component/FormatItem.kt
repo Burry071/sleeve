@@ -212,22 +212,18 @@ fun VideoInfoPreview() {
 fun SuggestedFormatItem(
     modifier: Modifier = Modifier,
     videoInfo: VideoInfo,
+    formats: List<Format>,
     selected: Boolean = false,
     onClick: () -> Unit = {},
 ) {
-    val requestedFormats =
-        videoInfo.requestedFormats
-            ?: videoInfo.requestedDownloads?.map { it.toFormat() }
-            ?: emptyList()
     val duration = videoInfo.duration ?: 0.0
+    val containsVideo = formats.any { it.containsVideo() }
+    val containsAudio = formats.any { it.containsAudio() }
 
-    val containsVideo = requestedFormats.any { it.containsVideo() }
-    val containsAudio = requestedFormats.any { it.containsAudio() }
-
-    val title = requestedFormats.joinToString(separator = " + ") { it.format.toString() }
+    val title = formats.joinToString(separator = " + ") { it.format.toString() }
 
     val totalFileSize =
-        requestedFormats.fold(initial = 0.0) { acc: Double, format: Format ->
+        formats.fold(initial = 0.0) { acc: Double, format: Format ->
             acc +
                 (format.fileSize ?: format.fileSizeApprox ?: (duration * (format.tbr ?: 0.0) * 125))
             // kbps -> bytes 1000/8
@@ -235,7 +231,7 @@ fun SuggestedFormatItem(
     val fileSizeText = totalFileSize.takeIf { it > 0 }.toFileSizeText()
 
     val totalTbr =
-        requestedFormats.fold(initial = 0.0) { acc: Double, format: Format ->
+        formats.fold(initial = 0.0) { acc: Double, format: Format ->
             acc + (format.tbr ?: 0.0)
         }
 
