@@ -2,7 +2,9 @@ package com.junkfood.seal
 
 import com.junkfood.seal.util.ContainerLabel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContainerLabelTest {
@@ -45,5 +47,34 @@ class ContainerLabelTest {
     @Test
     fun `a dot in a directory is not an extension`() {
         assertNull(ContainerLabel.of("/storage/emulated/0/my.folder/Clip"))
+    }
+
+    @Test
+    fun `audio containers are audio`() {
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.mp3") == true)
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.m4a") == true)
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.opus") == true)
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.flac") == true)
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.ogg") == true)
+        assertTrue(ContainerLabel.isAudio("/storage/emulated/0/Download/a.wav") == true)
+    }
+
+    @Test
+    fun `video containers are not audio`() {
+        assertFalse(ContainerLabel.isAudio("/storage/emulated/0/Download/a.mp4") == true)
+        assertFalse(ContainerLabel.isAudio("/storage/emulated/0/Download/a.mkv") == true)
+        assertFalse(ContainerLabel.isAudio("/storage/emulated/0/Download/a.webm") == true)
+    }
+
+    @Test
+    fun `an unknown container is neither audio nor video`() {
+        assertNull(ContainerLabel.isAudio(null))
+        assertNull(
+            ContainerLabel.isAudio(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload/" +
+                    "document/primary%3ADownload%2Fclip.mkv"
+            )
+        )
+        assertNull(ContainerLabel.isAudio("/storage/emulated/0/Download/Clip.part"))
     }
 }

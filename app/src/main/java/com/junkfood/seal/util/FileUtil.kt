@@ -267,20 +267,33 @@ object FileUtil {
         val fresh =
             if (modifiedAfterMs != null) candidates.filter { it.lastModified() >= modifiedAfterMs }
             else emptyList()
-        return (if (fresh.isNotEmpty()) fresh else candidates.filter { it.absolutePath.contains(title) })
-            .map { it.absolutePath }
-            .toMutableList()
-            .apply {
-                MediaScannerConnection.scanFile(context, this.toList().toTypedArray(), null, null)
+        val media =
+            (if (fresh.isNotEmpty()) fresh else candidates.filter { it.absolutePath.contains(title) })
                 // A thumbnail sidecar (.jpg/.png) must not be reported as the
                 // download, but a gallery/photo item IS the image: dropping it
                 // made the task fail after the file had already been written,
                 // and the yt-dlp retry downloaded the same image twice.
-                removeAll {
-                    it.contains(Regex(SUBTITLE_REGEX)) ||
-                        (!keepImages && it.contains(Regex(THUMBNAIL_REGEX)))
+                .filterNot {
+                    it.path.contains(Regex(SUBTITLE_REGEX)) ||
+                        (!keepImages && it.path.contains(Regex(THUMBNAIL_REGEX)))
                 }
-            }
+                .map { it.absolutePath }
+        // Only what this download produced reaches the gallery. Scanning first
+        // also indexed the sidecars, and any older file the walk picked up.
+        MediaScannerConnection.scanFile(context, media.toTypedArray(), null, null)
+        return media
+    }
+
+    /**
+     * Publish documents just moved onto the shared volume. The move goes through
+     * SAF, so media written that way is invisible to the gallery until the
+     * provider's document id is mapped back to a path and scanned.
+     */
+    fun scanSdcardDocuments(documents: List<String>) {
+        val paths = documents.mapNotNull { SafDocumentPaths.externalStoragePath(it) }
+        if (paths.isNotEmpty()) {
+            MediaScannerConnection.scanFile(context, paths.toTypedArray(), null, null)
+        }
     }
 
     fun scanDownloadDirectoryToMediaLibrary(downloadDir: String) =

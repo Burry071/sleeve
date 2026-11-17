@@ -2,6 +2,7 @@ package com.junkfood.seal
 
 import com.junkfood.seal.util.ArchiveIndex
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -78,5 +79,27 @@ class ArchiveIndexTest {
     @Test
     fun `a missing file reads as empty`() {
         assertFalse(ArchiveIndex.contains(File(tmp.root, "absent.txt"), "Youtube", id))
+    }
+
+    @Test
+    fun `forget drops only the exact entry`() {
+        val file = archive("youtube $id\nyoutube BBBBBBBBBBB\n")
+        assertTrue(ArchiveIndex.forget(file, "Youtube", id))
+
+        assertEquals("youtube BBBBBBBBBBB\n", file.readText())
+        assertFalse(ArchiveIndex.contains(file, "Youtube", id))
+        assertTrue(ArchiveIndex.contains(file, "Youtube", "BBBBBBBBBBB"))
+    }
+
+    @Test
+    fun `forget on an absent entry leaves the file untouched`() {
+        val file = archive("youtube BBBBBBBBBBB\n")
+        assertFalse(ArchiveIndex.forget(file, "Youtube", id))
+        assertEquals("youtube BBBBBBBBBBB\n", file.readText())
+    }
+
+    @Test
+    fun `forget on a missing file is not an error`() {
+        assertFalse(ArchiveIndex.forget(File(tmp.root, "absent.txt"), "Youtube", id))
     }
 }

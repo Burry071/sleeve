@@ -30,6 +30,18 @@ object ContainerLabel {
 
     fun containerLabel(extension: String): String = extension.uppercase()
 
+    /** Containers this app writes when it extracts audio. */
+    private val audioExtensions =
+        setOf("mp3", "m4a", "aac", "opus", "ogg", "oga", "flac", "wav", "wma", "alac", "aiff")
+
+    /**
+     * Whether a finished file is audio, read from its name. Null when the name
+     * does not say: a private-mode download has no path, a SAF document id is
+     * not a file name, and an unknown extension could be anything.
+     */
+    fun isAudio(filePath: String?): Boolean? =
+        of(filePath)?.let { it.lowercase() in audioExtensions }
+
     /**
      * Null for a private-mode download (no path) and for a SAF move (`content://`), where a
      * document id is not a file name.

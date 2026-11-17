@@ -119,8 +119,10 @@ import com.junkfood.seal.download.BatchOps
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.MatchCandidate
 import com.junkfood.seal.download.MatchOps
+import com.junkfood.seal.download.PostProcessing
 import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.TaskKind
 import com.junkfood.seal.download.phase
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
@@ -266,6 +268,9 @@ sealed interface UiAction {
 
     data object Resume : UiAction
 
+    /** Fetches a finished file again; the archive entry from the first run goes first. */
+    data object Redownload : UiAction
+
     data class CopyErrorReport(val throwable: Throwable, val message: String = "") : UiAction
 
     /** Re-opens the confirm sheet for a login-walled failure. */
@@ -356,6 +361,7 @@ fun DownloadPageV2(
             UiAction.Cancel -> downloader.cancel(task)
             UiAction.Delete -> downloader.remove(task)
             UiAction.Resume -> downloader.restart(task)
+            UiAction.Redownload -> downloader.redownload(task)
             is UiAction.CopyErrorReport -> {
                 clipboardManager.setText(
                     AnnotatedString(getErrorReport(action.throwable, task.url, action.message))
@@ -674,16 +680,28 @@ fun DownloadPageImplV2(
 
                     if (activeFilter.showsTaskCards && filteredMap.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            val videoCount =
-                                filteredMap.count {
-                                    !it.value.viewState.videoFormats.isNullOrEmpty()
-                                }
+                            // Count what the file is, not what formats the page
+                            // happened to list: an "Audio only" pick used to
+                            // arrive as a video because it also had video
+                            // formats to choose from.
+                            val audioCount =
+                                filteredMap.count { (task, state) -> TaskKind.isAudio(task, state) }
                             SubHeader(
                                 modifier = Modifier,
-                                videoCount = videoCount,
-                                audioCount = filteredMap.size - videoCount,
+                                videoCount = filteredMap.size - audioCount,
+                                audioCount = audioCount,
                                 isGridView = isGridView,
                                 onToggleView = { isGridView = !isGridView },
+                                onClearFinished =
+                                    if (activeFilter == Filter.Finished) {
+                                        {
+                                            // Each removal mutates the state map
+                                            // this filter reads, so walk a copy.
+                                            filteredMap.keys.toList().forEach {
+                                                onActionPost(it, UiAction.Delete)
+                                            }
+                                        }
+                                    } else null,
                             )
                         }
                     }
@@ -724,6 +742,14 @@ fun DownloadPageImplV2(
                                 key = { (task, _) -> task.uiKey },
                             ) { (task, state) ->
                                 val keptFile = retainedShareFile(state.downloadState)
+                                val running = state.downloadState as? Running
+                                // yt-dlp reports the merge/extract/tag steps as
+                                // log lines after the last byte arrived.
+                                val converting =
+                                    running != null && PostProcessing.inProgress(running.progressText)
+                                val postProcessingText =
+                                    if (converting) stringResource(R.string.post_processing_running)
+                                    else null
                                 with(state.viewState) {
                                     VideoCardV2(
                                         modifier =
@@ -732,12 +758,14 @@ fun DownloadPageImplV2(
                                                 .padding(),
                                         viewState = this,
                                         progress =
-                                            (state.downloadState as? Running)
+                                            running
                                                 ?.progress
-                                                ?.takeIf { it >= 0f },
+                                                ?.takeIf { it >= 0f && !converting },
+                                        postProcessing = converting,
                                         statusLine = statusLine(state.downloadState),
                                         statusText =
-                                            statusText(state.downloadState)
+                                            postProcessingText
+                                                ?: statusText(state.downloadState)
                                                 ?: (state.downloadState as? Completed)
                                                     ?.warning
                                                     ?.takeIf { it.isNotBlank() }
@@ -1177,6 +1205,8 @@ fun SubHeader(
     audioCount: Int = 0,
     isGridView: Boolean = true,
     onToggleView: () -> Unit,
+    /** Removes finished cards, never their files. Null hides the action. */
+    onClearFinished: (() -> Unit)? = null,
 ) {
     val text = buildString {
         if (videoCount > 0) {
@@ -1203,6 +1233,12 @@ fun SubHeader(
         }
 
         Spacer(modifier = Modifier.weight(1f))
+
+        if (onClearFinished != null) {
+            TextButton(onClick = onClearFinished, modifier = Modifier) {
+                Text(text = stringResource(R.string.clear_finished))
+            }
+        }
 
         FilledIconButton(
             onClick = onToggleView,

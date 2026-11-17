@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Login
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -101,6 +102,18 @@ private fun PlayButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
         contentColor = LocalFixedColorRoles.current.onPrimaryFixedVariant,
         imageVector = Icons.Rounded.PlayArrow,
         text = stringResource(R.string.open_file),
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun RedownloadButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    ActionSheetPrimaryButton(
+        modifier = modifier,
+        containerColor = LocalFixedColorRoles.current.tertiaryFixed,
+        contentColor = LocalFixedColorRoles.current.onTertiaryFixedVariant,
+        imageVector = Icons.Rounded.Refresh,
+        text = stringResource(R.string.redownload),
         onClick = onClick,
     )
 }
@@ -348,6 +361,12 @@ fun LazyListScope.ActionButtons(
             item(key = "ShareButton") {
                 ShareButton(modifier = Modifier.animateItem()) {
                     onActionPost(task, UiAction.ShareFile(downloadState.filePath))
+                }
+            }
+            item(key = "RedownloadButton") {
+                RedownloadButton(modifier = Modifier.animateItem()) {
+                    onActionPost(task, UiAction.Redownload)
+                    onDismissRequest()
                 }
             }
         }

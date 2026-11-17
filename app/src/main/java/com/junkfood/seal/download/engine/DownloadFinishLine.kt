@@ -137,6 +137,7 @@ internal suspend fun onFinishDownloading(
                                 if (copiedName == exported?.name) exportUri = destUri
                             },
                         )
+                        .onSuccess { FileUtil.scanSdcardDocuments(it) }
                         .map { paths ->
                             val uri = exportUri
                             if (uri != null) listOf(uri) + paths.filter { it != uri } else paths

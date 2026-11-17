@@ -24,7 +24,11 @@ object DatabaseUtil {
 
     fun insertInfo(vararg infoList: DownloadedVideoInfo) {
         applicationScope.launch(Dispatchers.IO) {
-            infoList.forEach { dao.insertInfoDistinctByPath(it) }
+            infoList.forEach { info ->
+                // A path that downloads again owns its row again.
+                PreferenceUtil.includeHistoryPath(info.videoPath)
+                dao.insertInfoDistinctByPath(info)
+            }
         }
     }
 
@@ -64,6 +68,9 @@ object DatabaseUtil {
 
     suspend fun deleteInfoList(infoList: List<DownloadedVideoInfo>, deleteFile: Boolean = false) {
         dao.deleteInfoList(infoList)
+        // Remember the removal, or the disk backfill will treat the row as lost
+        // and put it straight back.
+        PreferenceUtil.excludeHistoryPaths(infoList.map { it.videoPath })
         infoList.forEach { info -> if (deleteFile) FileUtil.deleteFile(info.videoPath) }
     }
 
@@ -93,6 +100,7 @@ object DatabaseUtil {
         applicationScope.launch(Dispatchers.IO) {
             val knownPaths =
                 getDownloadHistory().mapTo(mutableSetOf()) { it.videoPath }
+            val excluded = PreferenceUtil.getExcludedHistoryPaths()
             val dirs =
                 listOf(
                         runCatching { App.videoDownloadDir }.getOrNull(),
@@ -112,6 +120,7 @@ object DatabaseUtil {
                             }
                     }
                     .filter { it.absolutePath !in knownPaths }
+                    .filter { it.absolutePath !in excluded }
                     .map { file ->
                         DownloadedVideoInfo(
                             id = 0,
