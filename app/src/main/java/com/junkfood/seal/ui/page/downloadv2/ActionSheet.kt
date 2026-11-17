@@ -313,6 +313,22 @@ fun SheetContent(
             }
         }
 
+        // The failure sentence in full: the card has room for one line, and
+        // "not found" reads very differently from "the site wants a cookie".
+        if (downloadState is Error) {
+            val message = downloadState.message.trim()
+            if (message.isNotEmpty()) {
+                item(key = "ErrorMessage") {
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
         cookieStatus?.takeIf { downloadState is Error && hasCookieAction(downloadState) }?.let {
             if (!it.usable) {
                 item(key = "CookieStatusNote") {

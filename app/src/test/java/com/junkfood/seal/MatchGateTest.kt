@@ -13,6 +13,7 @@ import com.junkfood.seal.download.Task.DownloadState.ReadyWithInfo
 import com.junkfood.seal.download.Task.RestartableAction
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
+import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -156,6 +157,37 @@ class MatchGateTest {
         assertEquals(1, summary.canceled)
         assertEquals(1, MatchOps.reviewCount(entries))
         assertTrue(MatchOps.reviewVisible(entries))
+    }
+
+    @Test
+    fun `a held pick opens the review entry before the batch finishes`() {
+        // A held row is finished but stuck: Resume refuses it, so waiting for
+        // the rest of the batch to finish would leave the user with no way in.
+        val entries =
+            listOf(
+                task(0) to state(heldMatch()),
+                task(1) to
+                    state(
+                        heldMatch().copy(held = false),
+                        Task.DownloadState.Running(Job(), "id-1", 0.2f),
+                    ),
+            )
+
+        assertTrue("a held row must not wait for its batch", MatchOps.reviewVisible(entries))
+    }
+
+    @Test
+    fun `accept all still applies when a held book sits beside flagged picks`() {
+        val flagged = MatchResult(candidates = listOf(), flagged = true)
+
+        val mixed = listOf(task(0) to state(heldMatch()), task(1) to state(flagged))
+        assertTrue(MatchOps.acceptAllAvailable(mixed))
+
+        val heldOnly = listOf(task(0) to state(heldMatch()))
+        assertFalse("a hold never leaves through a batch action", MatchOps.acceptAllAvailable(heldOnly))
+
+        val flaggedOnly = listOf(task(1) to state(flagged))
+        assertTrue(MatchOps.acceptAllAvailable(flaggedOnly))
     }
 
     @Test

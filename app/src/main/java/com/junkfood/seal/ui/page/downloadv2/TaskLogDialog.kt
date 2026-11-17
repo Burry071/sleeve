@@ -10,12 +10,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.junkfood.seal.R
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.TaskAuditLog
+import com.junkfood.seal.util.ToastUtil
 
 /** Runtime audit trail for one task: its cookie state and every match score. */
 @Composable
@@ -24,6 +27,7 @@ fun TaskLogDialog(
     onDismissRequest: () -> Unit,
 ) {
     val lines = TaskAuditLog.read(task.id)
+    val clipboardManager = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text(stringResource(R.string.task_log_title)) },
@@ -44,6 +48,18 @@ fun TaskLogDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismissRequest) { Text(stringResource(R.string.close)) }
+        },
+        dismissButton = {
+            if (lines.isNotEmpty()) {
+                TextButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(lines.joinToString("\n")))
+                        ToastUtil.makeToast(R.string.info_copied)
+                    }
+                ) {
+                    Text(stringResource(R.string.copy_log))
+                }
+            }
         },
     )
 }

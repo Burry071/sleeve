@@ -161,6 +161,7 @@ import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.NOTIFICATION
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
@@ -281,6 +282,12 @@ sealed interface UiAction {
 
     /** Opens the runtime audit log (cookie state and every match score). */
     data object ShowLogs : UiAction
+
+    /**
+     * Lets these parked tasks start on the current metered network. The permit
+     * names them, so it cannot start a burst the user did not tap.
+     */
+    data class AllowMetered(val taskIds: Set<String>) : UiAction
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
@@ -341,6 +348,7 @@ fun DownloadPageV2(
         onMenuOpen = onMenuOpen,
         onBatchStop = { batchId -> downloader.cancelBatch(batchId) },
         onBatchResume = { batchId -> downloader.resumeBatch(batchId) },
+        onBatchAllowMetered = { taskIds -> downloader.allowMeteredOnce(taskIds) },
         onBatchDismiss = { batchId -> downloader.dismissBatch(batchId) },
         reviewBatchId = reviewBatchId,
         onReviewOpen = { batchId -> dialogViewModel.openMatchReview(batchId) },
@@ -407,6 +415,7 @@ fun DownloadPageV2(
                 }
             }
             UiAction.ShowLogs -> logTask = task
+            is UiAction.AllowMetered -> downloader.allowMeteredOnce(action.taskIds)
         }
     }
 
@@ -505,6 +514,7 @@ fun DownloadPageImplV2(
     onMenuOpen: () -> Unit = {},
     onBatchStop: (String) -> Unit = {},
     onBatchResume: (String) -> Unit = {},
+    onBatchAllowMetered: (Set<String>) -> Unit = {},
     onBatchDismiss: (String) -> Unit = {},
     reviewBatchId: String? = null,
     onReviewOpen: (String) -> Unit = {},
@@ -727,6 +737,7 @@ fun DownloadPageImplV2(
                                 onResume = { onBatchResume(group.batch.id) },
                                 onDismiss = { dismissTarget = group.batch },
                                 onReview = { onReviewOpen(group.batch.id) },
+                                onAllowMetered = onBatchAllowMetered,
                                 onSongClick = { showActionSheet(it) },
                                 onSongAction = { task, action -> onActionPost(task, action) },
                             )
@@ -782,39 +793,73 @@ fun DownloadPageImplV2(
                                                     task.preferences,
                                                 ),
                                         footerContent =
-                                            if (state.downloadState is Error) {
-                                                {
-                                                    ErrorFooter(
-                                                        onRetry = {
-                                                            onActionPost(task, UiAction.Resume)
-                                                        },
-                                                        onRetryWithCookies =
-                                                            if (
-                                                                hasCookieAction(state.downloadState)
-                                                            ) {
-                                                                {
-                                                                    onActionPost(
-                                                                        task,
-                                                                        UiAction.RetryWithCookies(
-                                                                            task.url
-                                                                        ),
-                                                                    )
-                                                                }
-                                                            } else null,
-                                                        onShareKeptFile =
-                                                            keptFile?.let { path ->
-                                                                {
-                                                                    onActionPost(
-                                                                        task,
-                                                                        UiAction.ShareRetainedFile(
-                                                                            path
-                                                                        ),
-                                                                    )
-                                                                }
+                                            when {
+                                                state.downloadState is Error -> {
+                                                    {
+                                                        ErrorFooter(
+                                                            onRetry = {
+                                                                onActionPost(
+                                                                    task,
+                                                                    UiAction.Resume,
+                                                                )
                                                             },
-                                                    )
+                                                            onRetryWithCookies =
+                                                                if (
+                                                                    hasCookieAction(
+                                                                        state.downloadState
+                                                                    )
+                                                                ) {
+                                                                    {
+                                                                        onActionPost(
+                                                                            task,
+                                                                            UiAction
+                                                                                .RetryWithCookies(
+                                                                                    task.url
+                                                                                ),
+                                                                        )
+                                                                    }
+                                                                } else null,
+                                                            onShareKeptFile =
+                                                                keptFile?.let { path ->
+                                                                    {
+                                                                        onActionPost(
+                                                                            task,
+                                                                            UiAction
+                                                                                .ShareRetainedFile(
+                                                                                    path
+                                                                                ),
+                                                                        )
+                                                                    }
+                                                                },
+                                                        )
+                                                    }
                                                 }
-                                            } else null,
+                                                // Parked on a metered network: the
+                                                // one-off permit names this task, so
+                                                // it starts this one only.
+                                                state.downloadState == ReadyWithInfo &&
+                                                    !NetworkPolicy.canStartDownloads() -> {
+                                                    {
+                                                        TextButton(
+                                                            onClick = {
+                                                                onActionPost(
+                                                                    task,
+                                                                    UiAction.AllowMetered(
+                                                                        setOf(task.id)
+                                                                    ),
+                                                                )
+                                                            }
+                                                        ) {
+                                                            Text(
+                                                                stringResource(
+                                                                    R.string.download_anyway
+                                                                )
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                else -> null
+                                            },
                                         actionButton = {
                                             ActionButton(
                                                 modifier = Modifier,
@@ -844,6 +889,9 @@ fun DownloadPageImplV2(
                                 key = { (task, _) -> task.uiKey },
                                 span = { GridItemSpan(maxLineSpan) },
                             ) { (task, state) ->
+                                val running = state.downloadState as? Running
+                                val converting =
+                                    running != null && PostProcessing.inProgress(running.progressText)
                                 VideoListItem(
                                     modifier = Modifier.animateItem().padding(bottom = 16.dp),
                                     viewState = state.viewState,
@@ -852,6 +900,25 @@ fun DownloadPageImplV2(
                                             modifier = Modifier.padding(top = 3.dp),
                                             downloadState = state.downloadState,
                                         )
+                                    },
+                                    statusLine = statusLine(state.downloadState),
+                                    statusText =
+                                        (if (converting) stringResource(R.string.post_processing_running)
+                                            else null)
+                                            ?: statusText(state.downloadState)
+                                            ?: (state.downloadState as? Completed)
+                                                ?.warning
+                                                ?.takeIf { it.isNotBlank() },
+                                    progress =
+                                        running?.progress?.takeIf { it >= 0f && !converting },
+                                    actionButton = {
+                                        ActionButton(
+                                            modifier = Modifier,
+                                            downloadState = state.downloadState,
+                                            matchPhase = state.match.phase,
+                                        ) {
+                                            onActionPost(task, it)
+                                        }
                                     },
                                     onButtonClick = { showActionSheet(task) },
                                 )

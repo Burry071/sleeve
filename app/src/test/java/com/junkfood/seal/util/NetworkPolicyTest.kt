@@ -65,4 +65,25 @@ class NetworkPolicyTest {
         // The window is the "Allow once" promise: this burst, not forever.
         assertEquals(5L * 60L * 1000L, NetworkPolicy.PERMIT_WINDOW_MS)
     }
+
+    @Test
+    fun aTaskMayStartOnlyWhenThePermitCoversIt() {
+        // Same table as [NetworkPolicy.permits], with the permit resolved per
+        // task: a live permit for someone else's burst must not let this task
+        // through.
+        assertTrue(NetworkPolicy.permitsTask(cellularAllowed = true, metered = true, permitCovers = false))
+        assertTrue(NetworkPolicy.permitsTask(cellularAllowed = false, metered = false, permitCovers = false))
+        assertFalse(NetworkPolicy.permitsTask(cellularAllowed = false, metered = true, permitCovers = false))
+        assertTrue(NetworkPolicy.permitsTask(cellularAllowed = false, metered = true, permitCovers = true))
+    }
+
+    @Test
+    fun anUnboundPermitCoversWhicheverBurstStartsFirst() {
+        // "Allow once" from the dialog has no task list: it binds to the queue
+        // on the first start attempt, so the burst the user approved runs and
+        // a link shared afterwards meets the gate again.
+        assertTrue(NetworkPolicy.scopeCovers(emptySet(), "task-1"))
+        assertTrue(NetworkPolicy.scopeCovers(setOf("task-1", "task-2"), "task-2"))
+        assertFalse(NetworkPolicy.scopeCovers(setOf("task-1"), "task-2"))
+    }
 }

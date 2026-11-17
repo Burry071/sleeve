@@ -33,15 +33,17 @@ fun statusLine(state: DownloadState): Int? {
 }
 
 /**
- * The move-failure sentence, which carries counts and so cannot be a string
- * resource. Gated on the same transient throwable as the share action, so the
- * two appear and disappear together; the full message, directory included,
- * stays in the copied report.
+ * The stored sentence the row shows when no short reason line applies — the
+ * move-failure count or the mapped site message. Gated on the transient
+ * throwable still carrying its own text: after a restore the throwable is a
+ * bare [Throwable] with no message, so only the persisted [statusLine] reason
+ * survives; the full sentence stays in the sheet and the copied report.
  */
 fun statusText(state: DownloadState): String? {
     val error = state as? Error ?: return null
-    if (error.throwable !is DownloadErrorMessages.StorageMoveError) return null
-    return error.message.lineSequence().firstOrNull()
+    if (error.reason != null) return null
+    if (error.throwable.message == null) return null
+    return error.message.lineSequence().firstOrNull()?.takeIf { it.isNotBlank() }
 }
 
 /**

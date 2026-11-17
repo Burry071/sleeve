@@ -156,6 +156,15 @@ interface DownloaderV2 {
         BatchOps.resumeTargets(getTaskStateMap(), batchId).forEach { restart(it) }
     }
 
+    /**
+     * The 1-tap "Download anyway" on a metered-paused card or batch: arms the
+     * one-off permit for exactly these tasks. The engine ticks its scheduler
+     * afterwards, which will not re-emit on its own because no state changed.
+     */
+    fun allowMeteredOnce(tasks: Set<String>) {
+        NetworkPolicy.allowMeteredOnce(tasks)
+    }
+
     /** Stop unfinished songs, drop them and failed/canceled rows, keep completed files. */
     fun dismissBatch(batchId: String) {
         val plan = BatchOps.dismissPlan(getTaskStateMap(), batchId)
@@ -470,6 +479,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
             Snapshot.sendApplyNotifications()
             task.batch?.let { updateBatchNotification(it) }
+            NetworkPolicy.revokeMetered(setOf(task.id))
             return true
         }
         return false
@@ -566,7 +576,19 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         return partTasks.size
     }
 
-    override fun cancel(task: Task): Boolean = task.cancelImpl()
+    override fun cancel(task: Task): Boolean =
+        task.cancelImpl().also { canceled ->
+            // A stopped task must not keep the metered permit it was approved
+            // under; the rest of a card-scoped batch keeps its own.
+            if (canceled) NetworkPolicy.revokeMetered(setOf(task.id))
+        }
+
+    override fun allowMeteredOnce(tasks: Set<String>) {
+        super.allowMeteredOnce(tasks)
+        // The scheduler only re-checks on a state change, and a parked task's
+        // state does not change when a permit arrives, so tick it here.
+        scope.launch(Dispatchers.Default) { doYourWork() }
+    }
 
     override fun restart(task: Task) {
         task.restartImpl()
@@ -1089,8 +1111,11 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
 
         taskStateMap.entries
             .sortedBy { (_, state) -> state.downloadState.schedulerRank }
-            .firstOrNull { (_, state) ->
-                state.downloadState == ReadyWithInfo || state.downloadState == Idle
+            .firstOrNull { (task, state) ->
+                (state.downloadState == ReadyWithInfo || state.downloadState == Idle) &&
+                    // A permit granted from one card names its tasks: another
+                    // parked burst must not ride it.
+                    NetworkPolicy.canStartTask(task.id)
             }
             ?.let { (task, state) ->
                 // The picked state may already be stale (cancel/remove raced

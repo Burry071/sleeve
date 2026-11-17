@@ -106,9 +106,42 @@ class StatusLineTest {
     }
 
     @Test
-    fun `other errors and non-errors have no status text`() {
-        assertNull(statusText(error(null)))
+    fun `a failure with no short line shows its own sentence`() {
+        // 403, timeouts, ffmpeg: no persisted reason has a phrase for them, so
+        // the stored friendly message is the only thing the row can say.
+        assertEquals("boom", statusText(error(null)))
+        assertEquals(
+            "first line",
+            statusText(
+                Error(
+                    throwable = IllegalStateException("boom"),
+                    action = RestartableAction.Download,
+                    message = "first line\nsecond line",
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun `a reason with its own short line keeps it`() {
         assertNull(statusText(error(ErrorReason.LOGIN_REQUIRED)))
+        assertNull(statusText(error(ErrorReason.PLAYLIST_SHIFTED)))
+    }
+
+    @Test
+    fun `an empty or blank message has no line`() {
+        assertNull(
+            statusText(Error(Throwable(), RestartableAction.Download, message = "", reason = null))
+        )
+        assertNull(
+            statusText(
+                Error(Throwable(), RestartableAction.Download, message = " \nsecond", reason = null)
+            )
+        )
+    }
+
+    @Test
+    fun `non-error states have no status text`() {
         assertNull(statusText(Idle))
         assertNull(statusText(Completed("/tmp/song.m4a")))
     }

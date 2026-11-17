@@ -2,6 +2,7 @@ package com.junkfood.seal
 
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
+import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
@@ -62,6 +63,35 @@ class BatchOpsTest {
     fun `resume targets only canceled and failed songs`() {
         val targets = BatchOps.resumeTargets(map, batch.id)
         assertEquals(listOf(4, 5), targets.map { (it.type as Task.TypeInfo.MetadataTrack).index })
+    }
+
+    @Test
+    fun `resume targets leave a held pick alone`() {
+        // A held book is Canceled so the review entry appears, but it has no
+        // verified source: resuming it would only re-download the refused
+        // upload. Its exit is an explicit pick in the review sheet.
+        val held = task(batch, 7)
+        val withHeld =
+            map +
+                (held to
+                    Task.State(
+                        Canceled(RestartableAction.Download),
+                        null,
+                        Task.ViewState(title = "Held"),
+                        MatchResult(held = true, gateReason = "no full-length candidate"),
+                    ))
+        assertEquals(
+            listOf(4, 5),
+            BatchOps.resumeTargets(withHeld, batch.id)
+                .map { (it.type as Task.TypeInfo.MetadataTrack).index },
+        )
+        // The same rule without the map, for the batch card's own button.
+        assertEquals(
+            listOf(4, 5),
+            BatchOps.resumeTargets(withHeld.toList()).map {
+                (it.type as Task.TypeInfo.MetadataTrack).index
+            },
+        )
     }
 
     @Test

@@ -532,25 +532,31 @@ fun MatchReviewSheet(
         ) {
             TextButton(
                 onClick = onAcceptAll,
-                // Accept all closes plain low-confidence picks only: a held
-                // book needs an explicit pick, and a pending swap is unfinished
-                // work, so neither may be waved through here.
-                enabled =
-                    swaps.isEmpty() &&
-                        !running &&
-                        flagged.all { (_, state) ->
-                            state.match.phase == MatchPhase.NeedsReview
-                        },
+                // Accept all closes plain low-confidence picks. A held book
+                // needs an explicit pick for itself, but it must not block the
+                // other rows: those are ordinary flagged picks and can go.
+                enabled = swaps.isEmpty() && !running && MatchOps.acceptAllAvailable(flagged),
             ) {
                 Text(stringResource(R.string.accept_all))
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = { applySwaps() }, enabled = swaps.isNotEmpty() && !running) {
-                if (running) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(8.dp))
+            // Once a swap is queued the row is no longer flagged, so the apply
+            // button would sit there disabled; Done is the exit that matches
+            // the finished state.
+            val queued = results.any { it.outcome == SwapOutcome.Queued }
+            if (queued) {
+                Button(onClick = onDismissRequest) { Text(stringResource(R.string.done)) }
+            } else {
+                Button(onClick = { applySwaps() }, enabled = swaps.isNotEmpty() && !running) {
+                    if (running) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(stringResource(R.string.apply_swaps, swaps.size))
                 }
-                Text(stringResource(R.string.apply_swaps, swaps.size))
             }
         }
     }
