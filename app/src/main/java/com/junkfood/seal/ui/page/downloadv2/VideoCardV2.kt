@@ -28,9 +28,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Error
-import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Warning
@@ -115,6 +115,7 @@ fun VideoCardV2(
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
+    postProcessing: Boolean = false,
     footerContent: (@Composable () -> Unit)? = null,
     statusLine: Int? = null,
     statusText: String? = null,
@@ -131,6 +132,7 @@ fun VideoCardV2(
             stateIndicator = stateIndicator,
             actionButton = actionButton,
             progress = progress,
+            postProcessing = postProcessing,
             footerContent = footerContent,
             statusLine = statusLine,
             statusText = statusText,
@@ -268,6 +270,7 @@ fun VideoCardV2(
     stateIndicator: @Composable (BoxScope.() -> Unit)? = null,
     actionButton: @Composable (BoxScope.() -> Unit)? = null,
     progress: Float? = null,
+    postProcessing: Boolean = false,
     footerContent: (@Composable () -> Unit)? = null,
     statusLine: Int? = null,
     statusText: String? = null,
@@ -279,6 +282,7 @@ fun VideoCardV2(
         }
     val denseBottom =
         (progress != null && progress >= 0f) ||
+            postProcessing ||
             footerContent != null ||
             statusLine != null ||
             statusText != null
@@ -336,7 +340,16 @@ fun VideoCardV2(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (progress != null && progress >= 0f) {
+            if (postProcessing) {
+                // Bytes are all in; what is left is merging/extracting. The
+                // percentage above would sit at 100% while nothing downloads,
+                // so show motion and let the status line name the wait.
+                LinearWavyProgressIndicator(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                )
+            } else if (progress != null && progress >= 0f) {
                 val animatedProgress by
                     animateFloatAsState(
                         targetValue = progress,
@@ -804,7 +817,7 @@ private fun ResumeButton(
                 .drawBehind { drawCircle(background) }
                 .clickable(
                     enabled = enabled,
-                    onClickLabel = stringResource(R.string.cancel),
+                    onClickLabel = stringResource(R.string.resume),
                     onClick = onClick,
                 )
     ) {
@@ -818,7 +831,7 @@ private fun ResumeButton(
         }
         Icon(
             imageVector = Icons.Rounded.Download,
-            contentDescription = stringResource(R.string.restart),
+            contentDescription = stringResource(R.string.resume),
             modifier = Modifier.size(IconSize).align(Alignment.Center),
             tint = contentColor,
         )
@@ -835,7 +848,7 @@ fun RestartButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
                 .size(IconButtonSize)
                 .clip(CircleShape)
                 .drawBehind { drawCircle(background) }
-                .clickable(onClickLabel = stringResource(R.string.cancel), onClick = onClick)
+                .clickable(onClickLabel = stringResource(R.string.restart), onClick = onClick)
     ) {
         Icon(
             imageVector = Icons.Rounded.RestartAlt,
@@ -898,8 +911,8 @@ private fun ProgressButton(modifier: Modifier = Modifier, progress: Float, onCli
             )
         }
         Icon(
-            imageVector = Icons.Rounded.Pause,
-            contentDescription = null,
+            imageVector = Icons.Rounded.Close,
+            contentDescription = stringResource(R.string.cancel),
             modifier = Modifier.align(Alignment.Center).size(IconSize),
             tint = ActionButtonContentColor,
         )

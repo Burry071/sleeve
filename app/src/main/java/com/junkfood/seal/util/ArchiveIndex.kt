@@ -22,6 +22,33 @@ internal object ArchiveIndex {
     fun contains(archiveFile: File, extractorKey: String, id: String): Boolean =
         "${extractorKey.lowercase()} $id" in linesOf(archiveFile)
 
+    /**
+     * Drops one "<extractorKey.lowercase()> <id>" line. An explicit re-download
+     * must not be refused by the archive entry the earlier run wrote.
+     *
+     * @return true when the file was rewritten without the line.
+     */
+    fun forget(archiveFile: File, extractorKey: String, id: String): Boolean =
+        synchronized(lock) {
+            val entry = "${extractorKey.lowercase()} $id"
+            val lines =
+                runCatching { archiveFile.readLines() }.getOrNull()
+                    ?: return@synchronized false
+            if (entry !in lines) return@synchronized false
+            val rewritten =
+                runCatching {
+                    archiveFile.writeText(
+                        lines.filter { it != entry }.joinToString("") { "$it\n" }
+                    )
+                }
+            if (rewritten.isFailure) return@synchronized false
+            // The cache is keyed on length/mtime, and dropping one line of one
+            // digit can keep the length; drop it so the next lookup re-reads.
+            cached = null
+            cachedPath = null
+            true
+        }
+
     private fun linesOf(file: File): Set<String> {
         val length = file.length()
         val lastModified = file.lastModified()

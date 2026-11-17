@@ -25,6 +25,7 @@ import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.download.Task.RestartableAction.Download
 import com.junkfood.seal.download.Task.RestartableAction.FetchInfo
 import com.junkfood.seal.download.Task.TypeInfo
+import com.junkfood.seal.util.ArchiveIndex
 import com.junkfood.seal.util.AudioVerify
 import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadErrorMessages
@@ -91,6 +92,24 @@ interface DownloaderV2 {
     }
 
     fun remove(task: Task): Boolean
+
+    /**
+     * Fetch a finished task again as a new transfer. The download-archive entry
+     * the earlier run wrote is dropped first, or `--download-archive` refuses
+     * the very job the user just asked for.
+     *
+     * @return true when the card was reset to a fresh transfer.
+     */
+    fun redownload(task: Task): Boolean = false
+
+    /**
+     * Drop queue cards that finished into [paths] — the files whose history row
+     * the user just deleted. The row and the card describe the same file, so
+     * removing one must not leave the other pointing at it.
+     *
+     * @return the number of cards removed.
+     */
+    fun removeCompletedForPaths(paths: Set<String>): Int = 0
 
     /**
      * Re-run the catalogue search for one row with a user-edited query. Only a
@@ -454,6 +473,30 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             return true
         }
         return false
+    }
+
+    override fun removeCompletedForPaths(paths: Set<String>): Int {
+        if (paths.isEmpty()) return 0
+        val matching =
+            taskStateMap.keys.filter { task ->
+                val filePath = (taskStateMap[task]?.downloadState as? Completed)?.filePath
+                filePath != null && filePath in paths
+            }
+        return matching.count { remove(it) }
+    }
+
+    override fun redownload(task: Task): Boolean {
+        if (!taskStateMap.containsKey(task)) return false
+        val info = taskStateMap[task]?.videoInfo
+        if (info != null) {
+            // Synchronous on purpose: the engine checks the archive when it
+            // starts, so the entry must be gone before the task leaves Idle.
+            runCatching { with(FileUtil) { appContext.getArchiveFile() } }
+                .onSuccess { ArchiveIndex.forget(it, info.extractorKey, info.id) }
+                .onFailure { Log.w(TAG, "could not open download archive: ${it.message}") }
+        }
+        enqueue(task)
+        return true
     }
 
     /**

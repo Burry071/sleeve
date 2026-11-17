@@ -9,6 +9,7 @@ import com.junkfood.seal.R
 import com.junkfood.seal.database.backup.BackupUtil
 import com.junkfood.seal.database.backup.BackupUtil.decodeToBackup
 import com.junkfood.seal.database.objects.DownloadedVideoInfo
+import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.FileUtil.getFileSize
 import kotlinx.coroutines.Dispatchers
@@ -24,7 +25,7 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "VideoListViewModel"
 
-class VideoListViewModel : ViewModel() {
+class VideoListViewModel(private val downloader: DownloaderV2) : ViewModel() {
 
     private val mutableStateFlow = MutableStateFlow(VideoListViewState())
     val stateFlow = mutableStateFlow.asStateFlow()
@@ -91,6 +92,8 @@ class VideoListViewModel : ViewModel() {
     fun deleteDownloadHistory(infoList: List<DownloadedVideoInfo>, deleteFile: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             DatabaseUtil.deleteInfoList(infoList = infoList, deleteFile = deleteFile)
+            // The queue card for the same file must go with its row.
+            downloader.removeCompletedForPaths(infoList.mapTo(mutableSetOf()) { it.videoPath })
         }
     }
 

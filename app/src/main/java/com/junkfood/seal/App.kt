@@ -81,7 +81,7 @@ class App : Application() {
                     single<DownloaderV2> { DownloaderV2Impl(androidContext()) }
                     viewModel { DownloadDialogViewModel(downloader = get()) }
                     viewModel { CookiesViewModel() }
-                    viewModel { VideoListViewModel() }
+                    viewModel { VideoListViewModel(downloader = get()) }
                 }
             )
         }

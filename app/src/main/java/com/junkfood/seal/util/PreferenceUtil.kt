@@ -197,6 +197,7 @@ const val TEMPLATE_SHORTCUTS = "template_shortcuts"
 const val TASK_LIST = "task_list"
 const val SAVED_LINKS = "saved_links"
 const val BATCH_DISMISSED = "batch_dismissed"
+const val HISTORY_EXCLUDED_PATHS = "history_excluded_paths"
 
 val paletteStyles =
     listOf(
@@ -503,6 +504,27 @@ object PreferenceUtil {
         val stored = getDismissedBatches()
         val kept = stored.filterTo(mutableSetOf()) { it in liveBatchIds }
         if (kept != stored) kv.encode(BATCH_DISMISSED, kept)
+    }
+
+    /**
+     * Files whose history row the user removed. The disk backfill must not
+     * treat a deliberately removed row as lost and insert it again.
+     */
+    fun getExcludedHistoryPaths(): Set<String> =
+        kv.decodeStringSet(HISTORY_EXCLUDED_PATHS) ?: emptySet()
+
+    fun excludeHistoryPaths(paths: Collection<String>) {
+        val kept = paths.filterTo(mutableSetOf()) { it.isNotBlank() }
+        if (kept.isEmpty()) return
+        kv.encode(HISTORY_EXCLUDED_PATHS, getExcludedHistoryPaths() + kept)
+    }
+
+    /** A fresh download at that path owns its row again. */
+    fun includeHistoryPath(path: String) {
+        if (path.isBlank()) return
+        val stored = getExcludedHistoryPaths()
+        if (path !in stored) return
+        kv.encode(HISTORY_EXCLUDED_PATHS, stored - path)
     }
 
     private const val TAG = "PreferenceUtil"
