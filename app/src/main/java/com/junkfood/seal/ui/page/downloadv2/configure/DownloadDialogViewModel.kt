@@ -321,6 +321,9 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         preferences: DownloadUtil.DownloadPreferences,
     ) {
         downloader.enqueue(TaskFactory.createCustomCommand(url, template, preferences))
+        // The command is queued; leaving the sheet open over the queue looks
+        // like the tap did nothing.
+        hideDialog()
     }
 
     private fun hideDialog() {

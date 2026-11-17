@@ -46,7 +46,8 @@ internal object YtDlpTransferEngine : TransferEngine {
             // Any failure rotates down the ladder; the rung list is fixed up
             // front so a cancel or a rotation cannot change what comes next.
             val ladder: List<String?> =
-                downloadClientLadder(
+                extractionLadder(
+                    url = url,
                     recorded = ExtractionClients.get(job.taskId),
                     hasRecordedWin = ExtractionClients.hasWin(job.taskId),
                 )
@@ -162,7 +163,12 @@ internal object YtDlpTransferEngine : TransferEngine {
                             addOption("--concurrent-fragments", concurrentFragments)
                         }
 
-                        if (extractAudio || (videoInfo.vcodec == "none")) {
+                        val pickedFormats =
+                            selectedFormats(formatIdString, videoInfo.formats.orEmpty())
+                        val toAudioDir =
+                            outputIsAudio(extractAudio, pickedFormats) ||
+                                (pickedFormats.isEmpty() && videoInfo.vcodec == "none")
+                        if (toAudioDir) {
                             if (privateDirectory) pathBuilder.append(App.privateDownloadDir)
                             else pathBuilder.append(audioDownloadDir)
                             addOptionsForAudioDownloads(
@@ -273,6 +279,11 @@ internal object YtDlpTransferEngine : TransferEngine {
                     )
                 }
                 val failureMessage = attemptFailure.message.orEmpty()
+                // A cancel or a killed process is not a client refusal; rotating
+                // would restart the download the user just stopped.
+                if (!job.isActive() || attemptFailure is YoutubeDL.CanceledException) {
+                    return Result.failure(attemptFailure)
+                }
                 // Extraction success is no media success: the parallel info
                 // call never touches the media host. Any rung-1/rung-2 failure
                 // costs one more attempt; the next rung re-extracts fresh.

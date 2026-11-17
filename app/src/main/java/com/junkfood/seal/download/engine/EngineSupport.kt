@@ -5,6 +5,7 @@ import android.util.Log
 import com.junkfood.seal.App
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.VideoInfo
+import com.junkfood.seal.util.isYouTubeUrl
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -26,6 +27,11 @@ internal val YOUTUBE_CLIENT_LADDER: List<String?> =
 internal fun downloadClientLadder(recorded: String?, hasRecordedWin: Boolean): List<String?> =
     if (hasRecordedWin) listOf(recorded) + YOUTUBE_CLIENT_LADDER.filter { it != recorded }
     else YOUTUBE_CLIENT_LADDER
+
+/** Only YouTube understands the client sets; other extractors keep yt-dlp's own. */
+internal fun extractionLadder(url: String, recorded: String?, hasRecordedWin: Boolean): List<String?> =
+    if (isYouTubeUrl(url)) downloadClientLadder(recorded, hasRecordedWin)
+    else listOf(null)
 
 /** Client set that last won extraction, per task key (YouTube ladder). */
 internal object ExtractionClients {

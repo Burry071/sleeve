@@ -9,6 +9,14 @@ private val YOUTUBE_HOST =
         RegexOption.IGNORE_CASE,
     )
 
+/** True for any http(s) URL on a YouTube host, video id or not. */
+fun isYouTubeUrl(url: String): Boolean {
+    val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return false
+    if (uri.scheme?.lowercase() !in setOf("http", "https")) return false
+    val host = uri.host ?: return false
+    return YOUTUBE_HOST.containsMatchIn(host)
+}
+
 /** The video id a YouTube URL names, or null when the URL names no video. */
 fun youTubeIdFrom(url: String): String? {
     val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return null

@@ -16,6 +16,7 @@ import com.junkfood.seal.util.M4bExportResult
 import com.junkfood.seal.util.M4bPlan
 import com.junkfood.seal.util.M4bTagOverrides
 import com.junkfood.seal.util.M4bTags
+import com.junkfood.seal.util.SplitHistoryPolicy
 import com.junkfood.seal.util.VideoInfo
 import com.junkfood.seal.util.exportToM4b
 import com.junkfood.seal.util.toHttpsUrl
@@ -182,7 +183,12 @@ internal suspend fun onFinishDownloading(
                                 )
                             )
                         splitByChapter ->
-                            Result.success(insertSplitChapterIntoHistory(videoInfo, paths))
+                            Result.success(
+                                insertSplitChapterIntoHistory(
+                                    videoInfo,
+                                    SplitHistoryPolicy.chapterPaths(paths, source?.absolutePath),
+                                )
+                            )
                         else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
                     }
                 },

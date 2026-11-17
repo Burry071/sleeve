@@ -216,11 +216,15 @@ object TaskFactory {
                     splitByChapter = preferences.splitByChapter,
                     hasClips = preferences.videoClips.isNotEmpty(),
                 )
+            val stampedPreferences = preferences.copy(outputTemplate = template)
             it.copy(
                 task =
-                    it.task.copy(
-                        preferences = preferences.copy(outputTemplate = template),
+                    Task(
+                        url = it.task.url,
+                        type = it.task.type,
+                        preferences = stampedPreferences,
                         batch = batch,
+                        origin = it.task.origin,
                     )
             )
         }

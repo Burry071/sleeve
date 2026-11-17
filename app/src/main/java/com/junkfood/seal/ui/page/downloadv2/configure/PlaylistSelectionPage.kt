@@ -141,7 +141,6 @@ fun PlaylistSelectionPage(
                 modifier = Modifier,
                 initialDownloadType = Video,
                 preferences = preferences,
-                onPreferencesUpdate = { preferences = it },
                 onPresetEdit = { type ->
                     when (type) {
                         Audio -> showAudioPresetDialog = true

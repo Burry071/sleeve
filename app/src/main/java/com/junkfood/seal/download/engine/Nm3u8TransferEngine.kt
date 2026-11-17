@@ -2,6 +2,7 @@ package com.junkfood.seal.download.engine
 
 import android.util.Log
 import com.junkfood.seal.App
+import com.junkfood.seal.App.Companion.audioDownloadDir
 import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.util.sanitizeSegment
 import java.io.File
@@ -35,7 +36,7 @@ internal object Nm3u8TransferEngine : TransferEngine {
         val videoInfo = job.videoInfo
         val taskId = job.taskId
 
-        val manifestUrl =
+        val (manifestUrl, manifestFormat) =
             with(preferences) {
                 if (downloadPlaylist ||
                         extractAudio ||
@@ -75,7 +76,15 @@ internal object Nm3u8TransferEngine : TransferEngine {
                         manifestish.firstOrNull { it.formatId == formatIdString }
                     else
                         manifestish.maxByOrNull { it.tbr ?: it.fileSizeApprox ?: 0.0 }
-                pick?.url ?: return null
+                if (pick == null) return null
+                // N_m3u8DL-RE writes one stream and cannot mux: a silent video
+                // strand would land without audio, and an .mkv remux is
+                // unreachable.
+                if (!singleFormatHandOffAllowed(pick, job.settings.mergeOutputMkv)) {
+                    Log.d(TRANSFER_TAG, "N_m3u8DL-RE skipped: silent video or mkv remux")
+                    return null
+                }
+                (pick.url ?: return null) to pick
             }
         if (!isSafeRemoteUrl(manifestUrl)) {
             Log.w(TRANSFER_TAG, "N_m3u8DL-RE skipped: unsafe manifest url")
@@ -87,7 +96,14 @@ internal object Nm3u8TransferEngine : TransferEngine {
                 .ifBlank { "download" }
                 .let { sanitizeSegment(it) }
         val downloadDir =
-            if (preferences.privateDirectory) App.privateDownloadDir else videoDownloadDir
+            when {
+                preferences.privateDirectory -> App.privateDownloadDir
+                // The folder follows the stream that was actually picked, not
+                // the download-type flag: an audio-only manifest is audio.
+                outputIsAudio(preferences.extractAudio, listOf(manifestFormat)) ->
+                    audioDownloadDir
+                else -> videoDownloadDir
+            }
         // The copy below overwrites, but Scoped Storage refuses a replace that
         // crosses app ownership (a file left by another install): copyTo then
         // throws EPERM and the lane falls back to yt-dlp for nothing. Land

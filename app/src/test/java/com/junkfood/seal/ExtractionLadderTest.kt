@@ -3,6 +3,7 @@ package com.junkfood.seal
 import com.junkfood.seal.download.engine.ExtractionClients
 import com.junkfood.seal.download.engine.YOUTUBE_CLIENT_LADDER
 import com.junkfood.seal.download.engine.downloadClientLadder
+import com.junkfood.seal.download.engine.extractionLadder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -56,5 +57,25 @@ class ExtractionLadderTest {
         )
 
         ExtractionClients.clear(taskKey)
+    }
+
+    @Test
+    fun `only youtube urls run the youtube client ladder`() {
+        assertEquals(
+            YOUTUBE_CLIENT_LADDER,
+            extractionLadder(
+                url = "https://www.youtube.com/watch?v=abc",
+                recorded = null,
+                hasRecordedWin = false,
+            ),
+        )
+        assertEquals(
+            listOf<String?>(null),
+            extractionLadder(
+                url = "https://vimeo.com/123",
+                recorded = "visionos",
+                hasRecordedWin = true,
+            ),
+        )
     }
 }
