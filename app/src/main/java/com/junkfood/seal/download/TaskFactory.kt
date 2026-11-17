@@ -6,6 +6,7 @@ import com.junkfood.seal.download.Task.DownloadState.Idle
 import com.junkfood.seal.download.Task.DownloadState.ReadyWithInfo
 import com.junkfood.seal.util.DownloadUtil.DownloadPreferences
 import com.junkfood.seal.util.Format
+import com.junkfood.seal.util.FormatSelectionPolicy
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.VideoClip
 import com.junkfood.seal.util.VideoInfo
@@ -22,6 +23,7 @@ object TaskFactory {
         formatList: List<Format>,
         videoClips: List<VideoClip>,
         splitByChapter: Boolean,
+        convertAudio: Boolean,
         newTitle: String,
         selectedSubtitles: List<String>,
         selectedAutoCaptions: List<String>,
@@ -41,7 +43,7 @@ object TaskFactory {
         val videoFormats = formatList.filter { it.containsVideo() }
         // The picked download type wins; a hand-picked list is only a fallback
         // signal for callers that never had a type (the playlist lane).
-        val extractsAudio = audioOnly || (audioOnlyFormats.isNotEmpty() && videoFormats.isEmpty())
+        val extractsAudio = FormatSelectionPolicy.taskExtractsAudio(audioOnly, formatList)
         val mergeAudioStream = audioOnlyFormats.size > 1
         val formatId = formatList.joinToString(separator = "+") { it.formatId.toString() }
 
@@ -57,7 +59,8 @@ object TaskFactory {
                         splitByChapter = splitByChapter,
                         newTitle = newTitle,
                         mergeAudioStream = mergeAudioStream,
-                        extractAudio = extractAudio || extractsAudio,
+                        extractAudio = extractsAudio,
+                        convertAudio = convertAudio && extractsAudio,
                     )
                 }
                 .run {

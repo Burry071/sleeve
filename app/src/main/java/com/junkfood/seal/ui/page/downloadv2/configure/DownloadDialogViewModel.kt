@@ -61,9 +61,15 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         data class PlaylistSelection(val result: PlaylistResult) : SelectionState
 
         /** [audioOnly] is the type the user picked before the fetch; the
-         * format page honours it instead of re-reading the global preference. */
-        data class FormatSelection(val info: VideoInfo, val audioOnly: Boolean = false) :
-            SelectionState
+         * format page honours it instead of re-reading the global preference.
+         * [splitByChapter] and [convertAudio] are the configure sheet's
+         * per-download overrides, not Settings values. */
+        data class FormatSelection(
+            val info: VideoInfo,
+            val audioOnly: Boolean = false,
+            val splitByChapter: Boolean = false,
+            val convertAudio: Boolean = false,
+        ) : SelectionState
 
         data class MetadataTracks(
             val provider: String,
@@ -234,7 +240,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
                                 is VideoInfo -> {
                                     mSelectionStateFlow.update {
-                                        SelectionState.FormatSelection(info = info)
+                                        SelectionState.FormatSelection(
+                                            info = info,
+                                            splitByChapter = preferences.splitByChapter,
+                                        )
                                     }
                                 }
                             }
@@ -267,7 +276,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     .onSuccess { info ->
                         withContext(Dispatchers.Main) {
                             mSelectionStateFlow.update {
-                                SelectionState.FormatSelection(info = info, audioOnly = audioOnly)
+                                SelectionState.FormatSelection(
+                                    info = info,
+                                    audioOnly = audioOnly,
+                                    splitByChapter = preferences.splitByChapter,
+                                    convertAudio = audioOnly && preferences.convertAudio,
+                                )
                             }
                             hideDialog()
                         }

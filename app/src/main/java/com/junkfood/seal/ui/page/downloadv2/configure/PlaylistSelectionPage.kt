@@ -152,8 +152,7 @@ fun PlaylistSelectionPage(
                     }
                 },
                 onDismissRequest = onDismissConfigurationSheet,
-                onDownload = {
-                    val downloadPreferences = preferences.copy(extractAudio = it == Audio)
+                onDownload = { downloadPreferences ->
                     val batch =
                         BatchInfo(
                             id = UUID.randomUUID().toString(),
