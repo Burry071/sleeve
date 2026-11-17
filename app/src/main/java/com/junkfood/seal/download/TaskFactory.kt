@@ -28,36 +28,47 @@ object TaskFactory {
         selectedSubtitles: List<String>,
         selectedAutoCaptions: List<String>,
         audioOnly: Boolean = false,
+        suggested: Boolean = false,
+        basePreferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
     ): TaskWithState {
         val fileSize =
             formatList.fold(.0) { acc, format ->
                 acc + (format.fileSize ?: format.fileSizeApprox ?: .0)
             }
 
+        // A rename equal to the real title would still rewrite the filename
+        // template, so only a genuine change is stored.
+        val newTitleStored =
+            newTitle.trim().takeIf { it.isNotEmpty() && it != videoInfo.title }.orEmpty()
+
         val info =
             videoInfo
                 .run { if (fileSize != .0) copy(fileSize = fileSize) else this }
-                .run { if (newTitle.isNotEmpty()) copy(title = newTitle) else this }
+                .run { if (newTitleStored.isNotEmpty()) copy(title = newTitleStored) else this }
 
         val audioOnlyFormats = formatList.filter { it.isAudioOnly() }
         val videoFormats = formatList.filter { it.containsVideo() }
         // The picked download type wins; a hand-picked list is only a fallback
         // signal for callers that never had a type (the playlist lane).
         val extractsAudio = FormatSelectionPolicy.taskExtractsAudio(audioOnly, formatList)
-        val mergeAudioStream = audioOnlyFormats.size > 1
-        val formatId = formatList.joinToString(separator = "+") { it.formatId.toString() }
+        val mergeAudioStream = FormatSelectionPolicy.mergeAudioStream(formatList)
+        val formatId = FormatSelectionPolicy.formatIdString(formatList, suggested)
 
-        val subtitleLanguage =
-            (selectedSubtitles + selectedAutoCaptions).joinToString(separator = ",")
+        val subtitles =
+            (selectedSubtitles + selectedAutoCaptions)
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+        val subtitleLanguage = subtitles.joinToString(separator = ",")
+        val autoSubtitle = selectedAutoCaptions.any { it.isNotBlank() }
 
         val preferences =
-            DownloadPreferences.createFromPreferences()
+            basePreferences
                 .run {
                     copy(
                         formatIdString = formatId,
                         videoClips = videoClips,
                         splitByChapter = splitByChapter,
-                        newTitle = newTitle,
+                        newTitle = newTitleStored,
                         mergeAudioStream = mergeAudioStream,
                         extractAudio = extractsAudio,
                         convertAudio = convertAudio && extractsAudio,
@@ -67,11 +78,17 @@ object TaskFactory {
                     if (subtitleLanguage.isNotEmpty()) {
                         copy(
                             downloadSubtitle = true,
-                            autoSubtitle = selectedAutoCaptions.isNotEmpty(),
+                            autoSubtitle = autoSubtitle,
                             subtitleLanguage = subtitleLanguage,
                         )
                     } else {
-                        this
+                        // The sheet's empty lists mean "no subtitles", not "keep
+                        // whatever the global settings say".
+                        copy(
+                            downloadSubtitle = false,
+                            autoSubtitle = false,
+                            subtitleLanguage = "",
+                        )
                     }
                 }
 

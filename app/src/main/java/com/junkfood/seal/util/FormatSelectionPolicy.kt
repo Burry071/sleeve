@@ -145,4 +145,42 @@ object FormatSelectionPolicy {
         )
 
     private fun bitrateOf(format: Format): Double = format.abr ?: format.tbr ?: 0.0
+
+    /**
+     * The `-f` value for an explicit pick, or empty so yt-dlp keeps its own
+     * sorter and live format list ("Suggested"). yt-dlp wants video streams
+     * before audio in a merge expression, and stale ids must never travel.
+     */
+    fun formatIdString(formats: List<Format>, suggested: Boolean): String {
+        if (suggested) return ""
+        return formats
+            .sortedBy { if (it.containsVideo()) 0 else 1 }
+            .mapNotNull { it.formatId?.trim()?.takeIf(String::isNotEmpty) }
+            .distinct()
+            .joinToString(separator = "+")
+    }
+
+    /**
+     * A merge is only needed when more than one audio track is in the list, or
+     * a separate track has to be combined with a muxed video that already
+     * carries its own audio.
+     */
+    fun mergeAudioStream(formatList: List<Format>): Boolean {
+        val audioOnlyFormats = formatList.filter { it.isAudioOnly() }
+        val videoFormats = formatList.filter { it.containsVideo() }
+        return audioOnlyFormats.size > 1 ||
+            (audioOnlyFormats.isNotEmpty() && videoFormats.any { it.containsAudio() })
+    }
+
+    /** A remembered type the sheet no longer offers falls back to a real tab. */
+    fun fallbackType(selected: DownloadType, entries: List<DownloadType>): DownloadType? =
+        if (selected in entries) selected else entries.firstOrNull()
+
+    /** A clip needs a length to cut from; a zero or unknown duration cannot. */
+    fun clippingAvailable(clipSettingEnabled: Boolean, duration: Double?): Boolean =
+        clipSettingEnabled && (duration ?: 0.0) > 0.0
+
+    /** Clipping and a chapter split produce different files; they cannot both run. */
+    fun splitWithClips(splitSelected: Boolean, clips: List<VideoClip>): Boolean =
+        splitSelected && clips.isEmpty()
 }
