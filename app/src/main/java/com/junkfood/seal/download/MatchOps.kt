@@ -42,6 +42,14 @@ object MatchOps {
     fun acknowledgeable(state: Task.State): Boolean = state.match.phase == MatchPhase.NeedsReview
 
     /**
+     * Accept all stays available while any flagged pick is still open, even
+     * next to held books: a batch that mixes the two would otherwise offer the
+     * button and then refuse it.
+     */
+    fun acceptAllAvailable(entries: List<Pair<Task, Task.State>>): Boolean =
+        entries.any { acknowledgeable(it.second) }
+
+    /**
      * True whenever the gate refused this pick, including while its replacement
      * downloads. This is what blocks Resume: the hold is a property of the
      * stored pick, not of the review bucket it currently shows in.
@@ -88,9 +96,15 @@ object MatchOps {
 
     fun reviewCount(entries: List<Pair<Task, Task.State>>): Int = flaggedEntries(entries).size
 
-    /** The one review entry appears only after the batch has finished. */
+    /**
+     * The one review entry appears once the batch has finished — or earlier
+     * when a pick is held: a held book is parked behind the review sheet until
+     * the user picks a replacement, so hiding the entry until the rest of the
+     * batch ends leaves a finished-looking row with no exit.
+     */
     fun reviewVisible(entries: List<Pair<Task, Task.State>>): Boolean =
-        BatchOps.summary(entries).unfinished == 0 && reviewCount(entries) > 0
+        (BatchOps.summary(entries).unfinished == 0 || entries.any { held(it.second) }) &&
+            reviewCount(entries) > 0
 
     /**
      * 1-based label for a part, normalising the two numbering bases the gate

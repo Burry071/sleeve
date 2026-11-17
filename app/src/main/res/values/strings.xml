@@ -108,6 +108,7 @@
     <string name="split_chapters_toggle">Split chapters into separate tracks</string>
     <string name="start_download">Download</string>
     <string name="close">Close</string>
+    <string name="done">Done</string>
     <string name="close_never_show_again">Don\'t show up again</string>
     <string name="user_guide">User guide</string>
     <string name="open_settings">Open settings</string>
@@ -205,6 +206,11 @@
     <string name="format_unavailable_hint">The selected format is not available for this media. Use the default preset (Format preference) and retry.</string>
     <string name="site_rate_limited">The site is rate-limiting requests. Wait a moment, then retry.</string>
     <string name="extractor_broken_hint">The download engine couldn\'t read this site. Update yt-dlp, then retry.</string>
+    <string name="site_bot_check">The site wants to confirm you are a person. Sign in to it in Settings → Cookies &amp; profiles, enable Cookies for the download, and retry.</string>
+    <string name="site_access_denied">The site refused this request. Sign in to it in Settings → Cookies &amp; profiles and retry, or download it in a browser.</string>
+    <string name="site_media_not_found">This media is unavailable — it may be private, removed, or not offered in your region.</string>
+    <string name="download_timed_out">The connection timed out. Check the network, then retry.</string>
+    <string name="post_processing_failed">The file downloaded but couldn\'t be converted. Try another format, or retry.</string>
     <string name="quick_download_label">Quick download</string>
     <string name="quick_clipboard_label">Download clipboard link</string>
     <string name="clipboard_quick_download">Clipboard quick download</string>
@@ -548,6 +554,7 @@
     <string name="download_hint">Tap Paste link or share a video link to this app to start a download</string>
     <string name="paste_link">Paste link</string>
     <string name="download_waiting_wifi">Waiting for Wi-Fi</string>
+    <string name="download_anyway">Download anyway</string>
     <string name="status_downloaded">Downloaded</string>
     <string name="all">All</string>
     <string name="select_multiple_link">Select from %1$d links</string>

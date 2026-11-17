@@ -63,7 +63,17 @@ object BatchOps {
         entries(map, batchId).filter { isUnfinished(it.second.downloadState) }.map { it.first }
 
     fun resumeTargets(map: Map<Task, Task.State>, batchId: String): List<Task> =
-        entries(map, batchId).filter { isResumable(it.second.downloadState) }.map { it.first }
+        resumeTargets(entries(map, batchId))
+
+    /**
+     * A held pick is `Canceled` so the batch can finish and show review, but
+     * resuming it would start the download the gate refused. It leaves this
+     * list only through the review sheet's explicit swap.
+     */
+    fun resumeTargets(entries: List<Pair<Task, Task.State>>): List<Task> =
+        entries
+            .filter { isResumable(it.second.downloadState) && !MatchOps.held(it.second) }
+            .map { it.first }
 
     fun summary(entries: List<Pair<Task, Task.State>>): BatchSummary =
         BatchSummary(

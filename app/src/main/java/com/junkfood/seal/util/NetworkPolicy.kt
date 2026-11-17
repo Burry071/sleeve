@@ -14,7 +14,9 @@ import android.util.Log
  * a metered one when [CELLULAR_DOWNLOAD] is on, or during the short window a
  * one-off "Allow once" opened. The permit is deliberately *time-boxed, not
  * consumed*: a consumed-once permit would strand every song after the first in
- * a batch the user just approved.
+ * a batch the user just approved. A permit granted from a card names the tasks
+ * it covers, so it can only start the burst the user tapped; the sheet's
+ * answer predates any task and binds to whichever burst starts first.
  *
  * Nothing here may brick downloads: a missing [ConnectivityManager] counts as
  * unmetered, and [canStartDownloads] never throws.
@@ -34,6 +36,13 @@ object NetworkPolicy {
 
     /** `0` means no permit; anything else is an [SystemClock.elapsedRealtime] stamp. */
     @Volatile private var permitArmedAt = 0L
+
+    /**
+     * The tasks the permit was granted for. Empty means "whichever burst starts
+     * first": the confirm sheet's one-off answer predates any task id, so it
+     * cannot name one.
+     */
+    @Volatile private var permitScope: Set<String> = emptySet()
 
     /**
      * Fired when an unmetered network becomes the default one. The downloader
@@ -75,15 +84,14 @@ object NetworkPolicy {
                             network: Network,
                             capabilities: NetworkCapabilities,
                         ) {
-                            val unmetered =
-                                capabilities.hasCapability(
-                                    NetworkCapabilities.NET_CAPABILITY_NOT_METERED
-                                )
-                            metered = !unmetered
+                            // Read the default network, not the callback's: this
+                            // can fire for a VPN or a secondary network, and
+                            // every side-effect-free query must agree with it.
+                            refresh(manager)
                             // Back on Wi-Fi: the permit has nothing left to
                             // do, and a later metered switch must not inherit
                             // it.
-                            if (unmetered) clearMeteredPermit()
+                            if (!metered) clearMeteredPermit()
                             notifyIfUsable()
                         }
                     }
@@ -96,35 +104,61 @@ object NetworkPolicy {
             }
     }
 
-    /** Side-effect free, never throws. */
-    fun canStartDownloads(): Boolean =
-        runCatching {
-                val cellularAllowed = with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() }
-                val metered = isMetered()
-                val remaining = permitRemainingMs()
-                // The one line that answers "why did this burst download?":
-                // a permit that expired mid-batch is the usual surprise.
-                if (metered && !cellularAllowed && remaining > 0) {
-                    Log.i(TAG, "metered permit honored, ${remaining / 1000}s left")
-                }
-                permits(
-                    cellularAllowed = cellularAllowed,
-                    metered = metered,
-                    permitArmed = remaining > 0,
-                )
-            }
-            .getOrDefault(true)
+    /** Side-effect free, never throws. Asks whether *any* transfer may start. */
+    fun canStartDownloads(): Boolean = runCatching { decide(null) }.getOrDefault(true)
 
-    /** Arms the non-persisted "Allow once" window; gone on process death. */
-    fun allowMeteredOnce() {
+    /**
+     * Whether this particular task may start. A permit granted from a card's
+     * "Download anyway" names the tasks it covers, so it never starts a
+     * different burst the user has not approved.
+     */
+    fun canStartTask(taskId: String): Boolean = runCatching { decide(taskId) }.getOrDefault(true)
+
+    private fun decide(taskId: String?): Boolean {
+        val cellularAllowed = with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() }
+        val metered = isMetered()
+        val remaining = permitRemainingMs()
+        val covers = remaining > 0 && (taskId == null || scopeCovers(permitScope, taskId))
+        // The one line that answers "why did this burst download?":
+        // a permit that expired mid-batch is the usual surprise.
+        if (metered && !cellularAllowed && covers) {
+            Log.i(TAG, "metered permit honored, ${remaining / 1000}s left")
+        }
+        return permitsTask(cellularAllowed = cellularAllowed, metered = metered, permitCovers = covers)
+    }
+
+    /**
+     * Arms the non-persisted "Allow once" window; gone on process death. An
+     * empty [tasks] binds it to whichever burst starts first — the confirm
+     * sheet's answer predates any task id.
+     */
+    fun allowMeteredOnce(tasks: Set<String> = emptySet()) {
+        permitScope = tasks
         permitArmedAt = SystemClock.elapsedRealtime()
     }
 
     fun isMetered(): Boolean = metered
 
+    /**
+     * Drops cancelled or removed tasks from the permit. A card's permit names
+     * its tasks, so one cancel leaves the rest of the approved burst running;
+     * an unbound sheet permit has no scope to shrink, so any cancellation
+     * revokes it — otherwise a burst the user stopped could carry over.
+     */
+    internal fun revokeMetered(taskIds: Set<String>) {
+        if (permitArmedAt == 0L) return
+        if (permitScope.isEmpty()) {
+            clearMeteredPermit()
+            return
+        }
+        permitScope = permitScope - taskIds
+        if (permitScope.isEmpty()) clearMeteredPermit()
+    }
+
     /** Unmetered callback and test hook. */
     internal fun clearMeteredPermit() {
         permitArmedAt = 0L
+        permitScope = emptySet()
     }
 
     /** Wakes a parked queue only when the new default network may carry it. */
@@ -138,6 +172,20 @@ object NetworkPolicy {
         permitArmed: Boolean,
     ): Boolean = cellularAllowed || !metered || permitArmed
 
+    /**
+     * The per-task form of [permits]: [permitCovers] already folds in the
+     * permit window and whether the permit names this task.
+     */
+    internal fun permitsTask(
+        cellularAllowed: Boolean,
+        metered: Boolean,
+        permitCovers: Boolean,
+    ): Boolean = permits(cellularAllowed, metered, permitArmed = permitCovers)
+
+    /** An unbound permit covers whichever burst starts first. */
+    internal fun scopeCovers(scope: Set<String>, taskId: String): Boolean =
+        scope.isEmpty() || taskId in scope
+
     /** Milliseconds left on the "Allow once" permit; `0` when none is armed. */
     private fun permitRemainingMs(): Long {
         val armedAt = permitArmedAt
@@ -145,7 +193,7 @@ object NetworkPolicy {
         val elapsed = SystemClock.elapsedRealtime() - armedAt
         if (elapsed in 0..PERMIT_WINDOW_MS) return PERMIT_WINDOW_MS - elapsed
         // Expired: drop the stale stamp so a clock jump cannot resurrect it.
-        permitArmedAt = 0L
+        clearMeteredPermit()
         return 0L
     }
 

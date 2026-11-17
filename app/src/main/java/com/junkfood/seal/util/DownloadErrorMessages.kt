@@ -21,9 +21,14 @@ object DownloadErrorMessages {
     /** Which actionable failure the raw text describes. Order is priority. */
     enum class ErrorFamily {
         LOGIN_REQUIRED,
+        BOT_CHECK,
+        ACCESS_DENIED,
+        NOT_FOUND,
         FORMAT_UNAVAILABLE,
         RATE_LIMITED,
         EXTRACTOR_BROKEN,
+        TIMEOUT,
+        POSTPROCESSING,
         OTHER,
     }
 
@@ -106,6 +111,33 @@ object DownloadErrorMessages {
             RegexOption.IGNORE_CASE,
         )
 
+    /**
+     * Checked before [loginRequired]: YouTube's bot wall also names the cookie
+     * flags, so priority alone would file it as an ordinary login wall.
+     */
+    private val botCheck =
+        Regex(
+            "not a bot|captcha|unusual traffic|automated queries",
+            RegexOption.IGNORE_CASE,
+        )
+
+    private val accessDenied =
+        Regex("http error 403|\\b403\\b.*forbidden|access denied", RegexOption.IGNORE_CASE)
+
+    private val notFound =
+        Regex(
+            "http error 404|http error 410|video unavailable|private video" +
+                "|has been removed|no longer available|does not exist|not available in your country",
+            RegexOption.IGNORE_CASE,
+        )
+
+    private val timedOut =
+        Regex("timed out|timeout|http error 504|connection reset", RegexOption.IGNORE_CASE)
+
+    /** yt-dlp's merge/convert/tag steps run after the bytes are in; ffmpeg does them. */
+    private val postProcessing =
+        Regex("postprocessing|ffmpeg|conversion failed", RegexOption.IGNORE_CASE)
+
     private val formatUnavailable =
         Regex("requested format is not available", RegexOption.IGNORE_CASE)
 
@@ -128,10 +160,15 @@ object DownloadErrorMessages {
     fun classify(text: String): ErrorFamily =
         when {
             text.isEmpty() -> ErrorFamily.OTHER
+            botCheck.containsMatchIn(text) -> ErrorFamily.BOT_CHECK
             loginRequired.containsMatchIn(text) -> ErrorFamily.LOGIN_REQUIRED
+            notFound.containsMatchIn(text) -> ErrorFamily.NOT_FOUND
+            accessDenied.containsMatchIn(text) -> ErrorFamily.ACCESS_DENIED
             formatUnavailable.containsMatchIn(text) -> ErrorFamily.FORMAT_UNAVAILABLE
             rateLimited.containsMatchIn(text) -> ErrorFamily.RATE_LIMITED
             extractorBroken.containsMatchIn(text) -> ErrorFamily.EXTRACTOR_BROKEN
+            timedOut.containsMatchIn(text) -> ErrorFamily.TIMEOUT
+            postProcessing.containsMatchIn(text) -> ErrorFamily.POSTPROCESSING
             else -> ErrorFamily.OTHER
         }
 
@@ -139,11 +176,17 @@ object DownloadErrorMessages {
     fun friendly(throwable: Throwable): String {
         val raw = throwable.message ?: ""
         return when (classify(raw)) {
+            ErrorFamily.BOT_CHECK -> App.context.getString(R.string.site_bot_check)
             ErrorFamily.LOGIN_REQUIRED -> App.context.getString(R.string.site_login_required)
+            ErrorFamily.ACCESS_DENIED -> App.context.getString(R.string.site_access_denied)
+            ErrorFamily.NOT_FOUND -> App.context.getString(R.string.site_media_not_found)
             ErrorFamily.FORMAT_UNAVAILABLE ->
                 App.context.getString(R.string.format_unavailable_hint)
             ErrorFamily.RATE_LIMITED -> App.context.getString(R.string.site_rate_limited)
             ErrorFamily.EXTRACTOR_BROKEN -> App.context.getString(R.string.extractor_broken_hint)
+            ErrorFamily.TIMEOUT -> App.context.getString(R.string.download_timed_out)
+            ErrorFamily.POSTPROCESSING ->
+                App.context.getString(R.string.post_processing_failed)
             ErrorFamily.OTHER -> raw
         }
     }
@@ -161,10 +204,17 @@ object DownloadErrorMessages {
         if (throwable is LoginRequiredError) return throwable
         val message = friendly(throwable)
         return when (classify(throwable.message ?: "")) {
+            // The bot wall is cured the same way a login wall is: the account
+            // the site wants is the one in the cookie file.
+            ErrorFamily.BOT_CHECK,
             ErrorFamily.LOGIN_REQUIRED -> LoginRequiredError(message, throwable)
             ErrorFamily.EXTRACTOR_BROKEN -> ExtractorBrokenError(message, throwable)
-            ErrorFamily.FORMAT_UNAVAILABLE, ErrorFamily.RATE_LIMITED ->
-                IllegalStateException(message, throwable)
+            ErrorFamily.ACCESS_DENIED,
+            ErrorFamily.NOT_FOUND,
+            ErrorFamily.FORMAT_UNAVAILABLE,
+            ErrorFamily.RATE_LIMITED,
+            ErrorFamily.TIMEOUT,
+            ErrorFamily.POSTPROCESSING -> IllegalStateException(message, throwable)
             ErrorFamily.OTHER -> throwable
         }
     }

@@ -146,6 +146,10 @@ fun VideoListItem(
     modifier: Modifier = Modifier,
     viewState: Task.ViewState,
     stateIndicator: @Composable (() -> Unit)? = null,
+    statusLine: Int? = null,
+    statusText: String? = null,
+    progress: Float? = null,
+    actionButton: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
     with(viewState) {
@@ -157,6 +161,10 @@ fun VideoListItem(
             duration = duration,
             fileSizeApprox = fileSizeApprox,
             stateIndicator = stateIndicator,
+            statusLine = statusLine,
+            statusText = statusText,
+            progress = progress,
+            actionButton = actionButton,
             onButtonClick = onButtonClick,
         )
     }
@@ -171,6 +179,10 @@ fun VideoListItem(
     duration: Int = 0,
     fileSizeApprox: Double = .0,
     stateIndicator: @Composable (() -> Unit)? = null,
+    statusLine: Int? = null,
+    statusText: String? = null,
+    progress: Float? = null,
+    actionButton: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
     Row(modifier = modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.Top) {
@@ -202,6 +214,29 @@ fun VideoListItem(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 stateIndicator?.invoke()
+                // The same one-line status the card shows: a list row that
+                // only said "Error" hid which error it was.
+                if (statusText != null || statusLine != null) {
+                    Text(
+                        text = statusText ?: stringResource(statusLine!!),
+                        modifier = Modifier.padding(top = 2.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (progress != null && progress >= 0f) {
+                    LinearWavyProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    )
+                }
+                // The card's action, in a row: cancel, resume, retry or play
+                // without opening the sheet first.
+                actionButton?.let {
+                    Box(modifier = Modifier.padding(top = 4.dp)) { it() }
+                }
             }
             IconButton(
                 onButtonClick,
@@ -637,23 +672,9 @@ fun ListItemStateText(
         },
         contentKey = { it::class.simpleName },
     ) { downloadState ->
-        val text =
-            when (downloadState) {
-                is Canceled -> stringResource(R.string.status_canceled)
-                is Completed -> stringResource(R.string.status_downloaded)
-                is Error -> stringResource(R.string.status_error)
-                is FetchingInfo -> stringResource(R.string.status_fetching_video_info)
-                Idle -> stringResource(R.string.status_enqueued)
-                ReadyWithInfo -> stringResource(R.string.status_enqueued)
-                is Running -> {
-                    val progress = downloadState.progress
-                    if (progress >= 0) {
-                        "%.1f %%".format(downloadState.progress * 100)
-                    } else {
-                        stringResource(R.string.status_downloading)
-                    }
-                }
-            }
+        // Same wording as the card pill: the list used to say "Downloaded" for
+        // a warning-completed file and "Enqueued" for a metered-parked one.
+        val text = statePillText(downloadState)
         Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
             when (downloadState) {
                 is Canceled -> {

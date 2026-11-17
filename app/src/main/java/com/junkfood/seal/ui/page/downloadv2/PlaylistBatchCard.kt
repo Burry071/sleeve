@@ -47,10 +47,12 @@ import com.junkfood.seal.download.MatchOps
 import com.junkfood.seal.download.MatchPhase
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState.Completed
+import com.junkfood.seal.download.Task.DownloadState.ReadyWithInfo
 import com.junkfood.seal.download.Task.DownloadState.Running
 import com.junkfood.seal.download.isOpen
 import com.junkfood.seal.download.phase
 import com.junkfood.seal.ui.common.LocalDarkTheme
+import com.junkfood.seal.util.NetworkPolicy
 import com.kyant.monet.TonalPalettes.Companion.toTonalPalettes
 import java.net.URLEncoder
 
@@ -110,11 +112,23 @@ fun PlaylistBatchCard(
     onResume: () -> Unit,
     onDismiss: () -> Unit,
     onReview: () -> Unit,
+    onAllowMetered: (Set<String>) -> Unit = {},
     onSongClick: (Task) -> Unit,
     onSongAction: (Task, UiAction) -> Unit,
 ) {
     val summary = remember(entries) { BatchOps.summary(entries) }
     val reviewCount = remember(entries) { MatchOps.reviewCount(entries) }
+    // Rows the metered gate parked. Empty on Wi-Fi, or once a permit covers
+    // them, so the one-tap rescue only appears when it can actually help.
+    val parkedIds =
+        remember(entries) {
+            if (NetworkPolicy.canStartDownloads())
+                emptySet()
+            else
+                entries
+                    .filter { it.second.downloadState == ReadyWithInfo }
+                    .mapTo(mutableSetOf()) { it.first.id }
+        }
     // A single share still rides a one-song batch. Name the actual song and drop
     // the "0/1 done" line: a lone track has no progress to summarise.
     val singleTrack = remember(entries) { entries.singleOrNull()?.first }
@@ -226,6 +240,13 @@ fun PlaylistBatchCard(
                 if (MatchOps.reviewVisible(entries)) {
                     TextButton(onClick = onReview) {
                         Text(stringResource(R.string.review_matches, reviewCount))
+                    }
+                }
+                // The batch is parked on a metered network: one tap approves
+                // exactly these songs, not whatever starts next.
+                if (parkedIds.isNotEmpty()) {
+                    TextButton(onClick = { onAllowMetered(parkedIds) }) {
+                        Text(stringResource(R.string.download_anyway))
                     }
                 }
             }

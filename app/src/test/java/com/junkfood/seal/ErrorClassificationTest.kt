@@ -64,6 +64,74 @@ class ErrorClassificationTest {
     }
 
     @Test
+    fun `a bot check is named before the login wall it imitates`() {
+        // YouTube's bot wall mentions the cookie flags, so it would otherwise
+        // be read as an ordinary login wall; the copy has to say "bot", not
+        // "sign in".
+        assertEquals(
+            ErrorFamily.BOT_CHECK,
+            DownloadErrorMessages.classify(
+                "Sign in to confirm you're not a bot. Use --cookies-from-browser or " +
+                    "--cookies for the authentication."
+            ),
+        )
+        assertEquals(
+            ErrorFamily.BOT_CHECK,
+            DownloadErrorMessages.classify("Please solve the captcha to continue"),
+        )
+    }
+
+    @Test
+    fun `a refused request and a missing one are different answers`() {
+        assertEquals(
+            ErrorFamily.ACCESS_DENIED,
+            DownloadErrorMessages.classify("HTTP Error 403: Forbidden"),
+        )
+        assertEquals(
+            ErrorFamily.NOT_FOUND,
+            DownloadErrorMessages.classify("ERROR: [youtube] dQw4w9WgXcQ: Video unavailable"),
+        )
+        assertEquals(
+            ErrorFamily.NOT_FOUND,
+            DownloadErrorMessages.classify("HTTP Error 404: Not Found"),
+        )
+        assertEquals(
+            ErrorFamily.NOT_FOUND,
+            DownloadErrorMessages.classify("Private video. Sign in if you've been granted access"),
+        )
+        assertEquals(
+            ErrorFamily.NOT_FOUND,
+            DownloadErrorMessages.classify("This video has been removed by the uploader"),
+        )
+    }
+
+    @Test
+    fun `a network timeout is not blamed on the site`() {
+        assertEquals(
+            ErrorFamily.TIMEOUT,
+            DownloadErrorMessages.classify(
+                "ERROR: Unable to download webpage: <urlopen error timed out>"
+            ),
+        )
+        assertEquals(
+            ErrorFamily.TIMEOUT,
+            DownloadErrorMessages.classify("HTTP Error 504: Gateway Time-out"),
+        )
+    }
+
+    @Test
+    fun `a failed conversion is its own family`() {
+        assertEquals(
+            ErrorFamily.POSTPROCESSING,
+            DownloadErrorMessages.classify("ERROR: Postprocessing: Conversion failed!"),
+        )
+        assertEquals(
+            ErrorFamily.POSTPROCESSING,
+            DownloadErrorMessages.classify("ffmpeg exited with code 1"),
+        )
+    }
+
+    @Test
     fun `sabr is matched as a word`() {
         assertEquals(
             ErrorFamily.EXTRACTOR_BROKEN,
