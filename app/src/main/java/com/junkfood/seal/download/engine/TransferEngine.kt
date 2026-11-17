@@ -13,7 +13,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
  * once when the task enters the ladder, so no lane reads [PreferenceUtil]
  * statics mid-transfer and every rung of the ladder sees the same values.
  */
-internal class DownloadSettingsSnapshot private constructor(
+internal class DownloadSettingsSnapshot internal constructor(
     val preferences: DownloadUtil.DownloadPreferences,
     /** Ghost engine / N_m3u8DL-RE master switch. */
     val engineEnabled: Boolean,

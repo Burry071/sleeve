@@ -143,9 +143,7 @@ import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getInt
 import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
-import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.TEMPLATE_ID
-import com.junkfood.seal.util.THUMBNAIL
 import com.junkfood.seal.util.ToastUtil
 import com.junkfood.seal.util.USE_CUSTOM_AUDIO_PRESET
 import com.junkfood.seal.util.VIDEO_FORMAT
@@ -183,9 +181,9 @@ data class Config(
                 if (downloadType != oldValue.downloadType) {
                     downloadType?.let { PreferenceUtil.updateDownloadType(it) }
                 }
-                if (useFormatSelection != oldValue.useFormatSelection) {
-                    FORMAT_SELECTION.updateBoolean(useFormatSelection)
-                }
+                // The sheet's Playlist tab forces the preset on for that one
+                // task; writing it here would switch Settings to "Preset" for
+                // every later download too.
                 if (savedLinks != oldValue.savedLinks) {
                     PreferenceUtil.updateSavedLinks(savedLinks)
                 }
@@ -218,7 +216,6 @@ fun DownloadDialog(
             state = state,
             config = config,
             preferences = preferences,
-            onPreferencesUpdate = onPreferencesUpdate,
             onPresetEdit = { type ->
                 when (type) {
                     Audio -> showAudioPresetDialog = true
@@ -347,7 +344,6 @@ private fun DownloadDialogContent(
     state: DownloadDialogViewModel.SheetState,
     config: Config,
     preferences: DownloadUtil.DownloadPreferences,
-    onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
@@ -375,17 +371,13 @@ private fun DownloadDialogContent(
                             AdditionalSettings(
                                 modifier = Modifier.padding(horizontal = 16.dp),
                                 isQuickDownload = false,
-                                preference = preferences,
+                                preference = session.preferences,
                                 selectedType = selectedType,
                                 convertAudio = session.convertAudio,
                                 onConvertAudioChange = session.onConvertAudioChange,
                                 splitByChapter = session.splitByChapter,
                                 onSplitByChapterChange = session.onSplitByChapterChange,
-                                onPreferenceUpdate = {
-                                    onPreferencesUpdate(
-                                        DownloadUtil.DownloadPreferences.createFromPreferences()
-                                    )
-                                },
+                                onPreferencesChange = session.onPreferencesChange,
                             )
                         },
                         onActionPost = { onActionPost(it) },
@@ -394,7 +386,6 @@ private fun DownloadDialogContent(
                     ConfigurePagePlaylistVariant(
                         initialDownloadType = config.downloadType ?: Video,
                         preferences = preferences,
-                        onPreferencesUpdate = onPreferencesUpdate,
                         onPresetEdit = onPresetEdit,
                         onDismissRequest = { onActionPost(Action.HideSheet) },
                     ) { sessionPreferences ->
@@ -534,8 +525,11 @@ private fun ConfigurePagePreview() {
 data class FormatSession(
     val convertAudio: Boolean,
     val splitByChapter: Boolean,
+    /** This sheet's view of the preferences, including its own overrides. */
+    val preferences: DownloadUtil.DownloadPreferences,
     val onConvertAudioChange: (Boolean) -> Unit,
     val onSplitByChapterChange: (Boolean) -> Unit,
+    val onPreferencesChange: (DownloadUtil.DownloadPreferences) -> Unit,
 )
 
 @Composable
@@ -550,8 +544,18 @@ private fun ConfigurePage(
     onActionPost: (Action) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var selectedType by remember(config) { mutableStateOf(config.downloadType) }
+    // A stored type the sheet does not offer (Command hidden in Settings, or a
+    // stale value) would leave every tab unselected and the action disabled.
+    var selectedType by remember(config) {
+        mutableStateOf(
+            config.downloadType?.let { FormatSelectionPolicy.fallbackType(it, config.typeEntries) }
+                ?: config.typeEntries.firstOrNull()
+        )
+    }
     var useFormatSelection by remember(config) { mutableStateOf(config.useFormatSelection) }
+    // Chips below mutate this copy only; Settings keeps its own values, so
+    // nothing leaks into the next download.
+    var sessionPreferences by remember(preferences) { mutableStateOf(preferences) }
     // Both start fresh for every sheet opening: split defaults off, and an untouched
     // conversion chip follows the Settings default (for the Audio type only). The chips
     // below change this task's override, never the Settings value itself.
@@ -568,8 +572,10 @@ private fun ConfigurePage(
         FormatSession(
             convertAudio = sessionConvertAudio,
             splitByChapter = sessionSplitByChapter,
+            preferences = sessionPreferences,
             onConvertAudioChange = { convertAudioOverride = it },
             onSplitByChapterChange = { sessionSplitByChapter = it },
+            onPreferencesChange = { sessionPreferences = it },
         )
     val canProceed = selectedType in config.typeEntries
 
@@ -700,7 +706,7 @@ private fun ConfigurePage(
                     Action.DownloadWithPreset(
                         urlList = listOf(url),
                         preferences =
-                            preferences.copy(
+                            sessionPreferences.copy(
                                 extractAudio = FormatSelectionPolicy.audioOnly(selectedType),
                                 convertAudio = sessionConvertAudio,
                                 splitByChapter = sessionSplitByChapter,
@@ -719,7 +725,8 @@ private fun ConfigurePage(
                     onActionPost(
                         Action.FetchPlaylist(
                             url = url,
-                            preferences = preferences.copy(splitByChapter = sessionSplitByChapter),
+                            preferences =
+                                sessionPreferences.copy(splitByChapter = sessionSplitByChapter),
                         )
                     )
                 } else {
@@ -728,7 +735,7 @@ private fun ConfigurePage(
                             url = url,
                             audioOnly = FormatSelectionPolicy.audioOnly(selectedType),
                             preferences =
-                                preferences.copy(
+                                sessionPreferences.copy(
                                     convertAudio = sessionConvertAudio,
                                     splitByChapter = sessionSplitByChapter,
                                 ),
@@ -748,7 +755,7 @@ private fun ConfigurePage(
                         Action.RunCommand(
                             url = url,
                             template = selectedTemplate,
-                            preferences = preferences,
+                            preferences = sessionPreferences,
                         )
                     )
                 }
@@ -762,7 +769,6 @@ fun ConfigurePagePlaylistVariant(
     modifier: Modifier = Modifier,
     initialDownloadType: DownloadType,
     preferences: DownloadUtil.DownloadPreferences,
-    onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit = {},
     onDismissRequest: () -> Unit,
     onDownload: (DownloadUtil.DownloadPreferences) -> Unit,
@@ -775,6 +781,7 @@ fun ConfigurePagePlaylistVariant(
         mutableStateOf<Boolean?>(null)
     }
     var sessionSplitByChapter by remember { mutableStateOf(false) }
+    var sessionPreferences by remember(preferences) { mutableStateOf(preferences) }
     val sessionConvertAudio =
         convertAudioOverride
             ?: FormatSelectionPolicy
@@ -800,7 +807,7 @@ fun ConfigurePagePlaylistVariant(
             )
             Preset(
                 modifier = Modifier,
-                preference = preferences,
+                preference = sessionPreferences,
                 selected = true,
                 downloadType = selectedType,
                 onClick = { onPresetEdit(selectedType) },
@@ -813,15 +820,13 @@ fun ConfigurePagePlaylistVariant(
             AdditionalSettings(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 isQuickDownload = false,
-                preference = preferences,
+                preference = sessionPreferences,
                 selectedType = selectedType,
                 convertAudio = sessionConvertAudio,
                 onConvertAudioChange = { convertAudioOverride = it },
                 splitByChapter = sessionSplitByChapter,
                 onSplitByChapterChange = { sessionSplitByChapter = it },
-                onPreferenceUpdate = {
-                    onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
-                },
+                onPreferencesChange = { sessionPreferences = it },
             )
         }
 
@@ -833,7 +838,7 @@ fun ConfigurePagePlaylistVariant(
             onCancel = onDismissRequest,
             onDownload = {
                 onDownload(
-                    preferences.copy(
+                    sessionPreferences.copy(
                         extractAudio = FormatSelectionPolicy.audioOnly(selectedType),
                         convertAudio = sessionConvertAudio,
                         splitByChapter = sessionSplitByChapter,
@@ -858,7 +863,7 @@ private fun AdditionalSettings(
     splitByChapter: Boolean,
     onSplitByChapterChange: (Boolean) -> Unit,
     onNavigateToCookieGeneratorPage: (String) -> Unit = {},
-    onPreferenceUpdate: () -> Unit,
+    onPreferencesChange: (DownloadUtil.DownloadPreferences) -> Unit,
 ) {
     val context = LocalContext.current
     val cookiesProfiles by DatabaseUtil.getCookiesFlow().collectAsStateWithLifecycle(emptyList())
@@ -874,10 +879,15 @@ private fun AdditionalSettings(
             // whether a cookie retry can work, so hiding the row hid the answer.
             VideoFilterChip(
                 selected = preference.cookies,
+                // A command template is run verbatim; a cookie toggle would
+                // only land in preferences the command never reads.
+                enabled = selectedType != Command,
                 onClick = {
                     if (isQuickDownload) {
                         COOKIES.updateBoolean(!cookies)
-                        onPreferenceUpdate()
+                        onPreferencesChange(
+                            DownloadUtil.DownloadPreferences.createFromPreferences()
+                        )
                     } else {
                         showCookiesDialog = true
                     }
@@ -889,8 +899,8 @@ private fun AdditionalSettings(
                 selected = downloadSubtitle,
                 enabled = selectedType != Command,
                 onClick = {
-                    SUBTITLE.updateBoolean(!downloadSubtitle)
-                    onPreferenceUpdate()
+                    // This sheet's copy only: Settings keeps its own default.
+                    onPreferencesChange(preference.copy(downloadSubtitle = !downloadSubtitle))
                 },
                 label = stringResource(id = R.string.download_subtitles),
             )
@@ -898,8 +908,7 @@ private fun AdditionalSettings(
                 selected = createThumbnail,
                 enabled = selectedType != Command,
                 onClick = {
-                    THUMBNAIL.updateBoolean(!createThumbnail)
-                    onPreferenceUpdate()
+                    onPreferencesChange(preference.copy(createThumbnail = !createThumbnail))
                 },
                 label = stringResource(R.string.create_thumbnail),
             )
@@ -956,7 +965,7 @@ private fun AdditionalSettings(
                 isCookiesEnabled = cookies,
                 onCookiesToggled = {
                     COOKIES.updateBoolean(!cookies)
-                    onPreferenceUpdate()
+                    onPreferencesChange(preference.copy(cookies = !cookies))
                 },
             )
         }

@@ -96,6 +96,12 @@ internal object GhostHttpTransferEngine : TransferEngine {
                     Log.d(TRANSFER_TAG, "Ghost handoff skipped: no matching single format")
                     return null
                 }
+                if (!singleFormatHandOffAllowed(candidate, job.settings.mergeOutputMkv)) {
+                    // The engine writes one stream and cannot mux: a silent video
+                    // would land without audio, and an .mkv remux is unreachable.
+                    Log.d(TRANSFER_TAG, "Ghost handoff skipped: silent video or mkv remux")
+                    return null
+                }
                 // A single selected format is the exact file yt-dlp would save —
                 // unknown codecs (generic extractor reports acodec=null) are fine.
 
