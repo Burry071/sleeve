@@ -57,7 +57,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -115,6 +114,7 @@ import com.junkfood.seal.util.PreferenceUtil.updateString
 import com.junkfood.seal.util.SUBTITLE
 import com.junkfood.seal.util.SUBTITLE_LANGUAGE
 import com.junkfood.seal.util.SubtitleFormat
+import com.junkfood.seal.util.SubtitleSelectionPolicy
 import com.junkfood.seal.util.VIDEO_CLIP
 import com.junkfood.seal.util.VideoClip
 import com.junkfood.seal.util.VideoInfo
@@ -135,6 +135,7 @@ private data class FormatConfig(
     val newTitle: String,
     val selectedSubtitles: List<String>,
     val selectedAutoCaptions: List<String>,
+    val suggested: Boolean,
 )
 
 @Composable
@@ -173,7 +174,8 @@ fun FormatPage(
         initialConvertAudio = convertAudio,
         mergeAudioStream = !audioOnly && mergeAudioStream,
         selectedSubtitleCodes = initialSelectedSubtitles,
-        isClippingAvailable = VIDEO_CLIP.getBoolean() && (videoInfo.duration ?: .0) >= 0,
+        isClippingAvailable =
+            FormatSelectionPolicy.clippingAvailable(VIDEO_CLIP.getBoolean(), videoInfo.duration),
     ) { config ->
         with(config) {
             diffSubtitleLanguages =
@@ -192,6 +194,7 @@ fun FormatPage(
                     selectedSubtitles = selectedSubtitles,
                     selectedAutoCaptions = selectedAutoCaptions,
                     audioOnly = audioOnly,
+                    suggested = suggested,
                 )
             )
 
@@ -212,9 +215,10 @@ fun FormatPage(
             },
             onConfirm = {
                 SUBTITLE_LANGUAGE.updateString(
-                    (diffSubtitleLanguages + subtitleLanguageRegex).joinToString(separator = ",") {
-                        it
-                    }
+                    SubtitleSelectionPolicy.buildLanguagePatterns(
+                        subtitleLanguageRegex,
+                        diffSubtitleLanguages,
+                    )
                 )
                 showUpdateSubtitleDialog = false
                 onNavigateBack()
@@ -453,17 +457,21 @@ private fun FormatPageImpl(
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                     Button(
                         onClick = {
+                            val clips =
+                                if (isClippingVideo) listOf(VideoClip(videoClipDuration)) else emptyList()
                             onDownloadPressed(
                                 FormatConfig(
                                     formatList = formatList,
-                                    videoClips =
-                                        if (isClippingVideo) listOf(VideoClip(videoClipDuration))
-                                        else emptyList(),
-                                    splitByChapter = isSplittingVideo,
+                                    videoClips = clips,
+                                    // A clip and a chapter split write different files; the
+                                    // clip wins because the slider shows what the user picked.
+                                    splitByChapter =
+                                        FormatSelectionPolicy.splitWithClips(isSplittingVideo, clips),
                                     convertAudio = convertAudio,
                                     newTitle = videoTitle,
                                     selectedSubtitles = selectedSubtitles,
                                     selectedAutoCaptions = selectedAutoCaptions,
+                                    suggested = isSuggestedFormatSelected,
                                 )
                             )
                         },
@@ -504,8 +512,14 @@ private fun FormatPageImpl(
                         isSplittingVideo = isSplittingVideo,
                         isClippingAvailable = isClippingAvailable,
                         isSplitByChapterAvailable = isSplitByChapterAvailable,
-                        onClippingToggled = { isClippingVideo = !isClippingVideo },
-                        onSplittingToggled = { isSplittingVideo = !isSplittingVideo },
+                        onClippingToggled = {
+                            isClippingVideo = !isClippingVideo
+                            if (isClippingVideo) isSplittingVideo = false
+                        },
+                        onSplittingToggled = {
+                            isSplittingVideo = !isSplittingVideo
+                            if (isSplittingVideo) isClippingVideo = false
+                        },
                         onRename = { showRenameDialog = true },
                         onOpenThumbnail = { uriHandler.openUri(thumbnail.toHttpsUrl()) },
                     )
@@ -536,9 +550,12 @@ private fun FormatPageImpl(
                                         onValueChangeFinished = { shouldUpdateClipDuration = true },
                                     )
                                 }
-                            DisposableEffect(shouldUpdateClipDuration) {
-                                videoClipDuration = state.activeRangeStart..state.activeRangeEnd
-                                onDispose { shouldUpdateClipDuration = false }
+                            LaunchedEffect(shouldUpdateClipDuration) {
+                                if (shouldUpdateClipDuration) {
+                                    videoClipDuration =
+                                        state.activeRangeStart..state.activeRangeEnd
+                                    shouldUpdateClipDuration = false
+                                }
                             }
 
                             VideoSelectionSlider(
@@ -610,13 +627,25 @@ private fun FormatPageImpl(
                         LazyRow(modifier = Modifier.padding()) {
                             for ((code, formats) in suggestedSubtitleMap) {
                                 item {
+                                    // A code that only exists as an automatic caption
+                                    // is a different yt-dlp request; keep it apart.
+                                    val target =
+                                        if (
+                                            SubtitleSelectionPolicy.goesToAutoCaptions(
+                                                videoInfo.subtitles,
+                                                videoInfo.automaticCaptions,
+                                                code,
+                                            )
+                                        )
+                                            selectedAutoCaptions
+                                        else selectedSubtitles
                                     VideoFilterChip(
-                                        selected = selectedSubtitles.contains(code),
+                                        selected = target.contains(code),
                                         onClick = {
-                                            if (selectedSubtitles.contains(code)) {
-                                                selectedSubtitles.remove(code)
+                                            if (target.contains(code)) {
+                                                target.remove(code)
                                             } else {
-                                                selectedSubtitles.add(code)
+                                                target.add(code)
                                             }
                                         },
                                         label = formats.first().run { name ?: protocol ?: code },
@@ -723,6 +752,9 @@ private fun FormatPageImpl(
                             if (!mergeAudioStream) {
                                 selectedAudioOnlyFormats.clear()
                             }
+                            // An audio track replaces a muxed pick; keeping both
+                            // would ask yt-dlp to merge a stream that has audio.
+                            selectedVideoAudioFormat = NOT_SELECTED
                             isSuggestedFormatSelected = false
                             selectedAudioOnlyFormats.add(index)
                         }
@@ -901,11 +933,16 @@ private fun FormatPageImpl(
             suggestedSubtitles = suggestedSubtitleMap,
             autoCaptions = otherSubtitleMap,
             selectedSubtitles = selectedSubtitles,
+            selectedAutoCaptions = selectedAutoCaptions,
             onDismissRequest = { showSubtitleSelectionDialog = false },
             onConfirm = { subs, autoSubs ->
                 selectedSubtitles.run {
                     clear()
                     addAll(subs)
+                }
+                selectedAutoCaptions.run {
+                    clear()
+                    addAll(autoSubs)
                 }
 
                 showSubtitleSelectionDialog = false
@@ -1030,6 +1067,7 @@ private fun SubtitleSelectionDialog(
     suggestedSubtitles: Map<String, List<SubtitleFormat>>,
     autoCaptions: Map<String, List<SubtitleFormat>>,
     selectedSubtitles: List<String>,
+    selectedAutoCaptions: List<String> = emptyList(),
     onDismissRequest: () -> Unit = {},
     onConfirm: (subs: List<String>, autoSubs: List<String>) -> Unit = { _, _ -> },
 ) {
@@ -1037,7 +1075,9 @@ private fun SubtitleSelectionDialog(
     val selectedSubtitles = remember {
         mutableStateListOf<String>().apply { addAll(selectedSubtitles) }
     }
-    val selectedAutoCaptions = remember { mutableStateListOf<String>() }
+    val selectedAutoCaptions = remember {
+        mutableStateListOf<String>().apply { addAll(selectedAutoCaptions) }
+    }
 
     val suggestedSubtitlesFiltered =
         suggestedSubtitles.filterWithSearchText(searchText).sortedWithSelection(selectedSubtitles)
@@ -1176,10 +1216,8 @@ private fun ClickableTextAction(
     }
 }
 
-fun <T : Collection<String>> T.filterWithRegex(subtitleLanguageRegex: String): Set<String> {
-    val regexGroup = subtitleLanguageRegex.split(',')
-    return filter { language -> regexGroup.any { Regex(it).matchEntire(language) != null } }.toSet()
-}
+fun <T : Collection<String>> T.filterWithRegex(subtitleLanguageRegex: String): Set<String> =
+    filter { SubtitleSelectionPolicy.matchesAny(it, subtitleLanguageRegex) }.toSet()
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

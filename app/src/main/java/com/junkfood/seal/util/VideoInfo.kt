@@ -115,33 +115,38 @@ data class Format(
     val language: String? = null,
 ) {
     // The generic extractor reports direct links without codec fields, so a
-    // null vcodec is "unknown", not "no video": classify by the container
-    // instead, or an .mp4 link lands in the audio folder. Audio-only formats
-    // from yt-dlp always carry vcodec="none" and never reach this fallback.
+    // null (or "unknown"/blank) codec is "unknown", not "no video": classify
+    // by the container instead, or an .mp4 link lands in the audio folder.
+    // Storyboards carry "none" for both codecs and are not audio at all.
     fun isAudioOnly(): Boolean =
         when {
-            vcodec == "none" -> true
-            vcodec != null -> false
+            !vcodec.isAbsentCodec() -> false
+            !acodec.isAbsentCodec() -> true
+            acodec == "none" -> false
             ext == null -> true
             else -> ext.lowercase() in AUDIO_FILE_EXTENSIONS
         }
 
-    fun isVideoOnly(): Boolean = acodec == null || acodec == "none"
+    fun isVideoOnly(): Boolean = acodec.isAbsentCodec()
 
     fun containsVideo(): Boolean =
         when {
+            !vcodec.isAbsentCodec() -> true
             vcodec == "none" -> false
-            vcodec != null -> true
             ext == null -> false
             else -> ext.lowercase() !in AUDIO_FILE_EXTENSIONS
         }
 
-    fun containsAudio(): Boolean = acodec != null && acodec != "none"
+    fun containsAudio(): Boolean = !acodec.isAbsentCodec()
 }
 
 /** Containers that only ever hold audio; used when yt-dlp omits codec info. */
 val AUDIO_FILE_EXTENSIONS =
     setOf("mp3", "m4a", "m4b", "aac", "opus", "flac", "wav", "ogg", "oga", "wma", "weba", "mka")
+
+/** Codec fields that say nothing about the stream: absent or a placeholder. */
+private fun String?.isAbsentCodec(): Boolean =
+    this == null || isBlank() || this == "none" || this == "unknown"
 
 @Serializable
 data class VideoClip(val start: Int = 0, val end: Int = 0) {

@@ -4,6 +4,7 @@ import com.junkfood.seal.util.DownloadType
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.FormatSelectionPolicy
 import com.junkfood.seal.util.FormatSelectionPolicy.Section
+import com.junkfood.seal.util.VideoClip
 import com.junkfood.seal.util.VideoInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -268,5 +269,78 @@ class FormatSelectionPolicyTest {
     @Test
     fun suggestedIsEmptyWithoutFormats() {
         assertTrue(FormatSelectionPolicy.suggestedFormats(VideoInfo(), audioOnly = false).isEmpty())
+    }
+
+    // --- Format id string -----------------------------------------------------------
+
+    @Test
+    fun suggestedLeavesTheFormatChoiceToYtDlp() {
+        val formats = listOf(audio("140", 128.0), silent("137", 1080.0))
+        assertEquals("", FormatSelectionPolicy.formatIdString(formats, suggested = true))
+    }
+
+    @Test
+    fun explicitSelectionJoinsVideoBeforeAudio() {
+        val formats = listOf(audio("251", 160.0), silent("137", 1080.0))
+        assertEquals("137+251", FormatSelectionPolicy.formatIdString(formats, suggested = false))
+    }
+
+    @Test
+    fun blankAndDuplicateIdsNeverReachTheFormatString() {
+        val formats =
+            listOf(
+                muxed("18", 720.0),
+                audio("140", 128.0),
+                muxed("18", 720.0),
+                Format(formatId = null, acodec = "aac", vcodec = "none", ext = "m4a"),
+                Format(formatId = "  ", acodec = "aac", vcodec = "none", ext = "m4a"),
+            )
+        assertEquals("18+140", FormatSelectionPolicy.formatIdString(formats, suggested = false))
+    }
+
+    // --- Audio stream merging -------------------------------------------------------
+
+    @Test
+    fun aSilentVideoAndItsPairedAudioNeedNoMerge() {
+        assertFalse(FormatSelectionPolicy.mergeAudioStream(listOf(silent("137", 1080.0), audio("140"))))
+        assertFalse(FormatSelectionPolicy.mergeAudioStream(listOf(muxed("18", 720.0))))
+    }
+
+    @Test
+    fun severalAudioStreamsOrAnExtraTrackOverMuxedVideoNeedAMerge() {
+        assertTrue(FormatSelectionPolicy.mergeAudioStream(listOf(audio("140"), audio("251"))))
+        assertTrue(FormatSelectionPolicy.mergeAudioStream(listOf(muxed("18", 720.0), audio("140"))))
+    }
+
+    // --- Type tab fallback ----------------------------------------------------------
+
+    @Test
+    fun aStoredTypeTheSheetDoesNotOfferFallsBackToItsFirstTab() {
+        val entries = listOf(DownloadType.Video, DownloadType.Audio)
+        assertEquals(DownloadType.Video, FormatSelectionPolicy.fallbackType(DownloadType.Command, entries))
+        assertEquals(DownloadType.Audio, FormatSelectionPolicy.fallbackType(DownloadType.Audio, entries))
+        assertEquals(null, FormatSelectionPolicy.fallbackType(DownloadType.Video, emptyList()))
+    }
+
+    // --- Clipping and chapter split -------------------------------------------------
+
+    @Test
+    fun clippingNeedsAPositiveDuration() {
+        assertTrue(FormatSelectionPolicy.clippingAvailable(true, 61.0))
+        assertFalse(FormatSelectionPolicy.clippingAvailable(true, 0.0))
+        assertFalse(FormatSelectionPolicy.clippingAvailable(true, null))
+        assertFalse(FormatSelectionPolicy.clippingAvailable(false, 61.0))
+    }
+
+    @Test
+    fun clipsAndAChapterSplitNeverTravelTogether() {
+        assertFalse(
+            FormatSelectionPolicy.splitWithClips(
+                splitSelected = true,
+                clips = listOf(VideoClip(1, 2)),
+            )
+        )
+        assertTrue(FormatSelectionPolicy.splitWithClips(splitSelected = true, clips = emptyList()))
+        assertFalse(FormatSelectionPolicy.splitWithClips(splitSelected = false, clips = emptyList()))
     }
 }
