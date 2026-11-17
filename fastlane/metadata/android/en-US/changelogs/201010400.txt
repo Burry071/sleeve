@@ -1,0 +1,24 @@
+2.1.1
+
+Downloads
+• "Audio only" really downloads audio: the Original or MP3 choice survives the format sheet, and audio-only sites with no separate audio stream still produce a file.
+• Audio picks get a split-by-chapter toggle; the unsplit master is removed only when the chapter files were actually produced.
+• While a finished transfer is merged or split the card shows "Converting / Post-processing…" instead of sitting at 100%.
+• Audio downloads are counted as audio, and only the media a run produced reaches the Gallery — including documents saved through the system folder picker.
+• A history entry you deleted no longer comes back on the next launch, and the finished queue card closes with its history row.
+• "Clear finished" in the finished tab, "Re-download" on a finished card, and Close on a running card's button.
+
+YouTube
+• Extraction retries over a client ladder instead of one pinned client, so more links resolve on the first try.
+• Videos default to the compatibility format preset and no longer block while the filename template loads.
+
+Audiobooks
+• The match review sheet opens as soon as any book is held. Accept all no longer waits for held rows, Resume skips them, and a queued swap shows Done instead of a disabled Apply.
+
+Network
+• A download parked on mobile data offers Download anyway, which starts only the tasks you tapped.
+• Switching off Wi-Fi no longer leaves a stale "unmetered" verdict behind.
+• Failures say what went wrong — bot check, login, not found, access denied, format, rate limit or timeout — and the action sheet carries the full reason.
+
+Downloads list
+• Rows show the same status line, progress bar and action button as the cards, and the task log can be copied.
