@@ -285,6 +285,42 @@
       "published": true,
       "distributed": true,
       "verified_at": "2026-11-15T15:16:00Z"
+    },
+    {
+      "tag": "v2.1.1",
+      "version_name": "2.1.1",
+      "commit": "a90edd936dec4bc5c9033c0c4ef0f313bb44372c",
+      "base_version_code": 201010400,
+      "shipped_version_code": 201010400,
+      "asset_name": "Sleeve-generic-release.apk",
+      "asset_size": 113128106,
+      "sha256": "9d4d13ef58d78dd79cb1fe8dfa10bd6282a5a5668773407102ab0d1b6625074e",
+      "cert_sha256": "2d5fd54b83c2b24d5fc267b8d082c936c44fd113db4267eb1c2f573a36adcad3",
+      "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.1/Sleeve-generic-release.apk",
+      "artifacts": [
+        {
+          "name": "Sleeve-arm64-release.apk",
+          "size": 64447779,
+          "sha256": "e4ecdfc0e9fb82e953c99dd8dc1ee2240721dedff9778e3773ffbc3d8139cac8",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.1/Sleeve-arm64-release.apk"
+        },
+        {
+          "name": "Sleeve-x86_64-release.apk",
+          "size": 64739113,
+          "sha256": "5c1ab3d0a63a70ab08b9eaf9ee89f96edd9367ecc9374ae7a9f9cc3c9e2ba778",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.1/Sleeve-x86_64-release.apk"
+        },
+        {
+          "name": "Sleeve-generic-release.apk",
+          "size": 113128106,
+          "sha256": "9d4d13ef58d78dd79cb1fe8dfa10bd6282a5a5668773407102ab0d1b6625074e",
+          "asset_url": "https://github.com/Burry071/sleeve/releases/download/v2.1.1/Sleeve-generic-release.apk"
+        }
+      ],
+      "published_at": "2026-11-17T21:57:11Z",
+      "published": true,
+      "distributed": true,
+      "verified_at": "2026-11-17T22:04:00Z"
     }
   ]
 }
