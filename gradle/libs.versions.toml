@@ -3,14 +3,14 @@ accompanist = "0.34.0"
 androidGradlePlugin = "8.7.2"
 androidxComposeBom = "2025.03.01"
 androidxCore = "1.15.0"
-androidMaterial = "1.12.0"
-androidxAppCompat = "1.7.0"
+androidMaterial = "1.14.0"
+androidxAppCompat = "1.8.0"
 androidxActivity = "1.10.1"
-graphics = "1.0.1"
-constraintLayout = "1.1.0"
+graphics = "1.1.0"
+constraintLayout = "1.1.2"
 
 androidxLifecycle = "2.8.7"
-androidxNavigation = "2.8.9"
+androidxNavigation = "2.10.2"
 
 androidxEspresso = "3.5.0"
 androidxTestExt = "1.1.4"
@@ -27,7 +27,7 @@ datetime = "0.6.1"
 serialization = "1.7.2"
 okhttp = "5.0.0-alpha.10"
 
-room = "2.6.1"
+room = "2.8.5"
 ksp = "2.0.20-1.0.25"
 
 youtubedlAndroid = "0.17.3"
@@ -111,7 +111,7 @@ youtubedl-android-ffmpeg = { group = "io.github.junkfood02.youtubedl-android", n
 youtubedl-android-aria2c = { group = "io.github.junkfood02.youtubedl-android", name = "aria2c", version.ref = "youtubedlAndroid" }
 
 mmkv = { group = "com.tencent", name = "mmkv", version.ref = "mmkv" }
-androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.0.1" }
+androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.2.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
