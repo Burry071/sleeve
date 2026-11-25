@@ -11,10 +11,17 @@ import com.junkfood.seal.R
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
+import com.junkfood.seal.util.CONVERT_MP3
+import com.junkfood.seal.util.CUSTOM_COMMAND
+import com.junkfood.seal.util.DownloadType
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.FORMAT_SELECTION
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.FormatSelectionPolicy
 import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.PlaylistResult
+import com.junkfood.seal.util.PreferenceUtil
+import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
 import com.junkfood.seal.util.PreferenceUtil.getString
@@ -25,6 +32,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -163,10 +171,56 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     private val mSheetStateFlow: MutableStateFlow<SheetState> =
         MutableStateFlow(SheetState.InputUrl)
     private val mSheetValueFlow: MutableStateFlow<SheetValue> = MutableStateFlow(SheetValue.Hidden)
+    private val mConfigureSessionFlow: MutableStateFlow<ConfigureSessionState> =
+        MutableStateFlow(ConfigureSessionState())
 
     val selectionStateFlow = mSelectionStateFlow.asStateFlow()
     val sheetStateFlow = mSheetStateFlow.asStateFlow()
     val sheetValueFlow = mSheetValueFlow.asStateFlow()
+    val configureSessionFlow: StateFlow<ConfigureSessionState> = mConfigureSessionFlow.asStateFlow()
+
+    /**
+     * Re-reads Settings defaults into a fresh [ConfigureSessionState] so a new
+     * sheet opening never inherits sticky per-task overrides from an earlier URL.
+     */
+    fun refreshBasePreferences(
+        basePreferences: DownloadUtil.DownloadPreferences? = null,
+        selectedType: DownloadType? = null,
+        useFormatSelection: Boolean? = null,
+    ) {
+        val resolvedPreferences =
+            basePreferences
+                ?: runCatching { DownloadUtil.DownloadPreferences.createFromPreferences() }
+                    .getOrDefault(DownloadUtil.DownloadPreferences.EMPTY)
+        val typeEntries =
+            runCatching {
+                if (CUSTOM_COMMAND.getBoolean()) DownloadType.entries
+                else DownloadType.entries - DownloadType.Command
+            }
+                .getOrDefault(DownloadType.entries - DownloadType.Command)
+        val storedType =
+            selectedType
+                ?: runCatching { PreferenceUtil.getDownloadType() }.getOrNull()
+                ?: mConfigureSessionFlow.value.selectedType
+        val resolvedType =
+            FormatSelectionPolicy.fallbackType(storedType, typeEntries) ?: DownloadType.Video
+        val resolvedFormatSelection =
+            useFormatSelection
+                ?: runCatching { FORMAT_SELECTION.getBoolean() }
+                    .getOrDefault(mConfigureSessionFlow.value.useFormatSelection)
+
+        mConfigureSessionFlow.update {
+            it.resetFor(
+                basePreferences = resolvedPreferences,
+                selectedType = resolvedType,
+                useFormatSelection = resolvedFormatSelection,
+            )
+        }
+    }
+
+    fun updateConfigureSession(transform: (ConfigureSessionState) -> ConfigureSessionState) {
+        mConfigureSessionFlow.update(transform)
+    }
 
     /** Batch whose match review should be on screen; set by the card and the notification. */
     private val mMatchReviewBatchFlow = MutableStateFlow<String?>(null)
@@ -371,6 +425,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun showDialog(action: Action.ShowSheet) {
+        refreshBasePreferences()
         val urlList = action.urlList
         urlList?.firstOrNull { isSpotifyUrl(it) }?.let { spotifyUrl ->
             mSheetValueFlow.update { SheetValue.Expanded }
@@ -590,6 +645,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mPendingGalleryFlow.value = null
         if (sheetState is SheetState.Loading) cancel()
         mSheetStateFlow.update { SheetState.InputUrl }
+        mConfigureSessionFlow.update { it.resetFor(it.basePreferences) }
         resetSelectionState()
     }
 
@@ -597,6 +653,192 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mSelectionStateFlow.update { SelectionState.Idle }
     }
 }
+
+/**
+ * Immutable per-sheet configure state owned by [DownloadDialogViewModel].
+ * Every chip toggle mutates this session copy only; global MMKV Settings keep
+ * their own defaults so nothing leaks across URLs.
+ */
+data class ConfigureSessionState(
+    val basePreferences: DownloadUtil.DownloadPreferences = DownloadUtil.DownloadPreferences.EMPTY,
+    val selectedType: DownloadType = DownloadType.Video,
+    val useFormatSelection: Boolean = false,
+    val sessionPreferences: DownloadUtil.DownloadPreferences = basePreferences,
+    val splitByChapter: Boolean = false,
+    val convertAudioOverride: Boolean? = null,
+) {
+    val convertAudio: Boolean
+        get() =
+            resolveSessionConvertAudio(
+                selectedType = selectedType,
+                override = convertAudioOverride,
+                settingsConvertAudio = basePreferences.convertAudio,
+            )
+
+    fun selectType(type: DownloadType): ConfigureSessionState {
+        val nextUseFormatSelection =
+            if (type == DownloadType.Playlist) false else useFormatSelection
+        val nextOverride = if (type == DownloadType.Audio) convertAudioOverride else null
+        val nextSessionPreferences =
+            if (type == DownloadType.Audio) {
+                sessionPreferences
+            } else {
+                sessionPreferences.copy(audioConvertFormat = basePreferences.audioConvertFormat)
+            }
+        return copy(
+            selectedType = type,
+            useFormatSelection = nextUseFormatSelection,
+            convertAudioOverride = nextOverride,
+            sessionPreferences = nextSessionPreferences,
+        )
+    }
+
+    fun setUseFormatSelection(enabled: Boolean): ConfigureSessionState =
+        copy(
+            useFormatSelection =
+                if (selectedType == DownloadType.Playlist) false else enabled
+        )
+
+    fun toggleCookies(enabled: Boolean = !sessionPreferences.cookies): ConfigureSessionState =
+        copy(sessionPreferences = sessionPreferences.copy(cookies = enabled))
+
+    fun toggleDownloadSubtitle(
+        enabled: Boolean = !sessionPreferences.downloadSubtitle
+    ): ConfigureSessionState =
+        copy(sessionPreferences = sessionPreferences.copy(downloadSubtitle = enabled))
+
+    fun toggleCreateThumbnail(
+        enabled: Boolean = !sessionPreferences.createThumbnail
+    ): ConfigureSessionState =
+        copy(sessionPreferences = sessionPreferences.copy(createThumbnail = enabled))
+
+    fun updateSessionPreferences(
+        preferences: DownloadUtil.DownloadPreferences
+    ): ConfigureSessionState = copy(sessionPreferences = preferences)
+
+    fun toggleSplitByChapter(enabled: Boolean = !splitByChapter): ConfigureSessionState =
+        copy(splitByChapter = enabled)
+
+    fun setConvertAudio(convert: Boolean): ConfigureSessionState =
+        copy(
+            convertAudioOverride = convert,
+            sessionPreferences =
+                applySessionAudioConvertChip(
+                    sessionPreferences = sessionPreferences,
+                    basePreferences = basePreferences,
+                    convertAudio = convert,
+                ),
+        )
+
+    fun effectivePreferences(): DownloadUtil.DownloadPreferences =
+        sessionPreferences.copy(
+            extractAudio = FormatSelectionPolicy.audioOnly(selectedType),
+            convertAudio = convertAudio,
+            splitByChapter = splitByChapter,
+        )
+
+    fun effectivePlaylistPreferences(): DownloadUtil.DownloadPreferences =
+        sessionPreferences.copy(splitByChapter = splitByChapter)
+
+    /**
+     * Merges freshly saved Settings defaults (e.g. from Video/Audio preset quick
+     * settings) into this active session while preserving session-only chip choices.
+     */
+    fun withBasePreferences(
+        newBasePreferences: DownloadUtil.DownloadPreferences
+    ): ConfigureSessionState {
+        val mergedSession =
+            newBasePreferences.copy(
+                cookies =
+                    if (sessionPreferences.cookies != basePreferences.cookies) {
+                        sessionPreferences.cookies
+                    } else {
+                        newBasePreferences.cookies
+                    },
+                downloadSubtitle =
+                    if (sessionPreferences.downloadSubtitle != basePreferences.downloadSubtitle) {
+                        sessionPreferences.downloadSubtitle
+                    } else {
+                        newBasePreferences.downloadSubtitle
+                    },
+                createThumbnail =
+                    if (sessionPreferences.createThumbnail != basePreferences.createThumbnail) {
+                        sessionPreferences.createThumbnail
+                    } else {
+                        newBasePreferences.createThumbnail
+                    },
+                audioConvertFormat =
+                    if (convertAudioOverride == true && selectedType == DownloadType.Audio) {
+                        CONVERT_MP3
+                    } else {
+                        newBasePreferences.audioConvertFormat
+                    },
+            )
+        return copy(
+            basePreferences = newBasePreferences,
+            sessionPreferences = mergedSession,
+        )
+    }
+
+    fun resetFor(
+        basePreferences: DownloadUtil.DownloadPreferences,
+        selectedType: DownloadType = this.selectedType,
+        useFormatSelection: Boolean = this.useFormatSelection,
+        splitByChapter: Boolean = false,
+    ): ConfigureSessionState =
+        ConfigureSessionState(
+            basePreferences = basePreferences,
+            selectedType = selectedType,
+            useFormatSelection =
+                if (selectedType == DownloadType.Playlist) false else useFormatSelection,
+            sessionPreferences = basePreferences,
+            splitByChapter = splitByChapter,
+            convertAudioOverride = null,
+        )
+
+    companion object {
+        fun fromConfig(
+            basePreferences: DownloadUtil.DownloadPreferences,
+            config: Config,
+        ): ConfigureSessionState {
+            val resolvedType =
+                config.downloadType?.let {
+                    FormatSelectionPolicy.fallbackType(it, config.typeEntries)
+                } ?: config.typeEntries.firstOrNull() ?: DownloadType.Video
+            return ConfigureSessionState(
+                basePreferences = basePreferences,
+                selectedType = resolvedType,
+                useFormatSelection =
+                    if (resolvedType == DownloadType.Playlist) false else config.useFormatSelection,
+                sessionPreferences = basePreferences,
+                splitByChapter = false,
+                convertAudioOverride = null,
+            )
+        }
+    }
+}
+
+internal fun resolveSessionConvertAudio(
+    selectedType: DownloadType?,
+    override: Boolean?,
+    settingsConvertAudio: Boolean,
+): Boolean {
+    if (!FormatSelectionPolicy.showsAudioConversion(selectedType)) return false
+    return override
+        ?: FormatSelectionPolicy
+            .sessionOptions(selectedType, settingsConvertAudio)
+            .convertAudio
+}
+
+internal fun applySessionAudioConvertChip(
+    sessionPreferences: DownloadUtil.DownloadPreferences,
+    basePreferences: DownloadUtil.DownloadPreferences,
+    convertAudio: Boolean,
+): DownloadUtil.DownloadPreferences =
+    sessionPreferences.copy(
+        audioConvertFormat =
+            if (convertAudio) CONVERT_MP3 else basePreferences.audioConvertFormat
+    )
 
 /**
  * The single predicate both enqueue hosts gate on: only these actions hand a
