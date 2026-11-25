@@ -22,7 +22,6 @@ import com.junkfood.seal.download.engine.uniqueFileName as engineUniqueFileName
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ui.page.settings.network.Cookie
 import com.junkfood.seal.util.FileUtil.getArchiveFile
-import com.junkfood.seal.util.FileUtil.getConfigFile
 import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.PreferenceUtil.COOKIE_HEADER
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
@@ -31,10 +30,12 @@ import com.junkfood.seal.util.PreferenceUtil.getString
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
+import java.io.File
+import java.net.URL
+import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.net.URL
 
 object DownloadUtil {
 
@@ -741,6 +742,34 @@ object DownloadUtil {
     private fun fetchContentLength(url: String): Long = DirectMedia.fetchContentLength(url)
 
 
+    internal fun sanitizeCustomCommandUrls(raw: String): List<String> =
+        raw.split(Regex("\\s+"))
+            .asSequence()
+            .map { it.trim() }
+            .filter { token ->
+                if (token.isEmpty() || token.startsWith("-")) return@filter false
+                if (token.any { it.code < 0x20 || it.code == 0x7F }) return@filter false
+                val schemeEnd = token.indexOf("://")
+                if (schemeEnd <= 0) return@filter false
+                val scheme = token.substring(0, schemeEnd).lowercase()
+                if (scheme != "http" && scheme != "https") return@filter false
+                val afterScheme = token.substring(schemeEnd + 3)
+                val authEnd =
+                    afterScheme.indexOfAny(charArrayOf('/', '?', '#')).let {
+                        if (it == -1) afterScheme.length else it
+                    }
+                afterScheme.substring(0, authEnd).isNotBlank()
+            }
+            .toList()
+
+    internal fun customCommandConfigFile(cacheDir: File, taskId: String): File {
+        val digest =
+            MessageDigest.getInstance("SHA-256")
+                .digest(taskId.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        return File(cacheDir, "config_${digest.take(16)}.txt")
+    }
+
     @CheckResult
     fun executeCustomCommandTask(
         urlString: String,
@@ -749,36 +778,45 @@ object DownloadUtil {
         preferences: DownloadPreferences,
         progressCallback: ((Float, Long, String) -> Unit),
     ): Result<YoutubeDLResponse> {
-        val urlList = urlString.split(Regex("[\n ]")).filter { it.isNotBlank() }
+        val urlList = sanitizeCustomCommandUrls(urlString)
+        if (urlList.isEmpty()) {
+            return Result.failure(IllegalArgumentException("No valid http(s) URLs in custom command"))
+        }
 
-        val request =
-            with(preferences) {
-                YoutubeDLRequest(urlList).apply {
-                    commandDirectory.takeIf { it.isNotEmpty() }?.let { addOption("-P", it) }
-                    addOption("--newline")
-                    if (aria2c) {
-                        enableAria2c()
+        val configFile = customCommandConfigFile(context.cacheDir, taskId)
+        return try {
+            runCatching {
+                FileUtil.writeContentToFile(template.template, configFile)
+                val request =
+                    with(preferences) {
+                        YoutubeDLRequest(urlList).apply {
+                            commandDirectory.takeIf { it.isNotEmpty() }?.let { addOption("-P", it) }
+                            addOption("--newline")
+                            if (aria2c) {
+                                enableAria2c()
+                            }
+                            if (useDownloadArchive) {
+                                useDownloadArchive()
+                            }
+                            if (restrictFilenames) {
+                                addOption("--restrict-filenames")
+                            }
+                            addOption(
+                                "--config-locations",
+                                configFile.absolutePath,
+                            )
+                            if (cookies) {
+                                enableCookies(userAgentString)
+                            }
+                            addOption("--")
+                        }
                     }
-                    if (useDownloadArchive) {
-                        useDownloadArchive()
-                    }
-                    if (restrictFilenames) {
-                        addOption("--restrict-filenames")
-                    }
-                    addOption(
-                        "--config-locations",
-                        FileUtil.writeContentToFile(template.template, context.getConfigFile())
-                            .absolutePath,
-                    )
-                    if (cookies) {
-                        enableCookies(userAgentString)
-                    }
-                }
+
+                YoutubeDL.getInstance()
+                    .execute(request = request, processId = taskId, callback = progressCallback)
             }
-
-        return runCatching {
-            YoutubeDL.getInstance()
-                .execute(request = request, processId = taskId, callback = progressCallback)
+        } finally {
+            configFile.delete()
         }
     }
 

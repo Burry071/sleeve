@@ -1,5 +1,6 @@
 package com.junkfood.seal.download
 
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.Context
 import android.media.MediaMetadataRetriever
@@ -68,6 +69,29 @@ import org.koin.core.component.KoinComponent
 private const val TAG = "DownloaderV2"
 
 private const val MAX_CONCURRENCY = 3
+private const val LOW_RAM_THRESHOLD_BYTES = 4L * 1024 * 1024 * 1024
+
+internal fun maxConcurrencyForRam(totalRamBytes: Long, isLowRamDevice: Boolean): Int =
+    if (isLowRamDevice || (totalRamBytes > 0L && totalRamBytes <= LOW_RAM_THRESHOLD_BYTES)) {
+        2
+    } else {
+        MAX_CONCURRENCY
+    }
+
+/**
+ * True when [path] refers to an existing, non-empty download output — either a
+ * local file or a SAF `content://` document. Treating a `content://` URI as a
+ * [File] always returns false, which broke swap validation and fallback retention
+ * on SD-card storage.
+ */
+internal fun isValidOutputPath(
+    path: String?,
+    isLocalValid: (String) -> Boolean = { p -> File(p).let { it.isFile && it.length() > 0L } },
+    isDocumentValid: (String) -> Boolean = { uri -> with(FileUtil) { uri.getFileSize() } > 0L },
+): Boolean {
+    if (path.isNullOrBlank()) return false
+    return if (path.startsWith("content://")) isDocumentValid(path) else isLocalValid(path)
+}
 
 /** The provider the Audible gate and the post-download check both cover. */
 private const val AUDIBLE_PROVIDER = "Audible"
@@ -285,6 +309,7 @@ internal fun Task.State.backupComparisonKey(): Task.State =
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val taskStateMap = mutableStateMapOf<Task, Task.State>()
+    private val maxConcurrency: Int by lazy { resolveMaxConcurrency(appContext) }
 
     override var interruptedRestore by mutableStateOf(false)
         private set
@@ -495,7 +520,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             pendingSwapCleanup.remove(task.id)?.takeIf { it.isNotBlank() }?.let { orphaned ->
                 scope.launch(Dispatchers.IO) {
                     DatabaseUtil.deleteInfoByPath(orphaned)
-                    runCatching { File(orphaned).takeIf { it.isFile }?.delete() }
+                    FileUtil.deleteFile(orphaned)
                         .onFailure {
                             Log.w(TAG, "could not delete orphaned swapped file: ${it.message}")
                         }
@@ -1015,6 +1040,23 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         )
     }
 
+    private fun resolveMaxConcurrency(context: Context): Int {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return MAX_CONCURRENCY
+        val memInfo = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memInfo)
+        return maxConcurrencyForRam(memInfo.totalMem, am.isLowRamDevice)
+    }
+
+    private fun isDocumentOutputValid(uri: String): Boolean =
+        with(FileUtil) { uri.getFileSize() } > 0L ||
+            runCatching {
+                    appContext.contentResolver
+                        .openAssetFileDescriptor(Uri.parse(uri), "r")
+                        ?.use { it.length > 0L } == true
+                }
+                .getOrDefault(false)
+
     /**
      * Called after a song completes: promote the pending pick to the real one
      * and drop the file (and history row) it replaced.
@@ -1029,9 +1071,8 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         // was restored after a restart): there is no parked path to delete,
         // but a verified replacement still promotes the pending pick.
         val oldPath = pendingSwapCleanup.remove(taskId)
-        val newFile = newPath?.let(::File)
         val task = taskStateMap.keys.firstOrNull { it.id == taskId }
-        if (newFile == null || !newFile.isFile || newFile.length() <= 0L) {
+        if (!isValidOutputPath(newPath, isDocumentValid = ::isDocumentOutputValid)) {
             Log.w(TAG, "swap for $taskId produced no file; keeping the old pick")
             task?.match?.takeIf { it.pending }?.let { task.match = it.cancelPending() }
             return
@@ -1040,7 +1081,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             // Row first: a crash between the two leaves an orphan file (harmless)
             // instead of a history row pointing at a deleted file.
             DatabaseUtil.deleteInfoByPath(oldPath)
-            runCatching { File(oldPath).takeIf { it.isFile }?.delete() }
+            FileUtil.deleteFile(oldPath)
                 .onFailure { Log.w(TAG, "could not delete replaced file: ${it.message}") }
         }
         task?.match?.takeIf { it.pending }?.let { task.match = it.confirmSelection() }
@@ -1132,7 +1173,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             }
             return
         }
-        if (taskStateMap.countRunning() >= MAX_CONCURRENCY) return
+        if (taskStateMap.countRunning() >= maxConcurrency) return
 
         taskStateMap.entries
             .sortedBy { (_, state) -> state.downloadState.schedulerRank }
@@ -1184,7 +1225,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             // requests on extractable video stay on yt-dlp: the ghost handoff
             // cannot remux.
             val job =
-                scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                scope.launch(Dispatchers.IO, CoroutineStart.LAZY) {
                     val runJob = coroutineContext[Job]
                     val synth =
                         DownloadUtil.buildDirectVideoInfo(
@@ -1266,7 +1307,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         val taskInfo = task.type
         val playlistIndex = if (taskInfo is TypeInfo.Playlist) taskInfo.index else null
         val job =
-            scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+            scope.launch(Dispatchers.IO, CoroutineStart.LAZY) {
                 val runJob = coroutineContext[Job]
                 val isThisAttempt = { state: DownloadState ->
                     state is FetchingInfo && state.job === runJob
@@ -1346,7 +1387,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         if (downloadState != Idle) return
         val task = this
         val job =
-            scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+            scope.launch(Dispatchers.IO, CoroutineStart.LAZY) {
                 val runJob = coroutineContext[Job]
                 val isThisAttempt = { state: DownloadState ->
                     state is FetchingInfo && state.job === runJob
@@ -1479,7 +1520,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         // while this task still reads as ReadyWithInfo, and doYourWork then
         // launches a second downloadVideo for the same task.
         scope
-            .launch(Dispatchers.Default, CoroutineStart.LAZY) {
+            .launch(Dispatchers.IO, CoroutineStart.LAZY) {
                 val runJob = coroutineContext[Job]
                 // Cancel must win even when the state has already advanced to a
                 // new attempt id: the job itself is the authority on liveness.
@@ -1591,7 +1632,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             val previousPath = pendingSwapCleanup[id]
                             abandonSwappedFile(id)
                             val keepPath =
-                                previousPath?.takeIf { File(it).isFile } ?: newPath
+                                previousPath?.takeIf {
+                                    isValidOutputPath(it, isDocumentValid = ::isDocumentOutputValid)
+                                } ?: newPath
                             val warning =
                                 if (keepPath != newPath) {
                                     "replacement rejected: ${verify.reason}; kept the previous file"
@@ -1647,7 +1690,9 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         abandonSwappedFile(id)
                         val friendly = DownloadErrorMessages.asFriendly(throwable)
                         val keptPath =
-                            previousPath?.takeIf { it.isNotBlank() && File(it).isFile }
+                            previousPath?.takeIf {
+                                isValidOutputPath(it, isDocumentValid = ::isDocumentOutputValid)
+                            }
                         if (keptPath != null) {
                             // The file the user already had is still on disk.
                             // Reporting a bare failure would hide a download
@@ -1766,7 +1811,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
         val task = this
         val job =
             scope
-                .launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                .launch(Dispatchers.IO, CoroutineStart.LAZY) {
                     val runJob = coroutineContext[Job]
                     val isThisAttempt = { state: DownloadState ->
                         state is Running && state.job === runJob

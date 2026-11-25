@@ -162,9 +162,7 @@ object DatabaseUtil {
                 if (templates != null) {
                     val templateList = getTemplateList()
                     dao.importTemplates(
-                        templateList
-                            .filterNot { templateList.contains(it) }
-                            .map { it.copy(id = 0) }
+                        filterNewTemplates(incoming = templates, existing = templateList)
                             .also { cnt += it.size }
                     )
                 }
@@ -202,4 +200,18 @@ object DatabaseUtil {
     suspend fun deleteTemplates(templates: List<CommandTemplate>) = dao.deleteTemplates(templates)
 
     private const val TAG = "DatabaseUtil"
+}
+
+/**
+ * Selects backup templates not already present in [existing] and resets their
+ * primary keys so Room auto-generates fresh ids on insert.
+ */
+internal fun filterNewTemplates(
+    incoming: List<CommandTemplate>,
+    existing: List<CommandTemplate>,
+): List<CommandTemplate> {
+    val existingKeys = existing.mapTo(HashSet()) { it.name to it.template }
+    return incoming
+        .filterNot { existing.contains(it) || (it.name to it.template) in existingKeys }
+        .map { it.copy(id = 0) }
 }

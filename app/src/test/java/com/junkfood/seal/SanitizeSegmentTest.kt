@@ -72,4 +72,12 @@ class SanitizeSegmentTest {
             ).length,
         )
     }
+
+    @Test
+    fun `dot and double-dot traversal segments are neutralized`() {
+        assertEquals("_", sanitizeSegment("."))
+        assertEquals("__", sanitizeSegment(".."))
+        assertEquals("__", sanitizeSegment("  ..  ", trimWhitespace = true))
+        assertEquals("__", sanitizeSegment("..abc", maxLength = 2))
+    }
 }

@@ -91,8 +91,14 @@ fun PlaylistSelectionPage(
     downloader: DownloaderV2 = koinInject(),
     onDismissRequest: () -> Unit = {},
 ) {
-    var preferences by remember {
-        mutableStateOf(DownloadUtil.DownloadPreferences.createFromPreferences())
+    var preferences by remember(state) {
+        mutableStateOf(
+            if (state.preferences == DownloadUtil.DownloadPreferences.EMPTY) {
+                DownloadUtil.DownloadPreferences.createFromPreferences()
+            } else {
+                state.preferences
+            }
+        )
     }
     var showVideoPresetDialog by remember { mutableStateOf(false) }
     var showAudioPresetDialog by remember { mutableStateOf(false) }
@@ -140,7 +146,8 @@ fun PlaylistSelectionPage(
         ) {
             ConfigurePagePlaylistVariant(
                 modifier = Modifier,
-                initialDownloadType = Video,
+                initialDownloadType = if (preferences.extractAudio) Audio else Video,
+                initialSplitByChapter = preferences.splitByChapter,
                 preferences = preferences,
                 onPresetEdit = { type ->
                     when (type) {
@@ -195,7 +202,8 @@ fun PlaylistSelectionPage(
             onSave = {
                 VIDEO_FORMAT.updateInt(format)
                 VIDEO_QUALITY.updateInt(res)
-                preferences = DownloadUtil.DownloadPreferences.createFromPreferences()
+                preferences =
+                    preferences.copy(videoFormat = format, videoResolution = res)
             },
         )
     }
@@ -229,7 +237,14 @@ fun PlaylistSelectionPage(
                 AUDIO_CONVERSION_FORMAT.updateInt(conversionFmt)
                 AUDIO_CONVERT.updateBoolean(convertAudio)
                 AUDIO_FORMAT.updateInt(preferredFormat)
-                preferences = DownloadUtil.DownloadPreferences.createFromPreferences()
+                preferences =
+                    preferences.copy(
+                        audioQuality = quality,
+                        useCustomAudioPreset = customPreset,
+                        audioConvertFormat = conversionFmt,
+                        convertAudio = convertAudio,
+                        audioFormat = preferredFormat,
+                    )
             },
         )
     }

@@ -10,6 +10,11 @@ import com.junkfood.seal.ui.page.settings.network.Cookie
 /** Chromium's cookie store, read once into the rows yt-dlp receives. */
 internal object CookieStore {
 
+    internal fun normalizeCookieHost(hostKey: String?): String? {
+        if (hostKey.isNullOrBlank()) return null
+        return if (hostKey[0] != '.') ".$hostKey" else hostKey
+    }
+
     @CheckResult
     fun listFromDatabase(): Result<List<Cookie>> = runCatching {
         CookieManager.getInstance().run {
@@ -21,7 +26,7 @@ internal object CookieStore {
                 null,
                 OPEN_READONLY,
             )
-            .run {
+            .use { db ->
                 val projection =
                     arrayOf(
                         DownloadUtil.CookieScheme.HOST,
@@ -32,16 +37,34 @@ internal object CookieStore {
                         DownloadUtil.CookieScheme.SECURE,
                     )
                 val cookieList = mutableListOf<Cookie>()
-                query("cookies", projection, null, null, null, null, null).run {
-                    while (moveToNext()) {
-                        val expiry = getLong(getColumnIndexOrThrow(DownloadUtil.CookieScheme.EXPIRY))
-                        val name = getString(getColumnIndexOrThrow(DownloadUtil.CookieScheme.NAME))
-                        val value = getString(getColumnIndexOrThrow(DownloadUtil.CookieScheme.VALUE))
-                        val path = getString(getColumnIndexOrThrow(DownloadUtil.CookieScheme.PATH))
-                        val secure = getLong(getColumnIndexOrThrow(DownloadUtil.CookieScheme.SECURE)) == 1L
-                        val hostKey = getString(getColumnIndexOrThrow(DownloadUtil.CookieScheme.HOST))
+                db.query("cookies", projection, null, null, null, null, null).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val hostKey =
+                            cursor.getString(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.HOST)
+                            )
+                        val host = normalizeCookieHost(hostKey) ?: continue
+                        val expiry =
+                            cursor.getLong(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.EXPIRY)
+                            )
+                        val name =
+                            cursor.getString(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.NAME)
+                            ) ?: ""
+                        val value =
+                            cursor.getString(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.VALUE)
+                            ) ?: ""
+                        val path =
+                            cursor.getString(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.PATH)
+                            ) ?: "/"
+                        val secure =
+                            cursor.getLong(
+                                cursor.getColumnIndexOrThrow(DownloadUtil.CookieScheme.SECURE)
+                            ) == 1L
 
-                        val host = if (hostKey[0] != '.') ".$hostKey" else hostKey
                         cookieList.add(
                             Cookie(
                                 domain = host,
@@ -53,9 +76,7 @@ internal object CookieStore {
                             )
                         )
                     }
-                    close()
                 }
-                close()
                 cookieList
             }
     }

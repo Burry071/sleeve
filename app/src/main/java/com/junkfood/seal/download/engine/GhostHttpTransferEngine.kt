@@ -1,5 +1,7 @@
 package com.junkfood.seal.download.engine
 
+import android.app.ActivityManager
+import android.content.Context
 import android.util.Log
 import com.junkfood.seal.App
 import com.junkfood.seal.App.Companion.audioDownloadDir
@@ -14,9 +16,11 @@ import com.junkfood.seal.util.sanitizeSegment
 import com.yausername.youtubedl_android.YoutubeDLException
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * Ghost engine handoff (Ghost Downloader ADR-0007 pattern): yt-dlp extracts,
@@ -193,15 +197,15 @@ internal object GhostHttpTransferEngine : TransferEngine {
                     "Referer" to referer,
                 )
             }
+        val subworkerCount = resolveSubworkerCount(context)
         val enqueued =
-            runBlocking {
-                GhostEngine.download(
-                    url = mediaUrl,
-                    headers = engineHeaders,
-                    outputDir = downloadDir,
-                    fileName = fileName,
-                )
-            }
+            GhostEngine.download(
+                url = mediaUrl,
+                headers = engineHeaders,
+                outputDir = downloadDir,
+                fileName = fileName,
+                subworkerCount = subworkerCount,
+            )
         val engineTaskId =
             enqueued.getOrElse {
                 Log.w(
@@ -215,34 +219,44 @@ internal object GhostHttpTransferEngine : TransferEngine {
         val engineStartedAtMs = System.currentTimeMillis()
 
         val outcome =
-            runBlocking {
-                // progressFlow is a UI mirror only: the terminal verdict is the
-                // value watch() returns for THIS task. Reading the flow after
-                // await() raced a newer task's snapshot into this decision.
-                val bridge =
-                    launch(Dispatchers.IO) {
-                        GhostEngine.progressFlow.collect { p ->
-                            if (p?.taskId != engineTaskId) return@collect
-                            if (p.totalBytes > 0) {
-                                job.progressCallback?.invoke(
-                                    p.downloadedBytes * 100f / p.totalBytes,
-                                    0,
-                                    "Ghost: %.1f / %.1f MB • %.1f MB/s".format(
-                                        p.downloadedBytes / 1_048_576.0,
-                                        p.totalBytes / 1_048_576.0,
-                                        p.speedBps / 1_048_576.0,
-                                    ),
-                                )
-                            } else if (p.state == TaskState.RUNNING) {
-                                job.progressCallback?.invoke(-1f, 0, "Ghost: downloading…")
+            try {
+                withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        // progressFlow is a UI mirror only: the terminal verdict is the
+                        // value watch() returns for THIS task. Reading the flow after
+                        // await() raced a newer task's snapshot into this decision.
+                        val bridge =
+                            launch {
+                                GhostEngine.progressFlow.collect { p ->
+                                    if (p?.taskId != engineTaskId) return@collect
+                                    if (p.totalBytes > 0) {
+                                        job.progressCallback?.invoke(
+                                            p.downloadedBytes * 100f / p.totalBytes,
+                                            0,
+                                            "Ghost: %.1f / %.1f MB • %.1f MB/s".format(
+                                                p.downloadedBytes / 1_048_576.0,
+                                                p.totalBytes / 1_048_576.0,
+                                                p.speedBps / 1_048_576.0,
+                                            ),
+                                        )
+                                    } else if (p.state == TaskState.RUNNING) {
+                                        job.progressCallback?.invoke(-1f, 0, "Ghost: downloading…")
+                                    }
+                                }
                             }
+                        try {
+                            GhostEngine.watch(engineTaskId)
+                        } finally {
+                            bridge.cancel()
                         }
                     }
-                val terminal = GhostEngine.watch(engineTaskId)
-                bridge.cancel()
-                terminal
+                }
+            } catch (ce: CancellationException) {
+                GhostEngine.cancel(engineTaskId)
+                throw ce
+            } finally {
+                ghostTasks.remove(taskId)
             }
-        ghostTasks.remove(taskId)
 
         if (outcome?.state == TaskState.COMPLETED) {
             // The engine reporting COMPLETED is not proof of a file: verify the
@@ -287,7 +301,24 @@ internal object GhostHttpTransferEngine : TransferEngine {
         }
         return Result.failure(YoutubeDLException("Ghost engine: $reason"))
     }
+
+    private fun resolveSubworkerCount(appContext: Context): Int {
+        val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return 8
+        val memInfo = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memInfo)
+        return subworkersForRam(memInfo.totalMem, am.isLowRamDevice)
+    }
 }
+
+private const val GHOST_LOW_RAM_THRESHOLD_BYTES = 4L * 1024 * 1024 * 1024
+
+internal fun subworkersForRam(totalRamBytes: Long, isLowRamDevice: Boolean): Int =
+    if (isLowRamDevice || (totalRamBytes > 0L && totalRamBytes <= GHOST_LOW_RAM_THRESHOLD_BYTES)) {
+        4
+    } else {
+        8
+    }
 
 /**
  * Where the engine writes. With "Save to SD card" on, yt-dlp and N_m3u8DL-RE

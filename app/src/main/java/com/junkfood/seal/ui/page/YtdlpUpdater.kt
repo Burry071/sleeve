@@ -2,9 +2,9 @@ package com.junkfood.seal.ui.page
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import com.junkfood.seal.App
 import com.junkfood.seal.BuildConfig
 import com.junkfood.seal.download.DownloaderV2
-import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getInt
@@ -46,20 +46,12 @@ fun YtdlpUpdater(downloader: DownloaderV2 = koinInject()) {
             )
         if (!due) return@LaunchedEffect
 
+        App.enginesReady.await()
+
         // Live task map, not the legacy state: an engine swap under a running
         // transfer is the hazard. A gated check waits for the next launch.
         if (!UpdaterPolicy.canAttempt(downloader.activeTransfers())) return@LaunchedEffect
 
         withContext(Dispatchers.IO) { UpdateUtil.updateYtDlp() }
-    }
-
-    // Warm the gallery-dl extractor registry off the critical path: the first
-    // import compiles ~300 site modules, so doing it here keeps the first
-    // shared gallery link instant.
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(3_000)
-        kotlinx.coroutines.withContext(Dispatchers.IO) {
-            GhostEngine.preloadGallery()
-        }
     }
 }

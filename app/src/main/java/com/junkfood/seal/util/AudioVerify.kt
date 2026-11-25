@@ -124,7 +124,7 @@ object AudioVerify {
      * longer one — only possible with a bad measurement — is not trusted here).
      */
     fun canReplaceSource(sourceMs: Long, outputMs: Long): Boolean =
-        sourceMs > 0L && outputMs > 0L && outputMs + 2_000L >= sourceMs
+        sourceMs > 0L && outputMs > 0L && abs(outputMs - sourceMs) <= 2_000L
 
     /**
      * [verifyDuration]'s comparison without any file access, for callers that

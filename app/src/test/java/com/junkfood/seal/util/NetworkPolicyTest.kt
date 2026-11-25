@@ -3,7 +3,9 @@ package com.junkfood.seal.util
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.Task.DownloadState
 import com.junkfood.seal.download.Task.RestartableAction
+import com.junkfood.seal.ui.page.downloadv2.configure.applyAllowAlways
 import kotlinx.coroutines.Job
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -15,6 +17,11 @@ import org.junit.Test
  * cannot quietly let a metered network start a transfer.
  */
 class NetworkPolicyTest {
+
+    @After
+    fun tearDown() {
+        NetworkPolicy.resetForTest()
+    }
 
     @Test
     fun thePermitTableMatchesTheContract() {
@@ -117,5 +124,39 @@ class NetworkPolicyTest {
                 NetworkPolicy.isMeteredParked(state, canStart = true),
             )
         }
+    }
+
+    @Test
+    fun applyAllowAlwaysRefreshesCanStartFlowBeforeResuming() {
+        var cellularAllowed = false
+        NetworkPolicy.cellularAllowedProvider = { cellularAllowed }
+        NetworkPolicy.setMeteredForTest(true)
+        assertFalse(NetworkPolicy.canStartFlow.value)
+
+        var canStartDuringResume = false
+        applyAllowAlways(
+            persistCellularAllowed = { cellularAllowed = true },
+            resume = { canStartDuringResume = NetworkPolicy.canStartFlow.value },
+        )
+
+        assertTrue(NetworkPolicy.canStartFlow.value)
+        assertTrue(canStartDuringResume)
+    }
+
+    @Test
+    fun meteredPermitExpiresAfterWindowAndBlocksAgain() {
+        var nowMs = 1_000L
+        NetworkPolicy.cellularAllowedProvider = { false }
+        NetworkPolicy.clockMsProvider = { nowMs }
+        NetworkPolicy.setMeteredForTest(true)
+        assertFalse(NetworkPolicy.canStartFlow.value)
+
+        NetworkPolicy.allowMeteredOnce(setOf("task-1"))
+        assertTrue(NetworkPolicy.canStartTask("task-1"))
+        assertFalse(NetworkPolicy.canStartTask("task-2"))
+
+        nowMs += NetworkPolicy.PERMIT_WINDOW_MS + 1L
+        assertFalse(NetworkPolicy.canStartTask("task-1"))
+        assertFalse(NetworkPolicy.canStartFlow.value)
     }
 }

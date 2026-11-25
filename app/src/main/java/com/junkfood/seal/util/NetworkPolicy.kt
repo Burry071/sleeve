@@ -138,15 +138,21 @@ object NetworkPolicy {
      */
     fun canStartTask(taskId: String): Boolean = runCatching { decide(taskId) }.getOrDefault(true)
 
+    @Volatile internal var cellularAllowedProvider: () -> Boolean = {
+        with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() }
+    }
+
+    @Volatile internal var clockMsProvider: () -> Long = { SystemClock.elapsedRealtime() }
+
     private fun decide(taskId: String?): Boolean {
-        val cellularAllowed = with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() }
+        val cellularAllowed = cellularAllowedProvider()
         val metered = isMetered()
         val remaining = permitRemainingMs()
         val covers = remaining > 0 && (taskId == null || scopeCovers(permitScope, taskId))
         // The one line that answers "why did this burst download?":
         // a permit that expired mid-batch is the usual surprise.
         if (metered && !cellularAllowed && covers) {
-            Log.i(TAG, "metered permit honored, ${remaining / 1000}s left")
+            runCatching { Log.i(TAG, "metered permit honored, ${remaining / 1000}s left") }
         }
         return permitsTask(cellularAllowed = cellularAllowed, metered = metered, permitCovers = covers)
     }
@@ -158,7 +164,7 @@ object NetworkPolicy {
      */
     fun allowMeteredOnce(tasks: Set<String> = emptySet()) {
         permitScope = tasks
-        permitArmedAt = SystemClock.elapsedRealtime()
+        permitArmedAt = clockMsProvider()
         refreshCanStart()
     }
 
@@ -185,6 +191,24 @@ object NetworkPolicy {
         permitArmedAt = 0L
         permitScope = emptySet()
         refreshCanStart()
+    }
+
+    /** JVM test hook to simulate Wi-Fi ↔ cellular transitions. */
+    internal fun setMeteredForTest(isMetered: Boolean) {
+        metered = isMetered
+        refreshCanStart()
+    }
+
+    /** JVM test hook to restore default singleton state between tests. */
+    internal fun resetForTest() {
+        registered = false
+        metered = false
+        permitArmedAt = 0L
+        permitScope = emptySet()
+        onNetworkRestored = null
+        cellularAllowedProvider = { with(PreferenceUtil) { CELLULAR_DOWNLOAD.getBoolean() } }
+        clockMsProvider = { SystemClock.elapsedRealtime() }
+        mutableCanStartFlow.value = true
     }
 
     /** Wakes a parked queue only when the new default network may carry it. */
@@ -216,7 +240,7 @@ object NetworkPolicy {
     private fun permitRemainingMs(): Long {
         val armedAt = permitArmedAt
         if (armedAt == 0L) return 0L
-        val elapsed = SystemClock.elapsedRealtime() - armedAt
+        val elapsed = clockMsProvider() - armedAt
         if (elapsed in 0..PERMIT_WINDOW_MS) return PERMIT_WINDOW_MS - elapsed
         // Expired: drop the stale stamp so a clock jump cannot resurrect it.
         clearMeteredPermit()

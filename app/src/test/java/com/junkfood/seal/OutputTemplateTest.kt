@@ -4,6 +4,7 @@ import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.OutputTemplate
 import com.junkfood.seal.util.OutputTemplate.Severity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -80,6 +81,42 @@ class OutputTemplateTest {
         assertEquals(
             "Example channel/Example video.mp4",
             OutputTemplate.preview("%(uploader)s/%(title).200B.%(ext)s"),
+        )
+    }
+
+    @Test
+    fun `leading slash is blocked and refuses preview`() {
+        val template = "/etc/%(title).200B.%(ext)s"
+        val issue = blocks(template).single()
+        assertEquals(0, issue.start)
+        assertEquals(1, issue.length)
+        assertNull(OutputTemplate.preview(template))
+    }
+
+    @Test
+    fun `double-dot traversal segments are blocked at their offset`() {
+        val template = "folder/../%(title).200B.%(ext)s"
+        val issue = blocks(template).single()
+        assertEquals(template.indexOf(".."), issue.start)
+        assertEquals(2, issue.length)
+        assertNull(OutputTemplate.preview(template))
+        assertTrue(blocks("../%(title).200B.%(ext)s").isNotEmpty())
+        assertTrue(blocks("a\\..\\%(title).200B.%(ext)s").isNotEmpty())
+    }
+
+    @Test
+    fun `sanitize strips leading slashes and traversal segments`() {
+        assertEquals(
+            "etc/%(title).200B.%(ext)s",
+            OutputTemplate.sanitize("///etc/%(title).200B.%(ext)s"),
+        )
+        assertEquals(
+            "folder/%(title).200B.%(ext)s",
+            OutputTemplate.sanitize("../folder/../%(title).200B.%(ext)s"),
+        )
+        assertEquals(
+            "%(uploader)s/%(title).200B.%(ext)s",
+            OutputTemplate.sanitize("%(uploader)s/%(title).200B.%(ext)s"),
         )
     }
 }

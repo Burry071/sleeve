@@ -17,6 +17,7 @@ import com.junkfood.seal.MainActivity
 import com.junkfood.seal.R
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -30,6 +31,8 @@ private const val STAGED_SHARE_KEEP = 2
 private const val STAGED_SHARE_MAX_BYTES = 1L shl 30
 private const val SCRATCH_SUFFIX = ".part"
 private const val MAX_FREE_NAMES = 100
+private const val MTIME_TOLERANCE_MS = 2_000L
+private const val HEX_CHARS = "0123456789abcdef"
 
 // Engine scratch written next to the output: "<name>.tmp" and the
 // "<name>.parts[-<tag>]" segment directory.
@@ -223,21 +226,36 @@ object FileUtil {
 
     fun String.getFileSize(): Long =
         this.run {
-            val length = File(this).length()
-            if (length == 0L) DocumentFile.fromSingleUri(context, Uri.parse(this))?.length() ?: 0L
-            else length
+            if (startsWith("content://")) {
+                DocumentFile.fromSingleUri(context, Uri.parse(this))?.length() ?: 0L
+            } else {
+                val length = File(this).length()
+                if (length == 0L) DocumentFile.fromSingleUri(context, Uri.parse(this))?.length() ?: 0L
+                else length
+            }
         }
 
     fun String.getFileName(): String =
         this.run {
-            File(this).nameWithoutExtension.ifEmpty {
-                DocumentFile.fromSingleUri(context, Uri.parse(this))?.name ?: "video"
+            if (startsWith("content://")) {
+                val docName = DocumentFile.fromSingleUri(context, Uri.parse(this))?.name
+                docName?.substringBeforeLast('.')?.ifEmpty { docName } ?: "video"
+            } else {
+                File(this).nameWithoutExtension.ifEmpty {
+                    DocumentFile.fromSingleUri(context, Uri.parse(this))?.name ?: "video"
+                }
             }
         }
 
     fun deleteFile(path: String) =
         path.runCatching {
-            if (!File(path).delete()) DocumentFile.fromSingleUri(context, Uri.parse(this))?.delete()
+            if (startsWith("content://")) {
+                DocumentFile.fromSingleUri(context, Uri.parse(this))?.delete()
+            } else if (!File(this).delete()) {
+                DocumentFile.fromSingleUri(context, Uri.parse(this))?.delete()
+            } else {
+                true
+            }
         }
 
     @CheckResult
@@ -265,8 +283,15 @@ object FileUtil {
         // title is only a fallback: matching on it alone also picks up older
         // downloads that happen to share the name.
         val fresh =
-            if (modifiedAfterMs != null) candidates.filter { it.lastModified() >= modifiedAfterMs }
-            else emptyList()
+            if (modifiedAfterMs != null) {
+                // FAT32/FUSE filesystems truncate mtimes to 1–2 s granularity,
+                // so a file written right after modifiedAfterMs can report an
+                // earlier lastModified() timestamp.
+                val cutoffMs = (modifiedAfterMs - MTIME_TOLERANCE_MS).coerceAtLeast(0L)
+                candidates.filter { it.lastModified() >= cutoffMs }
+            } else {
+                emptyList()
+            }
         val media =
             (if (fresh.isNotEmpty()) fresh else candidates.filter { it.absolutePath.contains(title) })
                 // A thumbnail sidecar (.jpg/.png) must not be reported as the
@@ -328,6 +353,7 @@ object FileUtil {
         tempPath: File,
         sdcardUri: String,
         onCopied: (sourceName: String, destUri: String) -> Unit = { _, _ -> },
+        keepImages: Boolean = false,
     ): Result<List<String>> {
         val copied = mutableListOf<String>()
         val failed = mutableListOf<String>()
@@ -356,8 +382,14 @@ object FileUtil {
             tempPath.walkTopDown().forEach { file ->
                 if (file.isDirectory) return@forEach
                 // An empty file is a failed write, not a download; a scratch
-                // name belongs to another pass. Neither is copied or failed.
-                if (file.length() == 0L || file.name.matches(SCRATCH_FILE_REGEX)) {
+                // name or sidecar belongs to another pass / metadata and must
+                // not be published into Room history as a media row.
+                if (
+                    file.length() == 0L ||
+                        file.name.matches(SCRATCH_FILE_REGEX) ||
+                        file.path.contains(SCRATCH_DIR_REGEX) ||
+                        isSdcardSidecar(file.name, keepImages)
+                ) {
                     return@forEach
                 }
                 val destUri =
@@ -539,7 +571,7 @@ object FileUtil {
         }
 
     fun Context.getSdcardTempDir(child: String?): File =
-        getExternalTempDir().run { child?.let { resolve(it) } ?: this }
+        getExternalTempDir().run { child?.let { resolve(sdcardTempChildName(it)) } ?: this }
 
     fun Context.getArchiveFile(): File = filesDir.createEmptyFile("archive.txt").getOrThrow()
 
@@ -667,6 +699,39 @@ internal fun sdcardCopyResult(
 private val ILLEGAL_NAME_CHARS = Regex("""[\\/:*?"<>|\u0000-\u001F]""")
 private val WHITESPACE_RUN = Regex("\\s+")
 
+private val SIDECAR_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+private val SIDECAR_META_EXTENSIONS =
+    setOf("vtt", "srt", "ass", "lrc", "ytdl", "json", "description")
+
+/**
+ * True when [fileName] is a yt-dlp sidecar (thumbnail, subtitle, or metadata
+ * artifact) that must not be published into Room download history as a video row.
+ */
+internal fun isSdcardSidecar(fileName: String, keepImages: Boolean = false): Boolean {
+    val dot = fileName.lastIndexOf('.')
+    if (dot < 0 || dot == fileName.lastIndex) return false
+    val ext = fileName.substring(dot + 1).lowercase()
+    if (ext in SIDECAR_META_EXTENSIONS) return true
+    if (!keepImages && ext in SIDECAR_IMAGE_EXTENSIONS) return true
+    return false
+}
+
+/**
+ * Deterministic, traversal-proof directory name for a per-download SD-card
+ * staging folder. Extractor ids from generic/direct links can carry slashes or
+ * `..`, so hashing keeps the folder flat and FAT32-legal.
+ */
+internal fun sdcardTempChildName(child: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(child.toByteArray(Charsets.UTF_8))
+    val hex = StringBuilder(16)
+    for (i in 0 until 8) {
+        val b = digest[i].toInt() and 0xFF
+        hex.append(HEX_CHARS[b ushr 4])
+        hex.append(HEX_CHARS[b and 0x0F])
+    }
+    return hex.toString()
+}
+
 internal fun sanitizeSegment(
     raw: String,
     maxLength: Int = 120,
@@ -676,7 +741,12 @@ internal fun sanitizeSegment(
     var value = raw.replace(ILLEGAL_NAME_CHARS, "_")
     if (collapseWhitespace) value = value.replace(WHITESPACE_RUN, " ")
     if (trimWhitespace) value = value.trim()
-    return value.take(maxLength)
+    value = value.take(maxLength)
+    val trimmed = value.trim()
+    if (trimmed == "." || trimmed == "..") {
+        value = value.replace('.', '_')
+    }
+    return value
 }
 
 /** A copy is complete only when the destination holds every source byte. */

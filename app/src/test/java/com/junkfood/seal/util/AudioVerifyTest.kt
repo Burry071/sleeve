@@ -53,4 +53,22 @@ class AudioVerifyTest {
         assertFalse(AudioVerify.withinTolerance(hour, 0L))
         assertFalse(AudioVerify.withinTolerance(-1L, hour))
     }
+
+    @Test
+    fun `canReplaceSource accepts durations within two seconds on both sides`() {
+        assertTrue(AudioVerify.canReplaceSource(60_000L, 60_000L))
+        assertTrue(AudioVerify.canReplaceSource(60_000L, 58_000L))
+        assertTrue(AudioVerify.canReplaceSource(60_000L, 62_000L))
+    }
+
+    @Test
+    fun `canReplaceSource rejects outputs shorter or longer than two seconds`() {
+        assertFalse(AudioVerify.canReplaceSource(60_000L, 57_999L))
+        assertFalse(AudioVerify.canReplaceSource(60_000L, 62_001L))
+        assertFalse(AudioVerify.canReplaceSource(60_000L, 600_000L))
+        assertFalse(AudioVerify.canReplaceSource(1L, Long.MAX_VALUE))
+        assertFalse(AudioVerify.canReplaceSource(0L, 60_000L))
+        assertFalse(AudioVerify.canReplaceSource(60_000L, 0L))
+        assertFalse(AudioVerify.canReplaceSource(-1_000L, 60_000L))
+    }
 }

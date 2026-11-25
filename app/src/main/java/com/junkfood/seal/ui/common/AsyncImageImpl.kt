@@ -2,6 +2,7 @@ package com.junkfood.seal.ui.common
 
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
@@ -42,11 +43,16 @@ fun AsyncImageImpl(
             alpha = alpha,
             colorFilter = colorFilter,
         )
-    else
+    else {
+        val context = LocalContext.current
+        val request =
+            remember(model, context) {
+                ImageRequest.Builder(context).data(model).crossfade(true).build()
+            }
         coil.compose.AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current).data(model).crossfade(true).build(),
+            model = request,
             contentDescription = contentDescription,
-            imageLoader = LocalContext.current.imageLoader,
+            imageLoader = context.imageLoader,
             modifier = modifier,
             transform = transform,
             onState = onState,
@@ -56,4 +62,5 @@ fun AsyncImageImpl(
             colorFilter = colorFilter,
             filterQuality = filterQuality,
         )
+    }
 }

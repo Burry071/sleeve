@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import com.chaquo.python.Python
 import com.junkfood.seal.ghostengine.GhostEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,34 +83,40 @@ object GhostSegmentedBridge {
             var lastGood: GhostEngine.EngineProgress? = null
             var consecutiveFailures = 0
             var terminal: GhostEngine.EngineProgress? = null
-            pollLoop@ while (true) {
-                val snap = poll(taskId)
-                if (snap == null) {
-                    // One unreadable poll is not a verdict: the engine can be
-                    // busy rewriting its state file. Retry a bounded number of
-                    // times, then report only what was actually observed.
-                    if (consecutiveFailures >= MAX_POLL_RETRIES) {
-                        // Retries exhausted: report a verdict for THIS task.
-                        // Returning null would push the caller back onto the
-                        // shared flow, where a newer task's snapshot decides.
-                        terminal =
-                            lastGood?.takeIf { it.isTerminal() }
-                                ?: unreadableSnapshot(taskId, lastGood)
+            try {
+                pollLoop@ while (true) {
+                    ensureActive()
+                    val snap = poll(taskId)
+                    if (snap == null) {
+                        // One unreadable poll is not a verdict: the engine can be
+                        // busy rewriting its state file. Retry a bounded number of
+                        // times, then report only what was actually observed.
+                        if (consecutiveFailures >= MAX_POLL_RETRIES) {
+                            // Retries exhausted: report a verdict for THIS task.
+                            // Returning null would push the caller back onto the
+                            // shared flow, where a newer task's snapshot decides.
+                            terminal =
+                                lastGood?.takeIf { it.isTerminal() }
+                                    ?: unreadableSnapshot(taskId, lastGood)
+                            break@pollLoop
+                        }
+                        consecutiveFailures++
+                        delay(RETRY_DELAY_MS)
+                        continue@pollLoop
+                    }
+                    consecutiveFailures = 0
+                    lastGood = snap
+                    // UI-only mirror: callers use the returned snapshot, not this.
+                    progress.value = snap
+                    if (snap.isTerminal()) {
+                        terminal = snap
                         break@pollLoop
                     }
-                    consecutiveFailures++
-                    delay(RETRY_DELAY_MS)
-                    continue@pollLoop
+                    delay(POLL_INTERVAL_MS)
                 }
-                consecutiveFailures = 0
-                lastGood = snap
-                // UI-only mirror: callers use the returned snapshot, not this.
-                progress.value = snap
-                if (snap.isTerminal()) {
-                    terminal = snap
-                    break@pollLoop
-                }
-                delay(POLL_INTERVAL_MS)
+            } catch (ce: CancellationException) {
+                cancel(taskId)
+                throw ce
             }
             terminal
         }
