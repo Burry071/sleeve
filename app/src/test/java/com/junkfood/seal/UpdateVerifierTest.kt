@@ -1,10 +1,13 @@
 package com.junkfood.seal
 
 import com.junkfood.seal.util.PublishedDigest
+import com.junkfood.seal.util.UpdateVerifier
 import com.junkfood.seal.util.parsePublishedDigest
 import com.junkfood.seal.util.sha256Hex
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class UpdateVerifierTest {
@@ -49,5 +52,63 @@ class UpdateVerifierTest {
         )
         assertEquals(PublishedDigest.Unsupported, parsePublishedDigest("sha256:abc"))
         assertEquals(PublishedDigest.Unsupported, parsePublishedDigest(abcSha256))
+    }
+
+    @Test
+    fun releaseBuildRejectsDifferentArchivePackageName() {
+        val err =
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = "com.evil.spoof",
+                installedPackage = "com.sleeve.app",
+                isDebugBuild = false,
+            )
+        assertNotNull(err)
+    }
+
+    @Test
+    fun releaseBuildAcceptsMatchingPackageName() {
+        val err =
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = "com.sleeve.app",
+                installedPackage = "com.sleeve.app",
+                isDebugBuild = false,
+            )
+        assertNull(err)
+    }
+
+    @Test
+    fun debugBuildAllowsCrossPackageSideBySideInstall() {
+        val err =
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = "com.sleeve.app",
+                installedPackage = "com.sleeve.app.debug",
+                isDebugBuild = true,
+            )
+        assertNull(err)
+    }
+
+    @Test
+    fun nullOrBlankArchivePackageIsAlwaysRejected() {
+        assertNotNull(
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = null,
+                installedPackage = "com.sleeve.app",
+                isDebugBuild = false,
+            )
+        )
+        assertNotNull(
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = "",
+                installedPackage = "com.sleeve.app.debug",
+                isDebugBuild = true,
+            )
+        )
+        assertNotNull(
+            UpdateVerifier.packageNameMismatchError(
+                archivePackage = "   ",
+                installedPackage = "com.sleeve.app.debug",
+                isDebugBuild = true,
+            )
+        )
     }
 }

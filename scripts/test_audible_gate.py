@@ -863,5 +863,34 @@ class PartMarkerTest(unittest.TestCase):
                 self.assertEqual((None, None), sleeve_audible_gate._parse_part(title))
 
 
+class EmptyBracketSafetyTest(unittest.TestCase):
+    def test_empty_brackets_in_title_do_not_crash_and_evaluate_cleanly(self):
+        for title in (
+            "Dune () Full Audiobook []",
+            "Dune {} Full Audiobook",
+            "Dune ( ) [ ] { } | Full Audiobook",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(set(), sleeve_audible_gate._language_declarations(title))
+                result = gate(
+                    book("Dune", 75_720_000, "Frank Herbert", language="english"),
+                    [candidate(title, 75_720, id="empty-brackets")],
+                )
+                self.assertTrue(result["ok"], result)
+                self.assertEqual("pass", result["verdict"])
+                self.assertEqual("empty-brackets", result["candidate_id"])
+
+    def test_empty_brackets_alongside_language_tag_still_detect_conflict(self):
+        title = "Dune () (German) [] Full Audiobook {}"
+        self.assertEqual({"de"}, sleeve_audible_gate._language_declarations(title))
+        result = gate(
+            book("Dune", 75_720_000, "Frank Herbert", language="english"),
+            [candidate(title, 75_720, id="mixed-brackets")],
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual("hold", result["verdict"])
+        self.assertIn("language", result["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

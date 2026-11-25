@@ -36,6 +36,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.junkfood.seal.App
+import com.junkfood.seal.BuildConfig
 import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.HapticFeedback.slightHapticFeedback
 import com.junkfood.seal.ui.common.LocalWindowWidthState
@@ -70,6 +71,7 @@ import com.junkfood.seal.ui.page.settings.network.WebViewPage
 import com.junkfood.seal.ui.page.settings.troubleshooting.TroubleShootingPage
 import com.junkfood.seal.ui.page.videolist.VideoListPage
 import com.junkfood.seal.util.AppUpdateManager
+import com.junkfood.seal.util.PreferenceUtil
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -195,9 +197,13 @@ fun AppEntry(dialogViewModel: DownloadDialogViewModel) {
 
             // Re-checks whenever the app comes back to the foreground, so a
             // release published while it was open still raises the banner.
-            LaunchedEffect(lifecycleOwner) {
-                lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                    AppUpdateManager.checkIfStale(context)
+            if (BuildConfig.ENABLE_IN_APP_UPDATER) {
+                LaunchedEffect(lifecycleOwner) {
+                    lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                        if (BuildConfig.ENABLE_IN_APP_UPDATER && PreferenceUtil.isAutoUpdateEnabled()) {
+                            AppUpdateManager.checkIfStale(context)
+                        }
+                    }
                 }
             }
         }

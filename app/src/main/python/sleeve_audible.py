@@ -30,6 +30,36 @@ _ASIN_RE = re.compile(r"\b([0-9A-Z]{10})\b")
 # Fellowship of the Ring ASIN), and a bare token scan could hit a slug word.
 _PATH_ASIN_RE = re.compile(r"/pd/(?:[^/?#]+/)?([0-9A-Z]{10})(?=[/?#]|$)")
 _TIMEOUT = 15
+_REGIONAL_TLDS = frozenset({
+    "com",
+    "co.uk",
+    "de",
+    "fr",
+    "co.jp",
+    "com.au",
+    "ca",
+    "it",
+    "es",
+    "in",
+    "com.br",
+})
+
+
+def _api_host(url):
+    """Map regional Audible storefront hosts to their catalog API host."""
+    text = (url or "").strip()
+    if not text:
+        return "api.audible.com"
+    parsed = urllib.parse.urlsplit(text)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host and "audible." in text.lower():
+        parsed = urllib.parse.urlsplit("https://" + text)
+        host = (parsed.hostname or "").lower().rstrip(".")
+    for tld in _REGIONAL_TLDS:
+        suffix = "audible." + tld
+        if host == suffix or host.endswith("." + suffix):
+            return "api.audible." + tld
+    return "api.audible.com"
 
 
 def _api(url):
@@ -73,17 +103,23 @@ def _product_dto(product):
 def resolve(url, keywords=""):
     """Resolve an Audible product URL/ASIN, or a keyword search."""
     try:
+        host = _api_host(url)
         asin = None
         m = _PATH_ASIN_RE.search(url or "") or _ASIN_RE.search(url or "")
         if m:
             asin = m.group(1)
         if asin:
-            product = _api(
-                "https://api.audible.com/1.0/catalog/products/"
+            data = _api(
+                "https://"
+                + host
+                + "/1.0/catalog/products/"
                 + asin
                 + "?response_groups=product_attrs,contributors,product_desc"
             )
-            dto = _product_dto(product.get("product") or {})
+            product = data.get("product") if isinstance(data, dict) else None
+            if not isinstance(product, dict) or not (product.get("title") or "").strip():
+                return json.dumps({"ok": False, "error": "empty audible product"})
+            dto = _product_dto(product)
             return json.dumps(
                 {"ok": True, "kind": "book", "title": dto["title"], "tracks": [dto]}
             )
@@ -91,14 +127,19 @@ def resolve(url, keywords=""):
         if not query.strip():
             return json.dumps({"ok": False, "error": "no asin or keywords"})
         data = _api(
-            "https://api.audible.com/1.0/catalog/products?keywords="
+            "https://"
+            + host
+            + "/1.0/catalog/products?keywords="
             + urllib.parse.quote(query)
             + "&num_results=1&response_groups=product_attrs,contributors,product_desc"
         )
         products = data.get("products") or []
         if not products:
             return json.dumps({"ok": False, "error": "no audible results"})
-        dto = _product_dto(products[0])
+        first = products[0] if isinstance(products[0], dict) else None
+        if not first or not (first.get("title") or "").strip():
+            return json.dumps({"ok": False, "error": "empty audible product"})
+        dto = _product_dto(first)
         return json.dumps(
             {"ok": True, "kind": "book", "title": dto["title"], "tracks": [dto]}
         )

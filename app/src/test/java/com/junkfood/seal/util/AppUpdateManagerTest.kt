@@ -1,11 +1,15 @@
 package com.junkfood.seal.util
 
+import com.junkfood.seal.BuildConfig
+import java.io.File
+import java.nio.file.Files
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -105,5 +109,64 @@ class AppUpdateManagerTest {
     fun thePrereleaseChannelTakesBothKinds() {
         assertTrue(AppUpdateManager.channelAccepts(prerelease = false, channel = PRE_RELEASE))
         assertTrue(AppUpdateManager.channelAccepts(prerelease = true, channel = PRE_RELEASE))
+    }
+
+    @Test
+    fun inAppUpdaterBuildConfigFlagMatchesProductFlavor() {
+        if (BuildConfig.FLAVOR == "fdroid") {
+            assertFalse(BuildConfig.ENABLE_IN_APP_UPDATER)
+        } else {
+            assertTrue(BuildConfig.ENABLE_IN_APP_UPDATER)
+        }
+    }
+
+    @Test
+    fun sanitizeReleaseTagAcceptsValidSemverTags() {
+        assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("v2.1.2"))
+        assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("V2.1.2"))
+        assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("2.1.2"))
+        assertEquals("2.2.0-beta.1", AppUpdateManager.sanitizeReleaseTag("v2.2.0-beta.1"))
+        assertEquals("2.2.0-alpha.9", AppUpdateManager.sanitizeReleaseTag("2.2.0-alpha.9"))
+        assertEquals("2.2.0-rc1", AppUpdateManager.sanitizeReleaseTag("v2.2.0-rc1"))
+    }
+
+    @Test
+    fun sanitizeReleaseTagRejectsPathTraversalAndArbitrarySuffixes() {
+        val maliciousTags =
+            listOf(
+                "",
+                "vv2.1.2",
+                "vV2.1.2",
+                "VV2.1.2",
+                "v9.9.9/../../evil",
+                "9.9.9/../../evil",
+                "../2.1.2",
+                "2.1.2..",
+                "2.1.2\\evil",
+                "2.1.2-beta.1/nested",
+                "2.1.2-beta.1..evil",
+                "v2.1.2\u0000evil",
+                "2.1.2;rm -rf /",
+            )
+        for (tag in maliciousTags) {
+            assertNull("Expected tag to be rejected: $tag", AppUpdateManager.sanitizeReleaseTag(tag))
+        }
+    }
+
+    @Test
+    fun apkFileForVersionConfinesFileToUpdatesDirAndRejectsTraversal() {
+        val updatesDir = Files.createTempDirectory("sleeve-updates-test").toFile()
+        try {
+            val valid = AppUpdateManager.apkFileForVersion(updatesDir, "v2.1.2")
+            assertNotNull(valid)
+            assertEquals("Sleeve-2.1.2-release.apk", valid!!.name)
+            assertEquals(updatesDir.canonicalFile, valid.parentFile?.canonicalFile)
+
+            assertNull(AppUpdateManager.apkFileForVersion(updatesDir, "2.1.2/../../evil"))
+            assertNull(AppUpdateManager.apkFileForVersion(updatesDir, "../evil"))
+            assertNull(AppUpdateManager.apkFileForVersion(updatesDir, "2.1.2\\..\\evil"))
+        } finally {
+            updatesDir.deleteRecursively()
+        }
     }
 }

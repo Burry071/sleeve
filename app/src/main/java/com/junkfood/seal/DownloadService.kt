@@ -12,6 +12,7 @@ import com.junkfood.seal.util.NotificationUtil
 import com.junkfood.seal.util.NotificationUtil.SERVICE_NOTIFICATION_ID
 
 private const val TAG = "DownloadService"
+private const val WAKE_LOCK_TIMEOUT_MS = 60 * 60 * 1000L
 
 /** This `Service` does nothing */
 class DownloadService : Service() {
@@ -27,15 +28,13 @@ class DownloadService : Service() {
      * OEM process killer is least likely to ignore once the badge exists. */
     private fun enterForeground() {
         startForeground(SERVICE_NOTIFICATION_ID, makeServiceNotification())
-        if (wakeLock == null) {
-            wakeLock =
-                (getSystemService(POWER_SERVICE) as PowerManager)
+        val lock =
+            wakeLock
+                ?: (getSystemService(POWER_SERVICE) as PowerManager)
                     .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sleeve:downloads")
-                    .apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
-        }
+                    .apply { setReferenceCounted(false) }
+                    .also { wakeLock = it }
+        lock.acquire(WAKE_LOCK_TIMEOUT_MS)
     }
 
     /** The single release point, so the lock cannot outlive the badge on a

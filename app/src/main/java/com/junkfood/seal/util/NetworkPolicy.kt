@@ -6,6 +6,10 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.util.Log
+import com.junkfood.seal.download.Task
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * One fail-open gate for "may a transfer start right now?".
@@ -34,6 +38,9 @@ object NetworkPolicy {
     @Volatile private var registered = false
     @Volatile private var metered = false
 
+    private val mutableCanStartFlow = MutableStateFlow(true)
+    val canStartFlow: StateFlow<Boolean> = mutableCanStartFlow.asStateFlow()
+
     /** `0` means no permit; anything else is an [SystemClock.elapsedRealtime] stamp. */
     @Volatile private var permitArmedAt = 0L
 
@@ -61,6 +68,7 @@ object NetworkPolicy {
         if (manager == null) {
             Log.w(TAG, "no ConnectivityManager; downloads stay allowed")
             metered = false
+            refreshCanStart()
             return
         }
         refresh(manager)
@@ -105,7 +113,23 @@ object NetworkPolicy {
     }
 
     /** Side-effect free, never throws. Asks whether *any* transfer may start. */
-    fun canStartDownloads(): Boolean = runCatching { decide(null) }.getOrDefault(true)
+    fun canStartDownloads(): Boolean =
+        runCatching { decide(null) }.getOrDefault(true).also { mutableCanStartFlow.value = it }
+
+    /**
+     * Re-evaluates [canStartDownloads] and updates [canStartFlow] so Compose
+     * screens recompose live on Wi-Fi ↔ cellular or `CELLULAR_DOWNLOAD` changes.
+     */
+    fun refreshCanStart(): Boolean = canStartDownloads()
+
+    /**
+     * Pure UI helper: true when a task is waiting in the scheduler solely
+     * because the metered gate refuses to start it. Covers both [Idle] and
+     * [ReadyWithInfo] so neither state can deadlock without a rescue action.
+     */
+    fun isMeteredParked(state: Task.DownloadState, canStart: Boolean): Boolean =
+        !canStart &&
+            (state == Task.DownloadState.Idle || state == Task.DownloadState.ReadyWithInfo)
 
     /**
      * Whether this particular task may start. A permit granted from a card's
@@ -135,6 +159,7 @@ object NetworkPolicy {
     fun allowMeteredOnce(tasks: Set<String> = emptySet()) {
         permitScope = tasks
         permitArmedAt = SystemClock.elapsedRealtime()
+        refreshCanStart()
     }
 
     fun isMetered(): Boolean = metered
@@ -152,13 +177,14 @@ object NetworkPolicy {
             return
         }
         permitScope = permitScope - taskIds
-        if (permitScope.isEmpty()) clearMeteredPermit()
+        if (permitScope.isEmpty()) clearMeteredPermit() else refreshCanStart()
     }
 
     /** Unmetered callback and test hook. */
     internal fun clearMeteredPermit() {
         permitArmedAt = 0L
         permitScope = emptySet()
+        refreshCanStart()
     }
 
     /** Wakes a parked queue only when the new default network may carry it. */
@@ -200,5 +226,6 @@ object NetworkPolicy {
     private fun refresh(manager: ConnectivityManager) {
         // Fail open: an unreadable network is treated as unmetered.
         metered = runCatching { manager.isActiveNetworkMetered }.getOrDefault(false)
+        refreshCanStart()
     }
 }

@@ -5,6 +5,7 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.os.Build
+import com.junkfood.seal.App
 import java.io.File
 import java.security.MessageDigest
 
@@ -52,16 +53,32 @@ internal fun sha256Hex(file: File): String {
  */
 object UpdateVerifier {
 
+    internal fun packageNameMismatchError(
+        archivePackage: String?,
+        installedPackage: String,
+        isDebugBuild: Boolean,
+    ): String? {
+        if (archivePackage.isNullOrBlank()) return "Update APK has no package name"
+        if (archivePackage == installedPackage) return null
+        if (isDebugBuild) return null
+        return "Update package name ($archivePackage) does not match installed app ($installedPackage)"
+    }
+
     fun verify(context: Context, file: File, expectedDigest: String?): String? {
         if (expectedDigest != null && !sha256Hex(file).equals(expectedDigest, ignoreCase = true)) {
             return "Update APK checksum mismatch"
         }
 
         val archiveInfo = archiveInfo(context, file) ?: return "Update is not a valid APK"
+        val isDebug = App.isDebugBuild()
 
-        // A debug build installs the release app side by side: the package names
-        // differ, so the system applies no signature continuity and neither do we.
-        if (archiveInfo.packageName != context.packageName) return null
+        packageNameMismatchError(archiveInfo.packageName, context.packageName, isDebug)?.let {
+            return it
+        }
+
+        // Only a debug build may install the release app side by side: the
+        // package names differ, so Android enforces no signature continuity.
+        if (isDebug && archiveInfo.packageName != context.packageName) return null
 
         val installedInfo =
             installedInfo(context) ?: return "Cannot read the installed signing certificate"

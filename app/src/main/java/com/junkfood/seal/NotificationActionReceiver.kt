@@ -54,12 +54,16 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
             }
 
             ACTION_INSTALL_UPDATE -> {
+                if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
                 val apkPath = intent.getStringExtra(APK_PATH_KEY)
                 val ctx = context ?: return
                 if (!apkPath.isNullOrEmpty()) AppUpdateManager.install(ctx, File(apkPath))
             }
 
-            ACTION_CANCEL_UPDATE -> AppUpdateManager.cancelDownload()
+            ACTION_CANCEL_UPDATE -> {
+                if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
+                AppUpdateManager.cancelDownload()
+            }
 
             ACTION_UPDATE_YTDLP -> updateYtdlp(notificationId, intent.getStringExtra(TASK_ID_KEY))
         }

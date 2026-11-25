@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.junkfood.seal.R
 import com.junkfood.seal.download.BatchInfo
 import com.junkfood.seal.download.BatchOps
@@ -118,16 +119,20 @@ fun PlaylistBatchCard(
 ) {
     val summary = remember(entries) { BatchOps.summary(entries) }
     val reviewCount = remember(entries) { MatchOps.reviewCount(entries) }
-    // Rows the metered gate parked. Empty on Wi-Fi, or once a permit covers
-    // them, so the one-tap rescue only appears when it can actually help.
+    val canStartDownloads by NetworkPolicy.canStartFlow.collectAsStateWithLifecycle()
+    // Rows the metered gate parked (both Idle and ReadyWithInfo). Empty on Wi-Fi,
+    // or once a permit covers them, so the one-tap rescue only appears when it
+    // can actually help.
     val parkedIds =
-        remember(entries) {
-            if (NetworkPolicy.canStartDownloads())
-                emptySet()
-            else
-                entries
-                    .filter { it.second.downloadState == ReadyWithInfo }
-                    .mapTo(mutableSetOf()) { it.first.id }
+        remember(entries, canStartDownloads) {
+            entries
+                .filter { (task, state) ->
+                    NetworkPolicy.isMeteredParked(
+                        state = state.downloadState,
+                        canStart = canStartDownloads && NetworkPolicy.canStartTask(task.id),
+                    )
+                }
+                .mapTo(mutableSetOf()) { it.first.id }
         }
     // A single share still rides a one-song batch. Name the actual song and drop
     // the "0/1 done" line: a lone track has no progress to summarise.
@@ -262,6 +267,12 @@ fun PlaylistBatchCard(
                             SongRow(
                                 task = task,
                                 state = state,
+                                meteredParked =
+                                    NetworkPolicy.isMeteredParked(
+                                        state = state.downloadState,
+                                        canStart =
+                                            canStartDownloads && NetworkPolicy.canStartTask(task.id),
+                                    ),
                                 onClick = { onSongClick(task) },
                                 onAction = { onSongAction(task, it) },
                             )
@@ -277,12 +288,15 @@ fun PlaylistBatchCard(
 private fun SongRow(
     task: Task,
     state: Task.State,
+    meteredParked: Boolean,
     onClick: () -> Unit,
     onAction: (UiAction) -> Unit,
 ) {
     val progress = (state.downloadState as? Running)?.progress?.takeIf { it >= 0f }
     val status = statusLine(state.downloadState)
-    val statusText = statusText(state.downloadState)
+    val statusText =
+        if (meteredParked) stringResource(R.string.download_waiting_wifi)
+        else statusText(state.downloadState)
     val phase = state.match.phase
     Row(
         modifier =

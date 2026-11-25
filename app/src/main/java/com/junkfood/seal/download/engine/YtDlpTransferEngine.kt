@@ -52,11 +52,10 @@ internal object YtDlpTransferEngine : TransferEngine {
                     hasRecordedWin = ExtractionClients.hasWin(job.taskId),
                 )
             val downloadStartedAtMs = System.currentTimeMillis()
-            // The export needs the exact file THIS attempt wrote, not a guess
-            // from the folder. Asking yt-dlp for it is additive; the report is
-            // a cache file read once and removed. Reports a crashed run left
-            // behind are stale by definition.
-            val m4bPlanned = M4bPlan.applies(videoInfo, downloadPreferences)
+            // The finish line needs the exact file THIS attempt wrote, not a
+            // folder-mtime guess (which cross-contaminates concurrent downloads
+            // and leaves splitByChapter without its unsplit master). The report
+            // is a cache file read once and removed in finally.
             for ((attemptIndex, clients) in ladder.withIndex()) {
                 if (!job.isActive()) return Result.failure(CancellationException("task canceled"))
                 val processId = job.processIdFactory()
@@ -75,13 +74,14 @@ internal object YtDlpTransferEngine : TransferEngine {
                 }
                 val pathBuilder = StringBuilder()
                 val outputBuilder = StringBuilder()
-                val pathReport =
-                    if (m4bPlanned) M4bPlan.reportFile(context.cacheDir, job.taskId) else null
-                pathReport?.delete()
+                val pathReport = M4bPlan.reportFile(context.cacheDir, job.taskId)
+                pathReport.delete()
+                var produced: File? = null
 
                 val attemptFailure =
-                    request
-                    .apply {
+                    try {
+                        request
+                            .apply {
                         addOption("--no-mtime")
                         //                addOption("-v")
                         if (cookies) {
@@ -235,35 +235,34 @@ internal object YtDlpTransferEngine : TransferEngine {
 
                         addOption("-o", outputBuilder.append(output).toString())
 
-                        if (pathReport != null) {
-                            addCommands(
-                                listOf(
-                                    "--print-to-file",
-                                    "after_move:filepath",
-                                    pathReport.absolutePath,
-                                )
+                        addCommands(
+                            listOf(
+                                "--print-to-file",
+                                "after_move:filepath",
+                                pathReport.absolutePath,
                             )
-                        }
+                        )
 
                         for (s in request.buildCommand()) Log.d(TRANSFER_TAG, s)
                     }
-                    .runCatching {
-                        YoutubeDL.getInstance()
-                            .execute(
-                                request = this,
-                                processId = processId,
-                                callback = job.progressCallback,
-                            )
+                            .runCatching {
+                                YoutubeDL.getInstance()
+                                    .execute(
+                                        request = this,
+                                        processId = processId,
+                                        callback = job.progressCallback,
+                                    )
+                            }
+                            .exceptionOrNull()
+                            .also {
+                                val outDir =
+                                    if (sdcard) context.getSdcardTempDir(videoInfo.id)
+                                    else File(pathBuilder.toString())
+                                produced = M4bPlan.producedFrom(pathReport, outDir)
+                            }
+                    } finally {
+                        pathReport.delete()
                     }
-                    .exceptionOrNull()
-                val produced =
-                    pathReport?.let { report ->
-                        val outDir =
-                            if (sdcard) context.getSdcardTempDir(videoInfo.id)
-                            else File(pathBuilder.toString())
-                        M4bPlan.producedFrom(report, outDir)
-                    }
-                pathReport?.delete()
                 if (attemptFailure == null) {
                     return onFinishDownloading(
                         preferences = downloadPreferences,

@@ -225,6 +225,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         val job =
             viewModelScope.launch(Dispatchers.IO) {
+                App.enginesReady.await()
                 DownloadUtil.getPlaylistOrVideoInfo(
                         playlistURL = url,
                         downloadPreferences = preferences,
@@ -268,6 +269,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
         val job =
             viewModelScope.launch(Dispatchers.IO) {
+                App.enginesReady.await()
                 DownloadUtil.fetchVideoInfoFromUrl(
                         url = url,
                         preferences = preferences.copy(extractAudio = audioOnly),
@@ -575,13 +577,13 @@ internal fun DownloadDialogViewModel.Action.startsDownload(): Boolean =
     when (this) {
         is DownloadDialogViewModel.Action.DownloadWithPreset,
         is DownloadDialogViewModel.Action.RunCommand,
-        is DownloadDialogViewModel.Action.DownloadMetadataTracks -> true
+        is DownloadDialogViewModel.Action.DownloadMetadataTracks,
+        is DownloadDialogViewModel.Action.FetchGallery -> true
 
         DownloadDialogViewModel.Action.HideSheet,
         is DownloadDialogViewModel.Action.ShowSheet,
         is DownloadDialogViewModel.Action.FetchSpotify,
         is DownloadDialogViewModel.Action.FetchAudible,
-        is DownloadDialogViewModel.Action.FetchGallery,
         is DownloadDialogViewModel.Action.ProceedWithURLs,
         DownloadDialogViewModel.Action.Reset,
         is DownloadDialogViewModel.Action.FetchPlaylist,

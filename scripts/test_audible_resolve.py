@@ -145,6 +145,57 @@ class AsinExtractionTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(expected, sleeve_audible._language(raw))
 
+    def test_regional_audible_tlds_map_to_matching_api_hosts(self):
+        regional_cases = (
+            ("https://www.audible.co.uk/pd/B002V1OF70", "api.audible.co.uk", "B002V1OF70"),
+            ("https://www.audible.de/pd/Der-Hobbit/B002V1OF70", "api.audible.de", "B002V1OF70"),
+            ("https://www.audible.fr/pd/B002V1OF70", "api.audible.fr", "B002V1OF70"),
+            ("https://www.audible.co.jp/pd/B002V1OF70", "api.audible.co.jp", "B002V1OF70"),
+            ("https://www.audible.com.au/pd/B002V1OF70", "api.audible.com.au", "B002V1OF70"),
+            ("https://www.audible.ca/pd/B002V1OF70", "api.audible.ca", "B002V1OF70"),
+            ("https://www.audible.it/pd/B002V1OF70", "api.audible.it", "B002V1OF70"),
+            ("https://www.audible.es/pd/B002V1OF70", "api.audible.es", "B002V1OF70"),
+            ("https://www.audible.in/pd/B002V1OF70", "api.audible.in", "B002V1OF70"),
+            ("https://www.audible.com.br/pd/B002V1OF70", "api.audible.com.br", "B002V1OF70"),
+            # Unknown/spoofed hosts fall back safely to api.audible.com.
+            ("https://evil-audible.co.uk/pd/B002V1OF70", "api.audible.com", "B002V1OF70"),
+            ("https://audible.co.uk.evil.com/pd/B002V1OF70", "api.audible.com", "B002V1OF70"),
+        )
+        for url, expected_host, asin in regional_cases:
+            with self.subTest(url=url):
+                self.api.calls.clear()
+                result = json.loads(sleeve_audible.resolve(url))
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(
+                    [
+                        f"https://{expected_host}/1.0/catalog/products/{asin}"
+                        "?response_groups=product_attrs,contributors,product_desc"
+                    ],
+                    self.api.calls,
+                )
+
+    def test_empty_or_missing_product_returns_error(self):
+        for payload in (
+            {},
+            {"product": None},
+            {"product": {}},
+            {"product": {"title": ""}},
+            {"product": {"title": "   "}},
+        ):
+            with self.subTest(payload=payload):
+                sleeve_audible._api = lambda url, p=payload: p
+                result = json.loads(
+                    sleeve_audible.resolve("https://www.audible.com/pd/B002V1OF70")
+                )
+                self.assertFalse(result["ok"])
+                self.assertEqual("empty audible product", result["error"])
+
+    def test_keyword_search_with_blank_title_returns_error(self):
+        sleeve_audible._api = lambda url: {"products": [{"title": "  "}]}
+        result = json.loads(sleeve_audible.resolve("", "Dune"))
+        self.assertFalse(result["ok"])
+        self.assertEqual("empty audible product", result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,21 +102,35 @@ def _via_embed(kind, obj_id):
     track_list = entity.get("trackList") or []
     if not track_list and entity.get("type") == "track":
         # Single-track embed: the entity is the track.
+        tracks = [
+            _track_dto(
+                title=entity.get("title") or entity.get("name") or "",
+                artist=artist_names(entity),
+                duration_ms=entity.get("duration") or 0,
+            )
+        ]
         return {
             "ok": True,
             "kind": "track",
             "title": entity.get("title") or entity.get("name") or "",
-            "tracks": [
-                _track_dto(
-                    title=entity.get("title") or entity.get("name") or "",
-                    artist=artist_names(entity),
-                    duration_ms=entity.get("duration") or 0,
-                )
-            ],
+            "tracks": tracks,
+            "totalTracks": len(tracks),
+            "truncated": False,
         }
     if not track_list:
         raise RuntimeError("embed: no trackList and not a track entity")
 
+    raw_total = len(track_list)
+    entity_total = entity.get("total")
+    if not isinstance(entity_total, int):
+        entity_tracks = entity.get("tracks")
+        if isinstance(entity_tracks, dict):
+            entity_total = entity_tracks.get("total")
+    total_tracks = (
+        entity_total
+        if isinstance(entity_total, int) and entity_total > raw_total
+        else raw_total
+    )
     tracks = [
         _track_dto(
             title=t.get("title") or "",
@@ -127,7 +141,14 @@ def _via_embed(kind, obj_id):
         for t in track_list[:MAX_TRACKS]
     ]
     title = entity.get("name") or ""
-    return {"ok": True, "kind": kind, "title": title, "tracks": tracks}
+    return {
+        "ok": True,
+        "kind": kind,
+        "title": title,
+        "tracks": tracks,
+        "totalTracks": total_tracks,
+        "truncated": total_tracks > len(tracks),
+    }
 
 
 # ---------------------------------------------------------------- strategy 2
@@ -144,10 +165,10 @@ def _anon_token():
 
 
 def _v1_tracks(kind, obj_id, token):
-    """Web API v1 with any bearer token; returns (title, tracks)."""
+    """Web API v1 with any bearer token; returns (title, tracks, total_tracks, truncated)."""
     if kind == "track":
         t = _api_get("https://api.spotify.com/v1/tracks/" + obj_id, token)
-        return t.get("name", ""), [
+        tracks = [
             _track_dto(
                 title=t.get("name"),
                 artist=", ".join(a.get("name", "") for a in (t.get("artists") or [])),
@@ -156,15 +177,22 @@ def _v1_tracks(kind, obj_id, token):
                 isrc=(t.get("external_ids") or {}).get("isrc", ""),
             )
         ]
+        return t.get("name", ""), tracks, len(tracks), False
     if kind == "album":
         album = _api_get("https://api.spotify.com/v1/albums/" + obj_id, token)
         album_name = album.get("name", "")
         tracks, page = [], album.get("tracks") or {}
+        api_total = page.get("total")
+        if not isinstance(api_total, int):
+            api_total = album.get("total_tracks")
+        seen_items = 0
 
         def take(items):
+            nonlocal seen_items
+            seen_items += len(items)
             for t in items:
                 if len(tracks) >= MAX_TRACKS:
-                    return
+                    continue
                 tracks.append(
                     _track_dto(
                         title=t.get("name"),
@@ -182,7 +210,13 @@ def _v1_tracks(kind, obj_id, token):
             page = _api_get(nxt, token)
             take(page.get("items", []))
             nxt = page.get("next")
-        return album_name, tracks
+        has_more = bool(nxt) or seen_items > len(tracks)
+        total_tracks = (
+            api_total
+            if isinstance(api_total, int) and api_total >= len(tracks)
+            else max(seen_items, len(tracks))
+        )
+        return album_name, tracks, total_tracks, (total_tracks > len(tracks) or has_more)
 
     # playlist
     playlist = _api_get(
@@ -191,38 +225,61 @@ def _v1_tracks(kind, obj_id, token):
         + "?fields=name,tracks(total)",
         token,
     )
+    api_total = (playlist.get("tracks") or {}).get("total")
     tracks = []
+    seen_tracks = 0
     page = _api_get(
         "https://api.spotify.com/v1/playlists/" + obj_id + "/tracks?limit=100",
         token,
     )
+    if not isinstance(api_total, int):
+        api_total = page.get("total")
     while True:
         for it in page.get("items", []):
             t = it.get("track")
             if t:
-                tracks.append(
-                    _track_dto(
-                        title=t.get("name"),
-                        artist=", ".join(
-                            a.get("name", "") for a in (t.get("artists") or [])
-                        ),
-                        album=(t.get("album") or {}).get("name", ""),
-                        duration_ms=t.get("duration_ms") or 0,
-                        isrc=(t.get("external_ids") or {}).get("isrc", ""),
+                seen_tracks += 1
+                if len(tracks) < MAX_TRACKS:
+                    tracks.append(
+                        _track_dto(
+                            title=t.get("name"),
+                            artist=", ".join(
+                                a.get("name", "") for a in (t.get("artists") or [])
+                            ),
+                            album=(t.get("album") or {}).get("name", ""),
+                            duration_ms=t.get("duration_ms") or 0,
+                            isrc=(t.get("external_ids") or {}).get("isrc", ""),
+                        )
                     )
-                )
-                if len(tracks) >= MAX_TRACKS:
-                    break
         nxt = page.get("next")
         if not nxt or len(tracks) >= MAX_TRACKS:
             break
         page = _api_get(nxt, token)
-    return playlist.get("name", ""), tracks
+    has_more = bool(nxt) or seen_tracks > len(tracks)
+    total_tracks = (
+        api_total
+        if isinstance(api_total, int) and api_total >= len(tracks)
+        else max(seen_tracks, len(tracks))
+    )
+    return (
+        playlist.get("name", ""),
+        tracks,
+        total_tracks,
+        (total_tracks > len(tracks) or has_more),
+    )
 
 
 def _via_anon_token(kind, obj_id):
     token = _anon_token()
-    return _v1_tracks(kind, obj_id, token)
+    title, tracks, total_tracks, truncated = _v1_tracks(kind, obj_id, token)
+    return {
+        "ok": True,
+        "kind": kind,
+        "title": title,
+        "tracks": tracks,
+        "totalTracks": total_tracks,
+        "truncated": truncated,
+    }
 
 
 # ---------------------------------------------------------------- strategy 3
@@ -251,7 +308,15 @@ def _via_client_credentials(kind, obj_id, client_id, client_secret):
     token = data.get("access_token") or ""
     if not token:
         raise RuntimeError("creds: no access_token in response")
-    return _v1_tracks(kind, obj_id, token)
+    title, tracks, total_tracks, truncated = _v1_tracks(kind, obj_id, token)
+    return {
+        "ok": True,
+        "kind": kind,
+        "title": title,
+        "tracks": tracks,
+        "totalTracks": total_tracks,
+        "truncated": truncated,
+    }
 
 
 def resolve(url, client_id="", client_secret=""):

@@ -164,6 +164,7 @@ fun FormatPage(
     var showUpdateSubtitleDialog by remember { mutableStateOf(false) }
 
     var diffSubtitleLanguages by remember { mutableStateOf(emptySet<String>()) }
+    val metered = remember { PendingMetered() }
 
     FormatPageImpl(
         modifier = modifier,
@@ -177,34 +178,37 @@ fun FormatPage(
         isClippingAvailable =
             FormatSelectionPolicy.clippingAvailable(VIDEO_CLIP.getBoolean(), videoInfo.duration),
     ) { config ->
-        with(config) {
-            diffSubtitleLanguages =
-                (selectedSubtitles + selectedAutoCaptions)
-                    .run { this - this.filterWithRegex(subtitleLanguageRegex) }
-                    .toSet()
+        metered.postDownload {
+            with(config) {
+                diffSubtitleLanguages =
+                    (selectedSubtitles + selectedAutoCaptions)
+                        .run { this - this.filterWithRegex(subtitleLanguageRegex) }
+                        .toSet()
 
-            downloader.enqueue(
-                TaskFactory.createWithConfigurations(
-                    videoInfo = videoInfo,
-                    formatList = formatList,
-                    videoClips = videoClips,
-                    splitByChapter = splitByChapter,
-                    convertAudio = convertAudio,
-                    newTitle = newTitle,
-                    selectedSubtitles = selectedSubtitles,
-                    selectedAutoCaptions = selectedAutoCaptions,
-                    audioOnly = audioOnly,
-                    suggested = suggested,
+                downloader.enqueue(
+                    TaskFactory.createWithConfigurations(
+                        videoInfo = videoInfo,
+                        formatList = formatList,
+                        videoClips = videoClips,
+                        splitByChapter = splitByChapter,
+                        convertAudio = convertAudio,
+                        newTitle = newTitle,
+                        selectedSubtitles = selectedSubtitles,
+                        selectedAutoCaptions = selectedAutoCaptions,
+                        audioOnly = audioOnly,
+                        suggested = suggested,
+                    )
                 )
-            )
 
-            if (diffSubtitleLanguages.isNotEmpty()) {
-                showUpdateSubtitleDialog = true
-            } else {
-                onNavigateBack()
+                if (diffSubtitleLanguages.isNotEmpty()) {
+                    showUpdateSubtitleDialog = true
+                } else {
+                    onNavigateBack()
+                }
             }
         }
     }
+    PendingMeteredDialog(pending = metered)
     if (showUpdateSubtitleDialog) {
         UpdateSubtitleLanguageDialog(
             modifier = Modifier,

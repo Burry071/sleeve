@@ -70,6 +70,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.derivedStateOf
@@ -109,6 +110,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.constraintlayout.compose.ConstraintLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -318,6 +322,17 @@ fun DownloadPageV2(
                 if (!granted) context.makeToast(R.string.permission_denied)
             }
         } else null
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                NetworkPolicy.refreshCanStart()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val metered = remember { PendingMetered() }
 
@@ -557,6 +572,7 @@ fun DownloadPageImplV2(
         remember(activeFilter) {
             derivedStateOf { taskDownloadStateMap.filter { activeFilter.predict(it.toPair()) } }
         }
+    val canStartDownloads by NetworkPolicy.canStartFlow.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -761,6 +777,12 @@ fun DownloadPageImplV2(
                                 val postProcessingText =
                                     if (converting) stringResource(R.string.post_processing_running)
                                     else null
+                                val meteredParked =
+                                    NetworkPolicy.isMeteredParked(
+                                        state = state.downloadState,
+                                        canStart =
+                                            canStartDownloads && NetworkPolicy.canStartTask(task.id),
+                                    )
                                 with(state.viewState) {
                                     VideoCardV2(
                                         modifier =
@@ -776,6 +798,9 @@ fun DownloadPageImplV2(
                                         statusLine = statusLine(state.downloadState),
                                         statusText =
                                             postProcessingText
+                                                ?: (if (meteredParked) {
+                                                    stringResource(R.string.download_waiting_wifi)
+                                                } else null)
                                                 ?: statusText(state.downloadState)
                                                 ?: (state.downloadState as? Completed)
                                                     ?.warning
@@ -837,8 +862,7 @@ fun DownloadPageImplV2(
                                                 // Parked on a metered network: the
                                                 // one-off permit names this task, so
                                                 // it starts this one only.
-                                                state.downloadState == ReadyWithInfo &&
-                                                    !NetworkPolicy.canStartDownloads() -> {
+                                                meteredParked -> {
                                                     {
                                                         TextButton(
                                                             onClick = {
@@ -892,36 +916,60 @@ fun DownloadPageImplV2(
                                 val running = state.downloadState as? Running
                                 val converting =
                                     running != null && PostProcessing.inProgress(running.progressText)
-                                VideoListItem(
-                                    modifier = Modifier.animateItem().padding(bottom = 16.dp),
-                                    viewState = state.viewState,
-                                    stateIndicator = {
-                                        ListItemStateText(
-                                            modifier = Modifier.padding(top = 3.dp),
-                                            downloadState = state.downloadState,
-                                        )
-                                    },
-                                    statusLine = statusLine(state.downloadState),
-                                    statusText =
-                                        (if (converting) stringResource(R.string.post_processing_running)
-                                            else null)
-                                            ?: statusText(state.downloadState)
-                                            ?: (state.downloadState as? Completed)
-                                                ?.warning
-                                                ?.takeIf { it.isNotBlank() },
-                                    progress =
-                                        running?.progress?.takeIf { it >= 0f && !converting },
-                                    actionButton = {
-                                        ActionButton(
-                                            modifier = Modifier,
-                                            downloadState = state.downloadState,
-                                            matchPhase = state.match.phase,
+                                val meteredParked =
+                                    NetworkPolicy.isMeteredParked(
+                                        state = state.downloadState,
+                                        canStart =
+                                            canStartDownloads && NetworkPolicy.canStartTask(task.id),
+                                    )
+                                Column(modifier = Modifier.animateItem().padding(bottom = 16.dp)) {
+                                    VideoListItem(
+                                        modifier = Modifier,
+                                        viewState = state.viewState,
+                                        stateIndicator = {
+                                            ListItemStateText(
+                                                modifier = Modifier.padding(top = 3.dp),
+                                                downloadState = state.downloadState,
+                                            )
+                                        },
+                                        statusLine = statusLine(state.downloadState),
+                                        statusText =
+                                            (if (converting) {
+                                                stringResource(R.string.post_processing_running)
+                                            } else null)
+                                                ?: (if (meteredParked) {
+                                                    stringResource(R.string.download_waiting_wifi)
+                                                } else null)
+                                                ?: statusText(state.downloadState)
+                                                ?: (state.downloadState as? Completed)
+                                                    ?.warning
+                                                    ?.takeIf { it.isNotBlank() },
+                                        progress =
+                                            running?.progress?.takeIf { it >= 0f && !converting },
+                                        actionButton = {
+                                            ActionButton(
+                                                modifier = Modifier,
+                                                downloadState = state.downloadState,
+                                                matchPhase = state.match.phase,
+                                            ) {
+                                                onActionPost(task, it)
+                                            }
+                                        },
+                                        onButtonClick = { showActionSheet(task) },
+                                    )
+                                    if (meteredParked) {
+                                        TextButton(
+                                            onClick = {
+                                                onActionPost(
+                                                    task,
+                                                    UiAction.AllowMetered(setOf(task.id)),
+                                                )
+                                            }
                                         ) {
-                                            onActionPost(task, it)
+                                            Text(stringResource(R.string.download_anyway))
                                         }
-                                    },
-                                    onButtonClick = { showActionSheet(task) },
-                                )
+                                    }
+                                }
                             }
                         }
                     }

@@ -1,11 +1,18 @@
 package com.junkfood.seal
 
+import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.backupComparisonKey
+import com.junkfood.seal.download.engine.GhostHttpTransferEngine
+import com.junkfood.seal.download.engine.Nm3u8TransferEngine
 import com.junkfood.seal.download.engine.outputIsAudio
 import com.junkfood.seal.download.engine.selectedFormats
 import com.junkfood.seal.download.engine.singleFormatHandOffAllowed
+import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.Format
+import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,5 +72,34 @@ class TransferRoutingTest {
         assertFalse(outputIsAudio(extractAudio = false, selected = listOf(muxed("18"))))
         assertFalse(outputIsAudio(extractAudio = false, selected = listOf(silent("137"), audio("140"))))
         assertFalse(outputIsAudio(extractAudio = false, selected = emptyList()))
+    }
+
+    @Test
+    fun `proxy and forceIpv4 disable Ghost and N_m3u8DL-RE handoff so yt-dlp honors routing`() {
+        val base = DownloadUtil.DownloadPreferences.EMPTY
+        assertTrue(GhostHttpTransferEngine.canUseGhost(base))
+        assertTrue(Nm3u8TransferEngine.canUseNm3u8(base))
+
+        val proxied = base.copy(proxy = true, proxyUrl = "http://127.0.0.1:8080")
+        assertFalse(GhostHttpTransferEngine.canUseGhost(proxied))
+        assertFalse(Nm3u8TransferEngine.canUseNm3u8(proxied))
+
+        val ipv4Only = base.copy(forceIpv4 = true)
+        assertFalse(GhostHttpTransferEngine.canUseGhost(ipv4Only))
+        assertFalse(Nm3u8TransferEngine.canUseNm3u8(ipv4Only))
+    }
+
+    @Test
+    fun `backupComparisonKey coalesces running progress ticks while preserving interrupted boundary`() {
+        val job = Job()
+        val view = Task.ViewState(url = "https://example.com/v", title = "Video")
+        val indeterminate = Task.State(Task.DownloadState.Running(job, "t1", -1f, "starting"), null, view)
+        val tick1 = Task.State(Task.DownloadState.Running(job, "t1", 0.12f, "12% 1.2 MB/s"), null, view)
+        val tick2 = Task.State(Task.DownloadState.Running(job, "t1", 0.87f, "87% 4.5 MB/s"), null, view)
+        val completed = Task.State(Task.DownloadState.Completed("/tmp/v.mp4"), null, view)
+
+        assertNotEquals(indeterminate.backupComparisonKey(), tick1.backupComparisonKey())
+        assertEquals(tick1.backupComparisonKey(), tick2.backupComparisonKey())
+        assertNotEquals(tick2.backupComparisonKey(), completed.backupComparisonKey())
     }
 }

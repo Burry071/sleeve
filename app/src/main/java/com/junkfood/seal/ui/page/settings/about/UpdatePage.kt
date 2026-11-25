@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.junkfood.seal.App
+import com.junkfood.seal.BuildConfig
 import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.intState
 import com.junkfood.seal.ui.component.BackButton
@@ -67,7 +68,9 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var showUnavailableDialog by remember { mutableStateOf(App.isFDroidBuild()) }
+    var showUnavailableDialog by remember {
+        mutableStateOf(!BuildConfig.ENABLE_IN_APP_UPDATER || App.isFDroidBuild())
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -82,17 +85,23 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
         },
         content = { paddings ->
             LazyColumn(modifier = Modifier.padding(paddings)) {
-                item {
-                    UpdateBanner(
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-                    )
+                if (BuildConfig.ENABLE_IN_APP_UPDATER) {
+                    item {
+                        UpdateBanner(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                        )
+                    }
                 }
                 item {
                     PreferenceSwitchWithContainer(
                         title = stringResource(id = R.string.enable_auto_update),
                         icon = null,
-                        isChecked = autoUpdate,
+                        isChecked = BuildConfig.ENABLE_IN_APP_UPDATER && autoUpdate,
                     ) {
+                        if (!BuildConfig.ENABLE_IN_APP_UPDATER) {
+                            showUnavailableDialog = true
+                            return@PreferenceSwitchWithContainer
+                        }
                         autoUpdate = !autoUpdate
                         AUTO_UPDATE.updateBoolean(autoUpdate)
                     }
@@ -139,6 +148,10 @@ fun UpdatePage(onNavigateBack: () -> Unit) {
                             icon = Icons.Outlined.Update,
                             isLoading = isLoading,
                         ) {
+                            if (!BuildConfig.ENABLE_IN_APP_UPDATER) {
+                                showUnavailableDialog = true
+                                return@ProgressIndicatorButton
+                            }
                             if (!isLoading)
                                 scope.launch {
                                     isLoading = true

@@ -46,11 +46,11 @@ object SleeveQuickDownload {
     private fun origin(anonymous: Boolean): TaskOrigin =
         if (anonymous) TaskOrigin.Quick else TaskOrigin.User
 
-    private fun directPreferences(
+    internal fun applyDirectPreferences(
+        base: DownloadUtil.DownloadPreferences,
         item: GalleryItem,
-        anonymous: Boolean,
     ): DownloadUtil.DownloadPreferences =
-        preferences(anonymous).copy(
+        base.copy(
             galleryDirect = true,
             // A direct item is the final artifact: no audio extraction and no
             // conversion postprocessors on a file that is already what was
@@ -61,7 +61,14 @@ object SleeveQuickDownload {
                 item.url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
             },
             formatIdString = "direct",
+            referer = item.referer.trim(),
         )
+
+    private fun directPreferences(
+        item: GalleryItem,
+        anonymous: Boolean,
+    ): DownloadUtil.DownloadPreferences =
+        applyDirectPreferences(preferences(anonymous), item)
 
     /**
      * The resolver ladder, injectable so the fallback order is testable without

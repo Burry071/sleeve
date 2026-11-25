@@ -39,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.junkfood.seal.BuildConfig
 import com.junkfood.seal.R
 import com.junkfood.seal.ui.common.pressScale
 import com.junkfood.seal.util.AppUpdateManager
@@ -54,6 +55,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun UpdateBanner(modifier: Modifier = Modifier) {
+    if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
     val state by AppUpdateManager.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
