@@ -267,6 +267,178 @@ class SpotifyResolveTest(unittest.TestCase):
         self.assertIn("anon-token:", parsed["error"])
         self.assertIn("Settings > Spotify", parsed["error"])
 
+    def test_embed_reports_total_tracks_and_truncated_flag(self):
+        def make_items(count):
+            return [
+                {
+                    "title": f"Track {i}",
+                    "artists": [{"name": "Artist"}],
+                    "duration": 180000,
+                }
+                for i in range(count)
+            ]
+
+        # > 100 tracks in trackList -> truncated=True, totalTracks=135
+        html_over = _embed_html({"name": "Huge Mix", "trackList": make_items(135)})
+        with mock.patch.object(sleeve_spotify, "_http_get", return_value=html_over):
+            parsed = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/playlist/PLOVER135")
+            )
+        self.assertTrue(parsed["ok"])
+        self.assertEqual(100, len(parsed["tracks"]))
+        self.assertEqual(135, parsed["totalTracks"])
+        self.assertTrue(parsed["truncated"])
+
+        # Embed capped to 100 items with entity.total=180 -> truncated=True, totalTracks=180
+        html_total = _embed_html(
+            {"name": "Capped Mix", "total": 180, "trackList": make_items(100)}
+        )
+        with mock.patch.object(sleeve_spotify, "_http_get", return_value=html_total):
+            parsed_total = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/playlist/PLTOTAL180")
+            )
+        self.assertTrue(parsed_total["ok"])
+        self.assertEqual(100, len(parsed_total["tracks"]))
+        self.assertEqual(180, parsed_total["totalTracks"])
+        self.assertTrue(parsed_total["truncated"])
+
+        # Exactly 100 tracks -> truncated=False, totalTracks=100
+        html_exact = _embed_html({"name": "Exact 100", "trackList": make_items(100)})
+        with mock.patch.object(sleeve_spotify, "_http_get", return_value=html_exact):
+            parsed_exact = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/playlist/PLEXACT100")
+            )
+        self.assertTrue(parsed_exact["ok"])
+        self.assertEqual(100, len(parsed_exact["tracks"]))
+        self.assertEqual(100, parsed_exact["totalTracks"])
+        self.assertFalse(parsed_exact["truncated"])
+
+        # Single track -> totalTracks=1, truncated=False
+        html_single = _embed_html(
+            {
+                "type": "track",
+                "title": "Solo",
+                "artists": [{"name": "Artist"}],
+                "duration": 200000,
+            }
+        )
+        with mock.patch.object(sleeve_spotify, "_http_get", return_value=html_single):
+            parsed_single = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/track/TRKSOLO")
+            )
+        self.assertTrue(parsed_single["ok"])
+        self.assertEqual(1, parsed_single["totalTracks"])
+        self.assertFalse(parsed_single["truncated"])
+
+    def test_v1_playlist_and_album_truncation_metadata(self):
+        playlist_items = [
+            {
+                "track": {
+                    "name": f"Song {i}",
+                    "artists": [{"name": "Band"}],
+                    "album": {"name": "LP"},
+                    "duration_ms": 200000,
+                    "external_ids": {"isrc": f"ISRC{i:04d}"},
+                }
+            }
+            for i in range(100)
+        ]
+        album_items_p1 = [
+            {"name": f"A{i}", "artists": [{"name": "Band"}], "duration_ms": 150000}
+            for i in range(50)
+        ]
+        album_items_p2 = [
+            {"name": f"B{i}", "artists": [{"name": "Band"}], "duration_ms": 150000}
+            for i in range(50)
+        ]
+        api_map = {
+            "https://api.spotify.com/v1/playlists/PLBIG?fields=name,tracks(total)": {
+                "name": "Mega Playlist",
+                "tracks": {"total": 250},
+            },
+            "https://api.spotify.com/v1/playlists/PLBIG/tracks?limit=100": {
+                "items": playlist_items,
+                "next": "https://api.spotify.com/v1/playlists/PLBIG/tracks?offset=100",
+            },
+            "https://api.spotify.com/v1/playlists/PLSMALL?fields=name,tracks(total)": {
+                "name": "Small Playlist",
+                "tracks": {"total": 12},
+            },
+            "https://api.spotify.com/v1/playlists/PLSMALL/tracks?limit=100": {
+                "items": playlist_items[:12],
+                "next": None,
+            },
+            "https://api.spotify.com/v1/albums/ALBBIG": {
+                "name": "Box Set",
+                "total_tracks": 120,
+                "tracks": {
+                    "total": 120,
+                    "items": album_items_p1,
+                    "next": "https://api.spotify.com/v1/albums/ALBBIG/tracks?offset=50",
+                },
+            },
+            "https://api.spotify.com/v1/albums/ALBBIG/tracks?offset=50": {
+                "total": 120,
+                "items": album_items_p2,
+                "next": "https://api.spotify.com/v1/albums/ALBBIG/tracks?offset=100",
+            },
+        }
+
+        def fake_get_anon(req_url, headers=None):
+            if "/embed/" in req_url:
+                raise RuntimeError("embed unavailable")
+            if "get_access_token" in req_url:
+                return json.dumps({"accessToken": "anon-tok"})
+            return json.dumps(api_map[req_url])
+
+        with mock.patch.object(sleeve_spotify, "_http_get", side_effect=fake_get_anon):
+            pl_big = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/playlist/PLBIG")
+            )
+            pl_small = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/playlist/PLSMALL")
+            )
+            alb_big = json.loads(
+                sleeve_spotify.resolve("https://open.spotify.com/album/ALBBIG")
+            )
+
+        self.assertEqual(100, len(pl_big["tracks"]))
+        self.assertEqual(250, pl_big["totalTracks"])
+        self.assertTrue(pl_big["truncated"])
+
+        self.assertEqual(12, len(pl_small["tracks"]))
+        self.assertEqual(12, pl_small["totalTracks"])
+        self.assertFalse(pl_small["truncated"])
+
+        self.assertEqual(100, len(alb_big["tracks"]))
+        self.assertEqual(120, alb_big["totalTracks"])
+        self.assertTrue(alb_big["truncated"])
+
+        # Client-credentials strategy also exposes totalTracks and truncated.
+        def fake_get_cc(req_url, headers=None):
+            if "/embed/" in req_url or "get_access_token" in req_url:
+                raise RuntimeError("blocked")
+            return json.dumps(api_map[req_url])
+
+        with mock.patch.object(sleeve_spotify, "_http_get", side_effect=fake_get_cc), \
+             mock.patch.object(
+                 sleeve_spotify,
+                 "_http_post_form",
+                 return_value=json.dumps({"access_token": "cc-tok"}),
+             ):
+            cc_big = json.loads(
+                sleeve_spotify.resolve(
+                    "https://open.spotify.com/playlist/PLBIG",
+                    client_id="cid",
+                    client_secret="csec",
+                )
+            )
+
+        self.assertTrue(cc_big["ok"])
+        self.assertEqual(100, len(cc_big["tracks"]))
+        self.assertEqual(250, cc_big["totalTracks"])
+        self.assertTrue(cc_big["truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()

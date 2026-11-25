@@ -18,6 +18,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.DownloaderV2Impl
@@ -54,6 +55,8 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import java.io.File
 import java.util.UUID
+import kotlin.system.exitProcess
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -116,6 +119,8 @@ class App : Application() {
                 }
             } catch (th: Throwable) {
                 withContext(Dispatchers.Main) { startCrashReportActivity(th) }
+            } finally {
+                enginesReady.complete(Unit)
             }
         }
 
@@ -130,7 +135,16 @@ class App : Application() {
         DatabaseUtil.backfillDownloadHistoryFromDisk()
         if (Build.VERSION.SDK_INT >= 26) NotificationUtil.createNotificationChannel()
 
-        Thread.setDefaultUncaughtExceptionHandler { _, e -> startCrashReportActivity(e) }
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            runCatching { startCrashReportActivity(e) }
+            if (previousHandler != null) {
+                previousHandler.uncaughtException(thread, e)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                exitProcess(1)
+            }
+        }
     }
 
     private fun startCrashReportActivity(th: Throwable) {
@@ -146,6 +160,7 @@ class App : Application() {
     }
 
     companion object {
+        val enginesReady = CompletableDeferred<Unit>()
         lateinit var clipboard: ClipboardManager
         lateinit var videoDownloadDir: String
         lateinit var audioDownloadDir: String
@@ -201,7 +216,7 @@ class App : Application() {
             if (!serviceState.started) {
                 // Started + foreground: the process stays alive with no
                 // activity on screen while tasks are in the queue.
-                context.applicationContext.startService(intent)
+                ContextCompat.startForegroundService(context.applicationContext, intent)
                 serviceState.started = true
             }
         }

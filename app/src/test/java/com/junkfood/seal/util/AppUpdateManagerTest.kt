@@ -123,6 +123,7 @@ class AppUpdateManagerTest {
     @Test
     fun sanitizeReleaseTagAcceptsValidSemverTags() {
         assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("v2.1.2"))
+        assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("V2.1.2"))
         assertEquals("2.1.2", AppUpdateManager.sanitizeReleaseTag("2.1.2"))
         assertEquals("2.2.0-beta.1", AppUpdateManager.sanitizeReleaseTag("v2.2.0-beta.1"))
         assertEquals("2.2.0-alpha.9", AppUpdateManager.sanitizeReleaseTag("2.2.0-alpha.9"))
@@ -134,6 +135,9 @@ class AppUpdateManagerTest {
         val maliciousTags =
             listOf(
                 "",
+                "vv2.1.2",
+                "vV2.1.2",
+                "VV2.1.2",
                 "v9.9.9/../../evil",
                 "9.9.9/../../evil",
                 "../2.1.2",

@@ -285,6 +285,16 @@ object FileUtil {
     }
 
     /**
+     * Scans only the exact paths named by a completed transfer, avoiding a
+     * shared-folder walk that could pick up concurrent downloads.
+     */
+    fun scanFilesToMediaLibrary(paths: List<String>) {
+        if (paths.isNotEmpty()) {
+            MediaScannerConnection.scanFile(context, paths.toTypedArray(), null, null)
+        }
+    }
+
+    /**
      * Publish documents just moved onto the shared volume. The move goes through
      * SAF, so media written that way is invisible to the gallery until the
      * provider's document id is mapped back to a path and scanned.

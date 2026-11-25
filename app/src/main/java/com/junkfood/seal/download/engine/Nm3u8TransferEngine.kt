@@ -4,6 +4,8 @@ import android.util.Log
 import com.junkfood.seal.App
 import com.junkfood.seal.App.Companion.audioDownloadDir
 import com.junkfood.seal.App.Companion.videoDownloadDir
+import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.sanitizeSegment
 import java.io.File
 import java.security.MessageDigest
@@ -72,6 +74,54 @@ internal object Nm3u8TransferEngine : TransferEngine {
         }
     }
 
+    /**
+     * Formats Referer and User-Agent headers for N_m3u8DL-RE `--header` flags,
+     * stripping CR/LF characters and omitting blank values.
+     */
+    internal fun buildHeaderArgs(referer: String, userAgent: String): List<String> =
+        buildList {
+            val cleanReferer = referer.replace("\r", "").replace("\n", "").trim()
+            if (cleanReferer.isNotEmpty()) {
+                add("--header")
+                add("Referer: $cleanReferer")
+            }
+            val cleanUserAgent = userAgent.replace("\r", "").replace("\n", "").trim()
+            if (cleanUserAgent.isNotEmpty()) {
+                add("--header")
+                add("User-Agent: $cleanUserAgent")
+            }
+        }
+
+    /**
+     * Preference-level eligibility for N_m3u8DL-RE. Anything requiring yt-dlp
+     * post-processing or network routing (proxy / Force IPv4) stays on yt-dlp.
+     */
+    internal fun canUseNm3u8(preferences: DownloadUtil.DownloadPreferences): Boolean =
+        with(preferences) {
+            !(downloadPlaylist ||
+                extractAudio ||
+                convertAudio ||
+                sponsorBlock ||
+                createThumbnail ||
+                cropArtwork ||
+                embedThumbnail ||
+                downloadSubtitle ||
+                embedSubtitle ||
+                keepSubtitle ||
+                autoSubtitle ||
+                autoTranslatedSubtitles ||
+                convertSubtitle != 0 ||
+                aria2c ||
+                rateLimit ||
+                cookies ||
+                sdcard ||
+                useDownloadArchive ||
+                proxy ||
+                forceIpv4 ||
+                videoClips.isNotEmpty() ||
+                splitByChapter)
+        }
+
     /** @return null when this download was NOT handled (caller falls back). */
     override suspend fun transfer(job: TransferJob): Result<List<String>>? {
         if (!job.settings.engineEnabled) return null
@@ -88,28 +138,11 @@ internal object Nm3u8TransferEngine : TransferEngine {
 
         val (manifestUrl, manifestFormat) =
             with(preferences) {
-                if (downloadPlaylist ||
-                        extractAudio ||
-                        convertAudio ||
-                        sponsorBlock ||
-                        createThumbnail ||
-                        cropArtwork ||
-                        embedThumbnail ||
-                        downloadSubtitle ||
-                        embedSubtitle ||
-                        keepSubtitle ||
-                        autoSubtitle ||
-                        autoTranslatedSubtitles ||
-                        convertSubtitle != 0 ||
-                        aria2c ||
-                        rateLimit ||
-                        cookies ||
-                        sdcard ||
-                        useDownloadArchive ||
-                        videoClips.isNotEmpty() ||
-                        splitByChapter
-                ) {
-                    Log.d(TRANSFER_TAG, "N_m3u8DL-RE skipped: yt-dlp post-processing requested")
+                if (!canUseNm3u8(this)) {
+                    Log.d(
+                        TRANSFER_TAG,
+                        "N_m3u8DL-RE skipped: yt-dlp post-processing or network routing requested",
+                    )
                     return null
                 }
                 if (formatIdString.contains('+')) return null
@@ -191,6 +224,19 @@ internal object Nm3u8TransferEngine : TransferEngine {
             nativeBinary("libffmpeg.so")?.let {
                 args.add("--ffmpeg-binary-path=${it.absolutePath}")
             }
+            val pageReferer =
+                listOfNotNull(videoInfo.webpageUrl, videoInfo.originalUrl)
+                    .firstOrNull { it.isNotBlank() && it != manifestUrl }
+            val referer =
+                preferences.referer.ifBlank {
+                    if (manifestUrl.contains("cdninstagram") || manifestUrl.contains("fbcdn")) {
+                        "https://www.instagram.com/"
+                    } else {
+                        pageReferer.orEmpty()
+                    }
+                }
+            val userAgent = preferences.userAgentString.ifBlank { RedditResolver.BROWSER_UA }
+            args.addAll(buildHeaderArgs(referer = referer, userAgent = userAgent))
 
             Log.i(TRANSFER_TAG, "N_m3u8DL-RE took over $taskId -> $manifestUrl")
             process =

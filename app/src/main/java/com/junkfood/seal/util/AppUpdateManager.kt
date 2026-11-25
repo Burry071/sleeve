@@ -47,7 +47,7 @@ object AppUpdateManager {
     // Strict release tag pattern for remote GitHub releases: anchored end-to-end
     // so path separators, "..", or arbitrary suffixes cannot slip into APK filenames.
     private val SAFE_RELEASE_TAG_RE =
-        Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)\.?(\d+))?$""")
+        Regex("""^(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)\.?(\d+))?$""")
 
     sealed interface State {
         data object Idle : State
@@ -126,7 +126,10 @@ object AppUpdateManager {
      * Rejects path separators, traversal sequences, or unexpected suffixes.
      */
     internal fun sanitizeReleaseTag(rawTag: String): String? {
-        val trimmed = rawTag.trim().removePrefix("v")
+        val trimmed =
+            rawTag.trim().let {
+                if (it.startsWith('v') || it.startsWith('V')) it.substring(1) else it
+            }
         if (!SAFE_RELEASE_TAG_RE.matches(trimmed)) return null
         return trimmed
     }

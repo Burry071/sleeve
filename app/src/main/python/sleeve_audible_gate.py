@@ -251,7 +251,11 @@ def _language_declarations(raw_title):
     """
     raw = _fold(raw_title)
     found = set()
-    segments = [next(g for g in match.groups() if g) for match in _BRACKET_SEGMENT_RE.finditer(raw)]
+    segments = []
+    for match in _BRACKET_SEGMENT_RE.finditer(raw):
+        seg = next((g for g in match.groups() if g), "")
+        if seg.strip():
+            segments.append(seg)
     for segment in segments:
         for code, markers in _LANGUAGE_MARKERS:
             if any(

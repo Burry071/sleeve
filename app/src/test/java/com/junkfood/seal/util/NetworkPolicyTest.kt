@@ -1,5 +1,9 @@
 package com.junkfood.seal.util
 
+import com.junkfood.seal.download.Task
+import com.junkfood.seal.download.Task.DownloadState
+import com.junkfood.seal.download.Task.RestartableAction
+import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -85,5 +89,33 @@ class NetworkPolicyTest {
         assertTrue(NetworkPolicy.scopeCovers(emptySet(), "task-1"))
         assertTrue(NetworkPolicy.scopeCovers(setOf("task-1", "task-2"), "task-2"))
         assertFalse(NetworkPolicy.scopeCovers(setOf("task-1"), "task-2"))
+    }
+
+    @Test
+    fun isMeteredParkedCoversBothIdleAndReadyWithInfoOnlyWhenDownloadsCannotStart() {
+        assertTrue(NetworkPolicy.isMeteredParked(DownloadState.Idle, canStart = false))
+        assertTrue(NetworkPolicy.isMeteredParked(DownloadState.ReadyWithInfo, canStart = false))
+
+        assertFalse(NetworkPolicy.isMeteredParked(DownloadState.Idle, canStart = true))
+        assertFalse(NetworkPolicy.isMeteredParked(DownloadState.ReadyWithInfo, canStart = true))
+
+        val nonParked =
+            listOf(
+                DownloadState.FetchingInfo(Job(), "t1"),
+                DownloadState.Running(Job(), "t1", 0.5f, "50%"),
+                DownloadState.Completed("/tmp/a.mp4"),
+                DownloadState.Canceled(RestartableAction.Download),
+                DownloadState.Error(Throwable("boom"), RestartableAction.Download),
+            )
+        for (state in nonParked) {
+            assertFalse(
+                "Expected $state not to be metered-parked when blocked",
+                NetworkPolicy.isMeteredParked(state, canStart = false),
+            )
+            assertFalse(
+                "Expected $state not to be metered-parked when allowed",
+                NetworkPolicy.isMeteredParked(state, canStart = true),
+            )
+        }
     }
 }

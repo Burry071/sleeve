@@ -16,6 +16,7 @@ import com.junkfood.seal.util.M4bExportResult
 import com.junkfood.seal.util.M4bPlan
 import com.junkfood.seal.util.M4bTagOverrides
 import com.junkfood.seal.util.M4bTags
+import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.SplitHistoryPolicy
 import com.junkfood.seal.util.VideoInfo
 import com.junkfood.seal.util.exportToM4b
@@ -145,56 +146,110 @@ internal suspend fun onFinishDownloading(
                         }
                 } else {
                     Result.success(
-                            FileUtil.scanFileToMediaLibraryPostDownload(
-                                title = fileName,
-                                downloadDir = downloadPath,
-                                // The disk filename can fail the title match
-                                // (--trim-filenames 80, sanitized quick-download
-                                // titles): a title-only scan returns an empty list
-                                // and the history insert never runs, silently
-                                // dropping the completed task from Downloads.
-                                // Files modified since the download started are
-                                // the real match.
-                                modifiedAfterMs = startedAtMs,
-                                // Gallery/photo items are pictures, not thumbnail
-                                // sidecars: keep them in the completed set.
-                                keepImages = galleryDirect,
-                            )
+                        resolvePublishedPaths(
+                            produced = source,
+                            exported = exported,
+                            splitByChapter = splitByChapter,
+                            scanExact = FileUtil::scanFilesToMediaLibrary,
+                            fallbackScan = {
+                                FileUtil.scanFileToMediaLibraryPostDownload(
+                                    title = fileName,
+                                    downloadDir = downloadPath,
+                                    // Fallback only when no exact single file was named
+                                    // or when --split-chapters produced multiple files.
+                                    modifiedAfterMs = startedAtMs,
+                                    // Gallery/photo items are pictures, not thumbnail
+                                    // sidecars: keep them in the completed set.
+                                    keepImages = galleryDirect,
+                                )
+                            },
                         )
-                        .map { paths ->
-                            val target = exported?.absolutePath
-                            if (target != null) listOf(target) + paths.filter { it != target }
-                            else paths
-                        }
+                    )
                 }
             savedFiles.fold(
                 onSuccess = { paths ->
                     Log.d(TRANSFER_TAG, "history insert: ${paths.size} file(s) $paths")
-                    when {
-                        // Private mode deliberately keeps files out of history.
-                        privateMode -> Result.success(emptyList())
-                        // No output means the transfer did not really finish.
-                        // Reporting success here would render the card as
-                        // "Downloaded" with no file behind it.
-                        paths.isEmpty() ->
-                            Result.failure(
-                                IllegalStateException(
-                                    context.getString(R.string.download_error_msg)
-                                )
+                    finalizePublishedPaths(
+                        paths = paths,
+                        privateMode = privateMode,
+                        splitByChapter = splitByChapter,
+                        masterPath = source?.absolutePath,
+                        excludeHistoryPaths = PreferenceUtil::excludeHistoryPaths,
+                        insertSplit = { chapters ->
+                            insertSplitChapterIntoHistory(videoInfo, chapters)
+                        },
+                        insertStandard = { files ->
+                            insertInfoIntoDownloadHistory(videoInfo, files)
+                        },
+                        emptyError = {
+                            IllegalStateException(
+                                context.getString(R.string.download_error_msg)
                             )
-                        splitByChapter ->
-                            Result.success(
-                                insertSplitChapterIntoHistory(
-                                    videoInfo,
-                                    SplitHistoryPolicy.chapterPaths(paths, source?.absolutePath),
-                                )
-                            )
-                        else -> Result.success(insertInfoIntoDownloadHistory(videoInfo, paths))
-                    }
+                        },
+                    )
                 },
                 onFailure = { Result.failure(it) },
             )
         }
+    }
+
+/**
+ * Resolves the local paths to publish for a completed download. When the lane
+ * named a single valid output file and chapter splitting is off, publishes and
+ * scans ONLY that exact file so concurrent downloads sharing [downloadPath]
+ * cannot cross-contaminate one another. Falls back to [fallbackScan] only when
+ * [splitByChapter] is enabled or no single output file was named.
+ */
+internal fun resolvePublishedPaths(
+    produced: File?,
+    exported: File?,
+    splitByChapter: Boolean,
+    scanExact: (List<String>) -> Unit,
+    fallbackScan: () -> List<String>,
+): List<String> {
+    if (!splitByChapter) {
+        val exact = (exported ?: produced)?.takeIf { it.isFile && it.length() > 0L }
+        if (exact != null) {
+            val paths = listOf(exact.absolutePath)
+            scanExact(paths)
+            return paths
+        }
+    }
+    val scanned = fallbackScan()
+    val target = exported?.takeIf { it.isFile && it.length() > 0L }?.absolutePath
+    return if (target != null) listOf(target) + scanned.filter { it != target } else scanned
+}
+
+/**
+ * Applies the finish-line history policy to the resolved output paths:
+ * Private Mode excludes the paths from future disk backfill before returning an
+ * empty list, empty outputs fail the task, and chapter splits filter out the
+ * unsplit master path.
+ */
+internal fun finalizePublishedPaths(
+    paths: List<String>,
+    privateMode: Boolean,
+    splitByChapter: Boolean,
+    masterPath: String?,
+    excludeHistoryPaths: (Collection<String>) -> Unit,
+    insertSplit: (List<String>) -> List<String>,
+    insertStandard: (List<String>) -> List<String>,
+    emptyError: () -> Throwable,
+): Result<List<String>> =
+    when {
+        // Private mode deliberately keeps files out of history and marks them
+        // excluded so startup disk backfill never imports them on next launch.
+        privateMode -> {
+            excludeHistoryPaths(paths)
+            Result.success(emptyList())
+        }
+        // No output means the transfer did not really finish.
+        // Reporting success here would render the card as
+        // "Downloaded" with no file behind it.
+        paths.isEmpty() -> Result.failure(emptyError())
+        splitByChapter ->
+            Result.success(insertSplit(SplitHistoryPolicy.chapterPaths(paths, masterPath)))
+        else -> Result.success(insertStandard(paths))
     }
 
 private val SPLIT_MEDIA_EXTENSIONS = setOf("mp4", "mkv", "webm", "m4a", "mp3", "opus", "ogg")
@@ -205,7 +260,7 @@ private val SPLIT_MEDIA_EXTENSIONS = setOf("mp4", "mkv", "webm", "m4a", "mp3", "
  * no sibling output, the master is the only proof the download landed, so it
  * stays.
  */
-private fun removeSplitMaster(master: File?, downloadPath: String, startedAtMs: Long?): Boolean {
+internal fun removeSplitMaster(master: File?, downloadPath: String, startedAtMs: Long?): Boolean {
     if (master == null || !master.isFile || startedAtMs == null) return false
     val hasChapterOutput =
         File(downloadPath).walkTopDown().any { candidate ->

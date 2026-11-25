@@ -96,6 +96,7 @@ fun PlaylistSelectionPage(
     }
     var showVideoPresetDialog by remember { mutableStateOf(false) }
     var showAudioPresetDialog by remember { mutableStateOf(false) }
+    val metered = remember { PendingMetered() }
 
     var taskList by remember { mutableStateOf(emptyList<TaskFactory.TaskWithState>()) }
 
@@ -152,30 +153,34 @@ fun PlaylistSelectionPage(
                 },
                 onDismissRequest = onDismissConfigurationSheet,
                 onDownload = { downloadPreferences ->
-                    val batch =
-                        BatchInfo(
-                            id = UUID.randomUUID().toString(),
-                            title =
-                                state.result.title?.takeIf { title -> title.isNotBlank() }
-                                    ?: state.result.originalUrl
-                                    ?: state.result.webpageUrl
-                                    ?: "Playlist",
-                            provider = state.result.extractorKey ?: "Playlist",
-                        )
-                    TaskFactory
-                        .stampBatch(
-                            tasks = taskList,
-                            preferences = downloadPreferences,
-                            batch = batch,
-                            numbering = PLAYLIST_NUMBERING.getBoolean(),
-                        )
-                        .forEach(downloader::enqueue)
-                    onDismissConfigurationSheet()
-                    onBack()
+                    metered.postDownload {
+                        val batch =
+                            BatchInfo(
+                                id = UUID.randomUUID().toString(),
+                                title =
+                                    state.result.title?.takeIf { title -> title.isNotBlank() }
+                                        ?: state.result.originalUrl
+                                        ?: state.result.webpageUrl
+                                        ?: "Playlist",
+                                provider = state.result.extractorKey ?: "Playlist",
+                            )
+                        TaskFactory
+                            .stampBatch(
+                                tasks = taskList,
+                                preferences = downloadPreferences,
+                                batch = batch,
+                                numbering = PLAYLIST_NUMBERING.getBoolean(),
+                            )
+                            .forEach(downloader::enqueue)
+                        onDismissConfigurationSheet()
+                        onBack()
+                    }
                 },
             )
         }
     }
+
+    PendingMeteredDialog(pending = metered)
 
     if (showVideoPresetDialog) {
         var res by remember(preferences) { mutableIntStateOf(preferences.videoResolution) }

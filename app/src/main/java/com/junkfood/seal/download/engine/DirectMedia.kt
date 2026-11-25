@@ -15,18 +15,29 @@ private const val MAX_HEAD_REDIRECTS = 5
 internal object DirectMedia {
 
     /**
-     * Best-effort content length for a direct media URL via a bounded HEAD
-     * request; 0 means unknown, -1 means the URL (or a redirect target) was
-     * rejected by [isSafeRemoteUrl]. Callers run on background dispatchers
-     * (DownloaderV2.prepare launches on Dispatchers.Default). No fallback
-     * guess is made when the server withholds Content-Length.
+     * Sentinel returned by [fetchContentLength] when the URL or any redirect
+     * target is rejected by [isSafeRemoteUrl]. Distinct from `-1L`, which
+     * callers/tests pass for an unknown server Content-Length.
      */
-    fun fetchContentLength(url: String): Long {
-        if (!isSafeRemoteUrl(url)) return -1L
+    internal const val BLOCKED_REDIRECT_LENGTH = Long.MIN_VALUE
+
+    /**
+     * Best-effort content length for a direct media URL via a bounded HEAD
+     * request; 0 means unknown, [BLOCKED_REDIRECT_LENGTH] means the URL (or a
+     * redirect target) was rejected by [isSafeRemoteUrl]. Callers run on
+     * background dispatchers (DownloaderV2.prepare launches on
+     * Dispatchers.Default). No fallback guess is made when the server
+     * withholds Content-Length.
+     */
+    fun fetchContentLength(
+        url: String,
+        isAllowedInitialUrl: (String) -> Boolean = ::isSafeRemoteUrl,
+    ): Long {
+        if (!isAllowedInitialUrl(url)) return BLOCKED_REDIRECT_LENGTH
         var currentUrl = url
         var hops = 0
         while (hops <= MAX_HEAD_REDIRECTS) {
-            if (!isSafeRemoteUrl(currentUrl)) return -1L
+            if (hops > 0 && !isSafeRemoteUrl(currentUrl)) return BLOCKED_REDIRECT_LENGTH
             var conn: HttpURLConnection? = null
             try {
                 conn = URL(currentUrl).openConnection() as HttpURLConnection
@@ -42,8 +53,8 @@ internal object DirectMedia {
                     if (location.isNullOrBlank() || hops >= MAX_HEAD_REDIRECTS) return 0L
                     val resolved =
                         runCatching { URI(currentUrl).resolve(location).toString() }.getOrNull()
-                            ?: return -1L
-                    if (!isSafeRemoteUrl(resolved)) return -1L
+                            ?: return BLOCKED_REDIRECT_LENGTH
+                    if (!isSafeRemoteUrl(resolved)) return BLOCKED_REDIRECT_LENGTH
                     currentUrl = resolved
                     hops++
                     continue
@@ -76,9 +87,11 @@ internal object DirectMedia {
         url: String,
         title: String,
         contentLength: Long? = null,
+        isAllowedInitialUrl: (String) -> Boolean = ::isSafeRemoteUrl,
     ): VideoInfo? {
-        if (!isSafeRemoteUrl(url)) return null
-        val resolvedLength = contentLength ?: fetchContentLength(url)
+        if (!isAllowedInitialUrl(url)) return null
+        val resolvedLength = contentLength ?: fetchContentLength(url, isAllowedInitialUrl)
+        if (resolvedLength == BLOCKED_REDIRECT_LENGTH) return null
         val cleanUrl = url.substringBefore('#').substringBefore('?').substringBefore('？')
         val path = cleanUrl.substringBefore('?').substringAfterLast('/')
         val ext = path.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..5 }

@@ -73,4 +73,40 @@ class Nm3u8WorkDirTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `buildHeaderArgs formats referer and user agent strips crlf and skips blanks`() {
+        assertEquals(
+            listOf(
+                "--header",
+                "Referer: https://example.com/watch",
+                "--header",
+                "User-Agent: Mozilla/5.0",
+            ),
+            Nm3u8TransferEngine.buildHeaderArgs(
+                referer = "https://example.com/watch",
+                userAgent = "Mozilla/5.0",
+            ),
+        )
+        assertEquals(
+            listOf(
+                "--header",
+                "Referer: https://example.com/watchX-Evil: 1",
+                "--header",
+                "User-Agent: Mozilla/5.0Injected: true",
+            ),
+            Nm3u8TransferEngine.buildHeaderArgs(
+                referer = " https://example.com/watch\r\nX-Evil: 1 ",
+                userAgent = "Mozilla/5.0\r\nInjected: true\n",
+            ),
+        )
+        assertEquals(
+            listOf("--header", "User-Agent: Mozilla/5.0"),
+            Nm3u8TransferEngine.buildHeaderArgs(referer = "   \r\n  ", userAgent = "Mozilla/5.0"),
+        )
+        assertEquals(
+            emptyList<String>(),
+            Nm3u8TransferEngine.buildHeaderArgs(referer = "", userAgent = "  "),
+        )
+    }
 }

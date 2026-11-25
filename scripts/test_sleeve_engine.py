@@ -820,5 +820,285 @@ class SegmentedRunSafetyTest(unittest.TestCase):
         self.assertEqual([], os.listdir(tmp))
 
 
+class SegmentedRangeIntegrityTest(unittest.TestCase):
+    def _make_step(self, url="https://cdn.example.com/file.bin", subworkers=4):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        return tmp, sleeve_engine.SegmentedHttpStep(
+            url, os.path.join(tmp, "file.bin"), subworkers=subworkers
+        )
+
+    def test_fetch_range_rejects_http_200_and_closes_response(self):
+        tmp, step = self._make_step()
+        part_path = os.path.join(tmp, "000.part")
+        resp = FakeHttpResp(status=200, headers={"Content-Length": "100"}, body=b"A" * 100)
+        recorded = []
+        conns = []
+
+        def fake_https(host, port, **kwargs):
+            c = RecordingConn(host, port, "https", [resp], recorded)
+            conns.append(c)
+            return c
+
+        with mock.patch.object(sleeve_engine.http.client, "HTTPSConnection", side_effect=fake_https):
+            with self.assertRaises(RuntimeError) as ctx:
+                step._fetch_range(step.url, 0, 15, part_path)
+
+        self.assertIn("200", str(ctx.exception))
+        self.assertTrue(resp.closed)
+        self.assertTrue(conns[0].closed)
+        self.assertEqual(0, len(step._conns))
+        self.assertFalse(os.path.exists(part_path))
+
+    def test_fetch_range_rejects_mismatched_content_range_start(self):
+        cases = (
+            (b"", 0, 15, "bytes 4-15/64"),
+            (b"0123", 0, 15, "bytes 0-15/64"),
+            (b"", 16, 31, "bytes */64"),
+        )
+        for existing, start, end, bad_cr in cases:
+            with self.subTest(existing_len=len(existing), start=start, bad_cr=bad_cr):
+                tmp, step = self._make_step()
+                part_path = os.path.join(tmp, "seg.part")
+                if existing:
+                    with open(part_path, "wb") as fh:
+                        fh.write(existing)
+                resp = FakeHttpResp(
+                    status=206,
+                    headers={"Content-Range": bad_cr},
+                    body=b"X" * (end - start + 1),
+                )
+                recorded = []
+
+                def fake_https(host, port, **kwargs):
+                    return RecordingConn(host, port, "https", [resp], recorded)
+
+                with mock.patch.object(sleeve_engine.http.client, "HTTPSConnection", side_effect=fake_https):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        step._fetch_range(step.url, start, end, part_path)
+
+                self.assertIn("Content-Range", str(ctx.exception))
+                self.assertTrue(resp.closed)
+
+    def test_probe_captures_strong_etag_sends_if_range_and_fails_on_drift(self):
+        tmp, step = self._make_step(subworkers=2)
+        recorded = []
+        responses = [
+            FakeHttpResp(
+                status=200,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": "32",
+                    "ETag": '"v1-strong"',
+                },
+            ),
+            # Simulate server returning HTTP 200 when ETag drifted.
+            FakeHttpResp(status=200, headers={"Content-Length": "32"}, body=b"B" * 32),
+            FakeHttpResp(status=200, headers={"Content-Length": "32"}, body=b"B" * 32),
+        ]
+
+        def fake_https(host, port, **kwargs):
+            return RecordingConn(host, port, "https", responses, recorded)
+
+        with mock.patch.object(sleeve_engine.http.client, "HTTPSConnection", side_effect=fake_https):
+            step.run()
+
+        self.assertEqual('"v1-strong"', step._if_range)
+        self.assertEqual(sleeve_engine.ERROR, step.state)
+        self.assertIn("200", step.error)
+        range_reqs = [r for r in recorded if r["method"] == "GET"]
+        self.assertGreaterEqual(len(range_reqs), 1)
+        for req in range_reqs:
+            self.assertEqual('"v1-strong"', req["headers"].get("If-Range"))
+        self.assertEqual([], os.listdir(tmp))
+
+    def test_probe_ignores_weak_etag_and_falls_back_to_last_modified(self):
+        _, step = self._make_step()
+        recorded = []
+        last_mod = "Wed, 21 Oct 2015 07:28:00 GMT"
+        responses = [
+            FakeHttpResp(status=200, headers={"ETag": 'W/"weak-1"'}),
+            FakeHttpResp(
+                status=206,
+                headers={
+                    "Content-Range": "bytes 0-0/64",
+                    "ETag": 'W/"weak-1"',
+                    "Last-Modified": last_mod,
+                },
+                body=b"x",
+            ),
+        ]
+
+        def fake_https(host, port, **kwargs):
+            return RecordingConn(host, port, "https", responses, recorded)
+
+        with mock.patch.object(sleeve_engine.http.client, "HTTPSConnection", side_effect=fake_https):
+            total, accept_ranges = step.probe()
+
+        self.assertEqual((64, True), (total, accept_ranges))
+        self.assertEqual(last_mod, step._if_range)
+        # Initial 0-0 probe must not send If-Range.
+        self.assertNotIn("If-Range", recorded[1]["headers"])
+
+    def test_first_worker_failure_cancels_slow_sibling_promptly(self):
+        tmp, step = self._make_step(subworkers=2)
+        sibling_reading = threading.Event()
+        sibling_conn = TrackedConn()
+        sibling_resp = BlockingResp(sibling_conn)
+        sibling_resp.status = 206
+        sibling_resp.getheader = lambda name, default=None: (
+            "bytes 0-511/1024" if name.lower() == "content-range" else default
+        )
+        orig_read = sibling_resp.read
+
+        def blocked_read(n=-1):
+            sibling_reading.set()
+            return orig_read(n)
+
+        sibling_resp.read = blocked_read
+
+        fail_conn = TrackedConn()
+        fail_resp = FakeHttpResp(status=200, headers={"Content-Length": "1024"}, body=b"Z" * 1024)
+
+        step.probe = lambda: (1024, True)
+        step.total = 1024
+
+        def fake_request_range(url, start, end):
+            if start == 0:
+                with step._lock:
+                    step._conns.add(sibling_conn)
+                return sibling_conn, "/file.bin", url, sibling_resp
+            # Wait until sibling is blocked inside read() before failing,
+            # proving fail-fast cancellation actively wakes the sibling.
+            sibling_reading.wait(2.0)
+            with step._lock:
+                step._conns.add(fail_conn)
+            return fail_conn, "/file.bin", url, fail_resp
+
+        step._request_range = fake_request_range
+
+        started = time.monotonic()
+        step.run()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 2.0, "slow sibling was not aborted promptly")
+        self.assertEqual(sleeve_engine.ERROR, step.state)
+        self.assertIn("200", step.error)
+        self.assertTrue(step._cancel.is_set())
+        self.assertTrue(sibling_conn.closed.is_set())
+        self.assertEqual([], os.listdir(tmp))
+
+
+class InstagramEmbedTest(unittest.TestCase):
+    def test_shortcode_to_pk_uses_base64url_alphabet(self):
+        # RFC 4648 base64url: '-' == 62, '_' == 63
+        self.assertEqual(62, sleeve_engine._shortcode_to_pk("-"))
+        self.assertEqual(63, sleeve_engine._shortcode_to_pk("_"))
+        self.assertEqual(62 * 64 + 63, sleeve_engine._shortcode_to_pk("-_"))
+        self.assertEqual(63 * 64 + 62, sleeve_engine._shortcode_to_pk("_-"))
+        self.assertEqual(0 * 64 + 62, sleeve_engine._shortcode_to_pk("A-"))
+        self.assertEqual(0 * 64 + 63, sleeve_engine._shortcode_to_pk("A_"))
+        self.assertIsNone(sleeve_engine._shortcode_to_pk(""))
+        self.assertIsNone(sleeve_engine._shortcode_to_pk("abc!"))
+
+    def test_lane3_requests_correct_pk_for_dash_and_underscore_shortcode(self):
+        requested = []
+        expected_pk = sleeve_engine._shortcode_to_pk("B-_9")
+        expected_url = f"https://www.instagram.com/api/v1/media/{expected_pk}/info/"
+
+        class FakeUrlopenResp:
+            def __init__(self, body):
+                self._body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, n=-1):
+                return self._body[:n] if n >= 0 else self._body
+
+        def fake_urlopen(req, timeout=None):
+            requested.append((req.full_url, timeout))
+            if "/api/v1/media/" in req.full_url:
+                payload = json.dumps(
+                    {"items": [{"video_versions": [{"url": "https://cdn.example.com/v.mp4"}]}]}
+                ).encode("utf-8")
+                return FakeUrlopenResp(payload)
+            return FakeUrlopenResp(b"<html>no media</html>")
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(sleeve_engine.time, "sleep"):
+            res = json.loads(
+                sleeve_engine.instagram_embed("https://www.instagram.com/reel/B-_9/")
+            )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual("https://cdn.example.com/v.mp4", res["items"][0]["url"])
+        api_urls = [u for u, _ in requested if "/api/v1/media/" in u]
+        self.assertEqual([expected_url], api_urls)
+
+    def test_instagram_embed_stops_immediately_on_404_and_401(self):
+        import urllib.error
+
+        for status_code in (404, 401):
+            with self.subTest(status_code=status_code):
+                calls = []
+
+                def fake_urlopen(req, timeout=None):
+                    calls.append(req.full_url)
+                    raise urllib.error.HTTPError(
+                        req.full_url, status_code, "Error", {}, None
+                    )
+
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+                     mock.patch.object(sleeve_engine.time, "sleep") as sleep_mock:
+                    res = json.loads(
+                        sleeve_engine.instagram_embed(
+                            "https://www.instagram.com/p/C1234567890/"
+                        )
+                    )
+
+                self.assertFalse(res["ok"])
+                self.assertEqual(1, len(calls))
+                sleep_mock.assert_not_called()
+
+    def test_instagram_embed_honors_deadline_budget(self):
+        now = [100.0]
+        timeouts = []
+
+        def fake_monotonic():
+            return now[0]
+
+        def fake_urlopen(req, timeout=None):
+            timeouts.append(timeout)
+            # Simulate each request consuming 1.5s of wall time.
+            now[0] += 1.5
+            raise OSError("timed out")
+
+        def fake_sleep(seconds):
+            now[0] += seconds
+
+        with mock.patch.object(sleeve_engine.time, "monotonic", side_effect=fake_monotonic), \
+             mock.patch.object(sleeve_engine.time, "sleep", side_effect=fake_sleep), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = json.loads(
+                sleeve_engine.instagram_embed(
+                    "https://www.instagram.com/p/C1234567890/",
+                    max_seconds=2.5,
+                )
+            )
+
+        self.assertFalse(res["ok"])
+        # With max_seconds=2.5 and 1.5s per request, at most 2 calls can run
+        # (far fewer than the full 9 endpoints x 2 attempts = 18 calls).
+        self.assertLessEqual(len(timeouts), 2)
+        self.assertGreaterEqual(len(timeouts), 1)
+        for t in timeouts:
+            self.assertLessEqual(t, 2.5)
+            self.assertGreater(t, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

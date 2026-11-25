@@ -7,6 +7,7 @@ import com.junkfood.seal.App.Companion.context
 import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ghostengine.GhostEngine.TaskState
+import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil.getSdcardTempDir
 import com.junkfood.seal.util.RedditResolver
 import com.junkfood.seal.util.sanitizeSegment
@@ -32,6 +33,36 @@ internal object GhostHttpTransferEngine : TransferEngine {
     fun cancel(taskId: String): Boolean =
         ghostTasks.remove(taskId)?.also { GhostEngine.cancel(it) } != null
 
+    /**
+     * Preference-level eligibility for Ghost HTTP transfer. Anything requiring
+     * yt-dlp post-processing or network routing (proxy / Force IPv4) stays on
+     * yt-dlp so user routing preferences are never bypassed.
+     */
+    internal fun canUseGhost(preferences: DownloadUtil.DownloadPreferences): Boolean =
+        with(preferences) {
+            !(downloadPlaylist ||
+                extractAudio ||
+                convertAudio ||
+                sponsorBlock ||
+                createThumbnail ||
+                cropArtwork ||
+                embedThumbnail ||
+                downloadSubtitle ||
+                embedSubtitle ||
+                keepSubtitle ||
+                autoSubtitle ||
+                autoTranslatedSubtitles ||
+                convertSubtitle != 0 ||
+                aria2c ||
+                rateLimit ||
+                cookies ||
+                useDownloadArchive ||
+                proxy ||
+                forceIpv4 ||
+                videoClips.isNotEmpty() ||
+                splitByChapter)
+        }
+
     /** @return null when this download was NOT handled (caller falls back). */
     override suspend fun transfer(job: TransferJob): Result<List<String>>? {
         val preferences = job.preferences
@@ -49,27 +80,11 @@ internal object GhostHttpTransferEngine : TransferEngine {
 
         val eligibleFormat =
             with(preferences) {
-                if (downloadPlaylist ||
-                        extractAudio ||
-                        convertAudio ||
-                        sponsorBlock ||
-                        createThumbnail ||
-                        cropArtwork ||
-                        embedThumbnail ||
-                        downloadSubtitle ||
-                        embedSubtitle ||
-                        keepSubtitle ||
-                        autoSubtitle ||
-                        autoTranslatedSubtitles ||
-                        convertSubtitle != 0 ||
-                        aria2c ||
-                        rateLimit ||
-                        cookies ||
-                        useDownloadArchive ||
-                        videoClips.isNotEmpty() ||
-                        splitByChapter
-                ) {
-                    Log.d(TRANSFER_TAG, "Ghost handoff skipped: yt-dlp post-processing requested")
+                if (!canUseGhost(this)) {
+                    Log.d(
+                        TRANSFER_TAG,
+                        "Ghost handoff skipped: yt-dlp post-processing or network routing requested",
+                    )
                     return null
                 }
                 if (formatIdString.contains('+')) {

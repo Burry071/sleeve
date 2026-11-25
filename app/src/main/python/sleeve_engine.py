@@ -19,14 +19,16 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
 import threading
 import time
+import urllib.error
 import urllib.parse
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 WAITING = "waiting"
 RUNNING = "running"
@@ -57,6 +59,8 @@ _SENSITIVE_HEADERS = frozenset({
     "proxy-authorization",
     "referer",
 })
+
+_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(\d+|\*)$", re.IGNORECASE)
 
 
 def _is_nonstandard_ipv4(host):
@@ -188,6 +192,8 @@ class SegmentedHttpStep:
         self._cancel = threading.Event()
         # Live connections, so cancel() can close them and unblock a reader.
         self._conns = set()
+        # Validator captured during probe() for segmented If-Range requests.
+        self._if_range = None
 
     # -- progress bookkeeping -------------------------------------------------
 
@@ -226,6 +232,12 @@ class SegmentedHttpStep:
         else:
             conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
         with self._lock:
+            if self._cancel.is_set():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                raise Cancelled()
             self._conns.add(conn)
         return conn
 
@@ -290,18 +302,32 @@ class SegmentedHttpStep:
                 raise
         raise IOError("too many redirects")
 
+    @staticmethod
+    def _extract_if_range(resp):
+        etag = (resp.getheader("ETag") or "").strip()
+        if etag and not etag.startswith(("W/", "w/")):
+            return etag
+        last_mod = (resp.getheader("Last-Modified") or "").strip()
+        if last_mod:
+            return last_mod
+        return None
+
     def probe(self):
         """HEAD probe for size + range support, HEAD-fallback to 1-byte GET."""
+        self._if_range = None
         conn, target, url, resp = self._resolve()
         self._final_url = url
         accept_ranges = (resp.getheader("Accept-Ranges") or "").lower() == "bytes"
         length = resp.getheader("Content-Length")
+        head_if_range = self._extract_if_range(resp)
+        probe_if_range = None
         self._release(conn, resp)
         print(f"[engine] probe final={urllib.parse.urlsplit(url).netloc} status={resp.status} ranges={accept_ranges} len={length}")
         if not accept_ranges or length is None:
             conn2, target2, url2, resp2 = self._request_range(url, 0, 0)
             try:
                 cr = resp2.getheader("Content-Range") or ""
+                probe_if_range = self._extract_if_range(resp2)
                 resp2.read(16)
                 if resp2.status == 200 and not cr:
                     accept_ranges = False
@@ -313,6 +339,7 @@ class SegmentedHttpStep:
             finally:
                 self._release(conn2, resp2)
             self._final_url = url2
+        self._if_range = head_if_range or probe_if_range
         self.total = int(length) if length and length.isdigit() else -1
         return self.total, accept_ranges
 
@@ -331,6 +358,8 @@ class SegmentedHttpStep:
             conn = self._connect(parsed)
             req_headers = dict(headers)
             req_headers["Range"] = f"bytes={start}-{end}" if end is not None else f"bytes={start}-"
+            if self._if_range and end is not None:
+                req_headers["If-Range"] = self._if_range
             resp = None
             try:
                 conn.request("GET", target, headers=req_headers)
@@ -357,15 +386,29 @@ class SegmentedHttpStep:
 
     def _fetch_range(self, url, start, end, part_path):
         """Fetch [start, end] into part_path; resume if a shorter part exists."""
+        if self._cancel.is_set():
+            raise Cancelled()
         done = os.path.getsize(part_path) if os.path.exists(part_path) else 0
         expected = end - start + 1
         if done >= expected:
             self._add_bytes(expected)
             return
-        conn, _, resolved, resp = self._request_range(url, start + done, end)
+        pos = start + done
+        conn, _, resolved, resp = self._request_range(url, pos, end)
         try:
-            if resp.status not in (200, 206):
+            if self._cancel.is_set():
+                raise Cancelled()
+            if resp.status == 200:
+                raise RuntimeError("server ignored Range (HTTP 200) or resource changed")
+            if resp.status != 206:
                 raise IOError(f"HTTP {resp.status} for range {start}-{end}")
+            cr = resp.getheader("Content-Range")
+            if cr:
+                m = _CONTENT_RANGE_RE.match(cr.strip())
+                if not m or int(m.group(1)) != pos:
+                    raise RuntimeError(
+                        f"Content-Range start mismatch: expected {pos}, got {cr!r}"
+                    )
             with open(part_path, "ab") as fh:
                 while True:
                     if self._cancel.is_set():
@@ -410,6 +453,7 @@ class SegmentedHttpStep:
 
     def run(self):
         self.state = RUNNING
+        aborted_by_error = False
         print(f"[engine] step started: {self.url[:140]}")
         try:
             total, accept_ranges = self.probe()
@@ -435,7 +479,8 @@ class SegmentedHttpStep:
                             (i * span, (self.total - 1) if i == workers - 1 else ((i + 1) * span - 1))
                             for i in range(workers)
                         ]
-                        with ThreadPoolExecutor(max_workers=workers) as pool:
+                        pool = ThreadPoolExecutor(max_workers=workers)
+                        try:
                             futures = [
                                 pool.submit(
                                     self._fetch_range,
@@ -446,8 +491,19 @@ class SegmentedHttpStep:
                                 )
                                 for i, (s, e) in enumerate(bounds)
                             ]
-                            for f in futures:
-                                f.result()
+                            for f in as_completed(futures):
+                                try:
+                                    f.result()
+                                except Cancelled:
+                                    self.cancel()
+                                    raise
+                                except Exception:
+                                    if not self._cancel.is_set():
+                                        aborted_by_error = True
+                                    self.cancel()
+                                    raise
+                        finally:
+                            pool.shutdown(wait=True, cancel_futures=True)
                         with open(tmp, "wb") as out:
                             for i in range(workers):
                                 with open(os.path.join(part_dir, f"{i:03d}.part"), "rb") as part:
@@ -473,7 +529,7 @@ class SegmentedHttpStep:
         except Cancelled:
             self.state = CANCELLED
         except Exception as exc:  # noqa: BLE001 - surfaced to Kotlin as step error
-            if self._cancel.is_set():
+            if self._cancel.is_set() and not aborted_by_error:
                 # The read failure is the cancel landing: cancel() shuts the
                 # socket down under a blocked read. Reporting ERROR here would
                 # turn a user cancel into a failure card.
@@ -879,7 +935,25 @@ def gallery_warmup():
         return json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
 
 
-def instagram_embed(url):
+_IG_SHORTCODE_ALPHABET = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+
+def _shortcode_to_pk(code):
+    """Decode an Instagram base64url shortcode to its numeric media pk."""
+    if not code:
+        return None
+    pk = 0
+    for ch in code:
+        idx = _IG_SHORTCODE_ALPHABET.find(ch)
+        if idx < 0:
+            return None
+        pk = pk * 64 + idx
+    return pk
+
+
+def instagram_embed(url, max_seconds=25.0):
     """Anonymous Instagram resilience ladder, tried after gallery-dl fails so
     private posts still end in the cookies guidance instead of a dead end.
     Lanes, first hit wins:
@@ -888,7 +962,6 @@ def instagram_embed(url):
       2. anonymous graphql shortcode query (3 doc_id variants)
       3. anonymous /api/v1/media/<pk>/info/ (www + i.instagram.com)
     """
-    import re
     import random
     import string
     import urllib.request
@@ -900,6 +973,12 @@ def instagram_embed(url):
         return json.dumps({"ok": False, "error": "not an instagram post url"})
     code = m.group(1)
 
+    deadline = time.monotonic() + max(0.0, float(max_seconds))
+    definitive_error = None
+
+    def _remaining():
+        return deadline - time.monotonic()
+
     # Round-robin between a mobile and a desktop Chrome fingerprint: embed and
     # graphql endpoints login-wall some datacenter IPs per-UA.
     ua_rotation = (
@@ -909,19 +988,42 @@ def instagram_embed(url):
     )
 
     def _fetch(path, headers, data=None, user_agent=None):
+        nonlocal definitive_error
         # 2 attempts per url; 400-800ms sleep after the first failure; 1 MiB
-        # cap + 20s timeout per attempt, same as the old one-shot fetch.
+        # cap + per-request timeout bounded by the overall monotonic deadline.
         for attempt in range(2):
+            if definitive_error is not None:
+                return None
+            rem = _remaining()
+            if rem <= 0:
+                return None
             ua = user_agent or ua_rotation[attempt % len(ua_rotation)]
             try:
                 req = urllib.request.Request(
                     path, data=data, headers=dict(headers, **{"User-Agent": ua})
                 )
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req, timeout=min(20.0, rem)) as resp:
                     return resp.read(1 << 20).decode("utf-8", "ignore")
+            except urllib.error.HTTPError as e:
+                code_http = getattr(e, "code", None)
+                try:
+                    e.close()
+                except Exception:
+                    pass
+                if code_http in (401, 404):
+                    definitive_error = code_http
+                    return None
+                if attempt == 0:
+                    sleep_s = min(random.uniform(0.4, 0.8), max(0.0, _remaining()))
+                    if sleep_s <= 0:
+                        return None
+                    time.sleep(sleep_s)
             except Exception:
                 if attempt == 0:
-                    time.sleep(random.uniform(0.4, 0.8))
+                    sleep_s = min(random.uniform(0.4, 0.8), max(0.0, _remaining()))
+                    if sleep_s <= 0:
+                        return None
+                    time.sleep(sleep_s)
         return None
 
     def _unescape(raw):
@@ -1027,6 +1129,8 @@ def instagram_embed(url):
         "https://www.instagram.com/tv/%s/embed/captioned/" % code,
         "https://www.instagram.com/p/%s/embed/" % code,
     ):
+        if definitive_error is not None or _remaining() <= 0:
+            break
         body = _fetch(path, embed_headers)
         if not body:
             continue
@@ -1091,6 +1195,8 @@ def instagram_embed(url):
         "Referer": "https://www.instagram.com/p/%s/" % code,
     }
     for doc_id in (24368985919464652, 8845758582119845, 9510064595728286):
+        if definitive_error is not None or _remaining() <= 0:
+            break
         data = urllib.parse.urlencode(
             {"variables": json.dumps({"shortcode": code}), "doc_id": doc_id}
         ).encode("utf-8")
@@ -1107,16 +1213,8 @@ def instagram_embed(url):
                 return _emit(target, is_video, "https://www.instagram.com/")
 
     # -- lane 3: anonymous /api/v1/media info ------------------------------------
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
-    pk = 0
-    decodable = True
-    for ch in code:
-        idx = alphabet.find(ch)
-        if idx < 0:
-            decodable = False
-            break
-        pk = pk * 64 + idx
-    if decodable:
+    pk = _shortcode_to_pk(code)
+    if pk is not None and definitive_error is None and _remaining() > 0:
         app_headers = {
             "x-ig-app-id": "936619743392459",
             "x-asbd-id": "359341",
@@ -1130,6 +1228,8 @@ def instagram_embed(url):
             "https://www.instagram.com/api/v1/media/%s/info/",
             "https://i.instagram.com/api/v1/media/%s/info/",
         ):
+            if definitive_error is not None or _remaining() <= 0:
+                break
             body = _fetch(pattern % pk, app_headers, user_agent=app_ua)
             if not body:
                 continue

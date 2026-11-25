@@ -56,7 +56,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -260,6 +262,25 @@ internal fun clearsOwnNotificationOnRemoval(state: Task.State, usesOwnNotificati
 internal val TypeInfo.MetadataTrack.needsSearch: Boolean
     get() = !directUrl
 
+/**
+ * Strips high-frequency progress text and intermediate percentages from a
+ * [Task.State] when deciding whether to persist the queue backup. Preserves
+ * the `progress > 0f` boundary so process-death recovery still recognizes an
+ * interrupted transfer without writing megabytes of JSON on every 10–30 Hz tick.
+ */
+internal fun Task.State.backupComparisonKey(): Task.State =
+    when (val ds = downloadState) {
+        is Running ->
+            copy(
+                downloadState =
+                    ds.copy(
+                        progress = if (ds.progress > 0f) 1f else 0f,
+                        progressText = "",
+                    )
+            )
+        else -> this
+    }
+
 @OptIn(FlowPreview::class)
 class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -357,7 +378,10 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                         entries.filter { it.value.downloadState is Completed }.takeLast(40)
                     (active + completed).associate { it.key to it.value }
                 }
-                .distinctUntilChanged()
+                .distinctUntilChangedBy { map ->
+                    map.mapValues { (_, taskState) -> taskState.backupComparisonKey() }
+                }
+                .debounce(1_000L)
                 .collect { PreferenceUtil.encodeTaskListBackup(it) }
         }
     }
@@ -665,6 +689,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             return swapResult(task, candidate, SwapOutcome.Busy)
         }
         val match = current.match ?: return swapResult(task, candidate, SwapOutcome.Missing)
+        App.enginesReady.await()
         val fetched =
             DownloadUtil.fetchVideoInfoFromUrl(
                 url = candidate.url,
@@ -1246,6 +1271,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 val isThisAttempt = { state: DownloadState ->
                     state is FetchingInfo && state.job === runJob
                 }
+                App.enginesReady.await()
                 DownloadUtil.fetchVideoInfoFromUrl(
                         url = url,
                         playlistIndex = playlistIndex,
@@ -1325,6 +1351,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 val isThisAttempt = { state: DownloadState ->
                     state is FetchingInfo && state.job === runJob
                 }
+                App.enginesReady.await()
                 DownloadUtil.resolveMetadataTrack(
                         metadata = track,
                         taskKey = id,
@@ -1465,6 +1492,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                 var localDurationMs = 0L
                 val completedNotes = mutableListOf<CompletedNote>()
                 val m4bTagOverrides = (type as? TypeInfo.MetadataTrack)?.toM4bTagOverrides()
+                App.enginesReady.await()
                 DownloadUtil.downloadVideo(
                         videoInfo = info,
                         taskId = id,
@@ -1743,6 +1771,7 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                     val isThisAttempt = { state: DownloadState ->
                         state is Running && state.job === runJob
                     }
+                    App.enginesReady.await()
                     DownloadUtil.executeCustomCommandTask(url, id, template, preferences) {
                             progressPercentage,
                             _,

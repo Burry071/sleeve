@@ -39,6 +39,7 @@ object ChaquopyGateway {
         appContext = context.applicationContext
     }
 
+    @Synchronized
     fun ensureStarted() {
         if (Python.isStarted()) return
         val context =

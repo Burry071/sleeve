@@ -3,7 +3,6 @@ package com.junkfood.seal.ui.page
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import com.junkfood.seal.BuildConfig
-import com.junkfood.seal.Downloader
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.util.PreferenceUtil
@@ -51,12 +50,7 @@ fun YtdlpUpdater(downloader: DownloaderV2 = koinInject()) {
         // transfer is the hazard. A gated check waits for the next launch.
         if (!UpdaterPolicy.canAttempt(downloader.activeTransfers())) return@LaunchedEffect
 
-        Downloader.updateState(state = Downloader.State.Updating)
-        try {
-            withContext(Dispatchers.IO) { UpdateUtil.updateYtDlp() }
-        } finally {
-            Downloader.updateState(state = Downloader.State.Idle)
-        }
+        withContext(Dispatchers.IO) { UpdateUtil.updateYtDlp() }
     }
 
     // Warm the gallery-dl extractor registry off the critical path: the first

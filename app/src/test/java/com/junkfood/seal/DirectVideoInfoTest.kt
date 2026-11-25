@@ -3,7 +3,9 @@ package com.junkfood.seal
 import com.junkfood.seal.download.engine.DirectMedia
 import com.junkfood.seal.download.engine.isSafeRemoteUrl
 import com.junkfood.seal.download.engine.replaceFileSafely
+import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.util.DownloadUtil
+import com.junkfood.seal.util.SleeveQuickDownload
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -153,7 +155,7 @@ class DirectVideoInfoTest {
             }
         try {
             val localUrl = "http://127.0.0.1:${server.localPort}/secret.mp4"
-            assertEquals(-1L, DirectMedia.fetchContentLength(localUrl))
+            assertEquals(DirectMedia.BLOCKED_REDIRECT_LENGTH, DirectMedia.fetchContentLength(localUrl))
             assertNull(DirectMedia.buildDirectVideoInfo(localUrl, "secret"))
             assertNull(DownloadUtil.buildDirectVideoInfo(localUrl, "secret"))
             assertEquals(0, hits.get())
@@ -161,6 +163,120 @@ class DirectVideoInfoTest {
             server.close()
             listener.join(1000)
         }
+    }
+
+    @Test
+    fun `buildDirectVideoInfo returns null when HEAD redirects to loopback or private target`() {
+        val redirectHits = AtomicInteger(0)
+        val targetHits = AtomicInteger(0)
+        val targetServer = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        targetServer.soTimeout = 500
+        val targetThread =
+            Thread {
+                while (!targetServer.isClosed) {
+                    runCatching {
+                        targetServer.accept().use { targetHits.incrementAndGet() }
+                    }
+                }
+            }.apply {
+                isDaemon = true
+                start()
+            }
+
+        val redirectServer = ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))
+        redirectServer.soTimeout = 500
+        val redirectLocation = "http://127.0.0.1:${targetServer.localPort}/internal.mp4"
+        val redirectThread =
+            Thread {
+                while (!redirectServer.isClosed) {
+                    runCatching {
+                        redirectServer.accept().use { socket ->
+                            redirectHits.incrementAndGet()
+                            val reader = socket.getInputStream().bufferedReader()
+                            while (true) {
+                                val line = reader.readLine() ?: break
+                                if (line.isEmpty()) break
+                            }
+                            val response =
+                                "HTTP/1.1 302 Found\r\n" +
+                                    "Location: $redirectLocation\r\n" +
+                                    "Content-Length: 0\r\n" +
+                                    "Connection: close\r\n\r\n"
+                            socket.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
+                            socket.getOutputStream().flush()
+                        }
+                    }
+                }
+            }.apply {
+                isDaemon = true
+                start()
+            }
+
+        try {
+            val redirectUrl = "http://127.0.0.1:${redirectServer.localPort}/start.mp4"
+            assertEquals(
+                DirectMedia.BLOCKED_REDIRECT_LENGTH,
+                DirectMedia.fetchContentLength(
+                    url = redirectUrl,
+                    isAllowedInitialUrl = { it == redirectUrl },
+                ),
+            )
+            assertNull(
+                DirectMedia.buildDirectVideoInfo(
+                    url = redirectUrl,
+                    title = "clip",
+                    isAllowedInitialUrl = { it == redirectUrl },
+                )
+            )
+            assertTrue("Expected redirect server to be probed", redirectHits.get() >= 2)
+            assertEquals("Blocked loopback redirect target must never be contacted", 0, targetHits.get())
+            assertNull(
+                DownloadUtil.buildDirectVideoInfo(
+                    url = url,
+                    title = "clip",
+                    contentLength = DirectMedia.BLOCKED_REDIRECT_LENGTH,
+                )
+            )
+        } finally {
+            redirectServer.close()
+            targetServer.close()
+            redirectThread.join(1000)
+            targetThread.join(1000)
+        }
+    }
+
+    @Test
+    fun `SleeveQuickDownload directPreferences propagates item referer and falls back cleanly on blank`() {
+        val withReferer =
+            GalleryItem(
+                url = "https://i.pximg.net/img-original/img/12345_p0.jpg",
+                filename = "12345_p0.jpg",
+                referer = "https://www.pixiv.net/artworks/12345",
+                category = "pixiv",
+            )
+        val propagated =
+            SleeveQuickDownload.applyDirectPreferences(
+                base = DownloadUtil.DownloadPreferences.EMPTY,
+                item = withReferer,
+            )
+        assertTrue(propagated.galleryDirect)
+        assertEquals("direct", propagated.formatIdString)
+        assertEquals("https://www.pixiv.net/artworks/12345", propagated.referer)
+        assertEquals("12345_p0", propagated.newTitle)
+
+        val blankReferer =
+            GalleryItem(
+                url = "https://cdn.example/photo.jpg",
+                filename = "photo.jpg",
+                referer = "   ",
+                category = "generic",
+            )
+        val fallback =
+            SleeveQuickDownload.applyDirectPreferences(
+                base = DownloadUtil.DownloadPreferences.EMPTY.copy(referer = "https://stale.example/"),
+                item = blankReferer,
+            )
+        assertEquals("", fallback.referer)
     }
 
     @Test
