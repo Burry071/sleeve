@@ -6,6 +6,7 @@ import com.junkfood.seal.App.Companion.audioDownloadDir
 import com.junkfood.seal.App.Companion.videoDownloadDir
 import com.junkfood.seal.util.sanitizeSegment
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -21,6 +22,55 @@ internal object Nm3u8TransferEngine : TransferEngine {
     /** @return true when a running N_m3u8DL-RE process was terminated. */
     fun cancel(taskId: String): Boolean =
         (processes.remove(taskId)?.also { it.destroy() }) != null
+
+    /**
+     * Derives an isolated scratch directory under [cacheDir] by SHA-256 hashing
+     * [taskId], preventing path traversal when [taskId] contains URLs or "../".
+     */
+    internal fun workDirForTask(cacheDir: File, taskId: String): File {
+        val hash =
+            MessageDigest.getInstance("SHA-256")
+                .digest(taskId.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        val dir = File(cacheDir, "nm3re_$hash")
+        val base =
+            cacheDir.canonicalPath.let {
+                if (it.endsWith(File.separator)) it else it + File.separator
+            }
+        require(dir.canonicalPath.startsWith(base)) {
+            "N_m3u8DL-RE workDir escaped cacheDir"
+        }
+        return dir
+    }
+
+    /**
+     * Copies [source] to [target] via a sibling .tmp file and verifies byte count
+     * before replacing [target], so a failed copy never leaves a truncated output
+     * or discards [source] prematurely.
+     */
+    internal fun copyAtomically(source: File, target: File): Boolean {
+        val expectedBytes = source.length()
+        if (!source.isFile || expectedBytes <= 0L) return false
+        val parent = target.parentFile ?: return false
+        if (!parent.exists() && !parent.mkdirs()) return false
+        val tmp = File(parent, "${target.name}.tmp")
+        return runCatching {
+            tmp.delete()
+            source.copyTo(tmp, overwrite = true)
+            if (!tmp.isFile || tmp.length() != expectedBytes) {
+                tmp.delete()
+                return false
+            }
+            if (!replaceFileSafely(tmp, target)) {
+                tmp.delete()
+                return false
+            }
+            target.isFile && target.length() == expectedBytes
+        }.getOrElse {
+            tmp.delete()
+            false
+        }
+    }
 
     /** @return null when this download was NOT handled (caller falls back). */
     override suspend fun transfer(job: TransferJob): Result<List<String>>? {
@@ -114,79 +164,98 @@ internal object Nm3u8TransferEngine : TransferEngine {
                 "$baseName.mp4", // N_m3u8DL-RE muxes to mp4 when ffmpeg is present
             )
 
-        val workDir =
-            File(App.context.cacheDir, "nm3re_$taskId").apply { mkdirs() }
-        val args =
-            mutableListOf(
-                bin.absolutePath,
-                manifestUrl,
-                "--save-dir=${workDir.absolutePath}",
-                "--save-name=media",
-                "--tmp-dir=${File(workDir, "tmp").apply { mkdirs() }.absolutePath}",
-                "--thread-count=8",
-                "--download-retry-count=3",
-                "--http-request-timeout=30",
-                "--concurrent-download=true",
-                "--binary-merge=true",
-                "--del-after-done=true",
-                "--no-log=true",
-                "--no-ansi-color=true",
-                "--disable-update-check=true",
-                "--use-system-proxy=false",
-                "--auto-selection",
-            )
-        nativeBinary("libffmpeg.so")?.let {
-            args.add("--ffmpeg-binary-path=${it.absolutePath}")
-        }
+        val target = File(downloadDir, fileName)
+        val workDir = workDirForTask(App.context.cacheDir, taskId).apply { mkdirs() }
+        var process: Process? = null
+        var nreStartedAtMs = System.currentTimeMillis()
+        try {
+            val args =
+                mutableListOf(
+                    bin.absolutePath,
+                    manifestUrl,
+                    "--save-dir=${workDir.absolutePath}",
+                    "--save-name=media",
+                    "--tmp-dir=${File(workDir, "tmp").apply { mkdirs() }.absolutePath}",
+                    "--thread-count=8",
+                    "--download-retry-count=3",
+                    "--http-request-timeout=30",
+                    "--concurrent-download=true",
+                    "--binary-merge=true",
+                    "--del-after-done=true",
+                    "--no-log=true",
+                    "--no-ansi-color=true",
+                    "--disable-update-check=true",
+                    "--use-system-proxy=false",
+                    "--auto-selection",
+                )
+            nativeBinary("libffmpeg.so")?.let {
+                args.add("--ffmpeg-binary-path=${it.absolutePath}")
+            }
 
-        Log.i(TRANSFER_TAG, "N_m3u8DL-RE took over $taskId -> $manifestUrl")
-        val process =
-            runCatching {
-                ProcessBuilder(args)
-                    .apply { redirectErrorStream(true) }
-                    .start()
-            }.getOrElse {
-                Log.w(TRANSFER_TAG, "N_m3u8DL-RE unavailable, falling back to yt-dlp: ${it.message}")
-                workDir.deleteRecursively()
+            Log.i(TRANSFER_TAG, "N_m3u8DL-RE took over $taskId -> $manifestUrl")
+            process =
+                runCatching {
+                    ProcessBuilder(args)
+                        .apply {
+                            val ffmpegLibDir =
+                                File(
+                                    App.context.noBackupFilesDir,
+                                    "youtubedl-android/packages/ffmpeg/usr/lib",
+                                ).absolutePath
+                            val existingLd = environment()["LD_LIBRARY_PATH"]
+                            environment()["LD_LIBRARY_PATH"] =
+                                if (existingLd.isNullOrBlank()) ffmpegLibDir
+                                else "$ffmpegLibDir:$existingLd"
+                            redirectErrorStream(true)
+                        }
+                        .start()
+                }.getOrElse {
+                    Log.w(TRANSFER_TAG, "N_m3u8DL-RE unavailable, falling back to yt-dlp: ${it.message}")
+                    return null
+                }
+            // Registered so a task cancel can terminate the process; waitFor
+            // below would otherwise block until the transfer finishes.
+            processes[taskId] = process
+            nreStartedAtMs = System.currentTimeMillis()
+
+            // Stream-copy done; the produced file is the largest under workDir.
+            val produced =
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        val percent = Regex("\\[(\\d{1,3}(?:\\.\\d+)?)%").find(line)
+                        if (percent != null) {
+                            job.progressCallback?.invoke(
+                                percent.groupValues[1].toFloatOrNull() ?: 0f,
+                                0,
+                                "N_m3u8DL-RE: ${line.takeLast(80)}",
+                            )
+                        }
+                    }
+                    workDir
+                        .walkTopDown()
+                        .filter { it.isFile && !it.relativeTo(workDir).path.startsWith("tmp") }
+                        .maxByOrNull { it.length() }
+                }
+            val code = runCatching { process.waitFor() }.getOrDefault(-1)
+            if (code != 0 || produced == null || produced.length() == 0L) {
+                Log.w(TRANSFER_TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
                 return null
             }
-        // Registered so a task cancel can terminate the process; waitFor
-        // below would otherwise block until the transfer finishes.
-        processes[taskId] = process
-        val nreStartedAtMs = System.currentTimeMillis()
 
-        // Stream-copy done; the produced file is the largest under workDir.
-        val produced =
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    val percent = Regex("\\[(\\d{1,3}(?:\\.\\d+)?)%").find(line)
-                    if (percent != null) {
-                        job.progressCallback?.invoke(
-                            percent.groupValues[1].toFloatOrNull() ?: 0f,
-                            0,
-                            "N_m3u8DL-RE: ${line.takeLast(80)}",
-                        )
-                    }
-                }
-                workDir
-                    .walkTopDown()
-                    .filter { it.isFile && !it.relativeTo(workDir).path.startsWith("tmp") }
-                    .maxByOrNull { it.length() }
+            if (!copyAtomically(produced, target)) {
+                Log.w(TRANSFER_TAG, "N_m3u8DL-RE atomic copy failed, falling back to yt-dlp")
+                return null
             }
-        val code = runCatching { process.waitFor() }.getOrDefault(-1)
-        processes.remove(taskId)
-        if (code != 0 || produced == null || produced.length() == 0L) {
-            Log.w(TRANSFER_TAG, "N_m3u8DL-RE failed (exit $code), falling back to yt-dlp")
-            workDir.deleteRecursively()
-            return null
-        }
-
-        val target = File(downloadDir, fileName)
-        runCatching {
-            produced.copyTo(target, overwrite = true)
             produced.delete()
+        } finally {
+            processes.remove(taskId)
+            process?.let { proc ->
+                if (proc.isAlive) {
+                    proc.destroyForcibly()
+                }
+            }
+            workDir.deleteRecursively()
         }
-        workDir.deleteRecursively()
 
         if (preferences.embedMetadata) {
             embedMetadataWithFfmpeg(

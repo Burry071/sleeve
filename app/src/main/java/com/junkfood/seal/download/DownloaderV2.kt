@@ -1158,17 +1158,17 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
             // extraction before the same fallback below). Audio-extraction
             // requests on extractable video stay on yt-dlp: the ghost handoff
             // cannot remux.
-            val synth =
-                DownloadUtil.buildDirectVideoInfo(
-                    url = url,
-                    // Blank lets the builder derive a real name from the URL
-                    // path instead of showing the whole URL as the title.
-                    title = preferences.newTitle,
-                )
-            if (synth != null) {
-                val job =
-                    scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
-                        val runJob = coroutineContext[Job]
+            val job =
+                scope.launch(Dispatchers.Default, CoroutineStart.LAZY) {
+                    val runJob = coroutineContext[Job]
+                    val synth =
+                        DownloadUtil.buildDirectVideoInfo(
+                            url = url,
+                            // Blank lets the builder derive a real name from the URL
+                            // path instead of showing the whole URL as the title.
+                            title = preferences.newTitle,
+                        )
+                    if (synth != null) {
                         info = synth
                         viewState = Task.ViewState.fromVideoInfo(synth)
                         // No explicit download() here: writing ReadyWithInfo
@@ -1181,19 +1181,34 @@ class DownloaderV2Impl(private val appContext: Context) : DownloaderV2, KoinComp
                             this@prepare,
                             ReadyWithInfo,
                         ) { it is FetchingInfo && it.job === runJob }
+                    } else {
+                        // Fail closed when buildDirectVideoInfo rejects an
+                        // unsafe URL instead of falling through to unguarded
+                        // yt-dlp extraction.
+                        val throwable = IllegalArgumentException("Blocked unsafe direct URL")
+                        val friendly = DownloadErrorMessages.asFriendly(throwable)
+                        applyTransition(
+                            this@prepare,
+                            Error(
+                                throwable = friendly,
+                                action = FetchInfo,
+                                message = errorText(throwable, friendly),
+                                reason = DownloadErrorMessages.errorReasonOf(friendly),
+                            ),
+                        ) { it is FetchingInfo && it.job === runJob }
                     }
-                // Only a task still waiting for its info may begin fetching;
-                // a cancel that landed first leaves it untouched.
-                if (
-                    applyTransition(
-                        this,
-                        FetchingInfo(job = job, taskId = id),
-                    ) { it == Idle }
-                ) {
-                    job.start()
                 }
-                return
+            // Only a task still waiting for its info may begin fetching;
+            // a cancel that landed first leaves it untouched.
+            if (
+                applyTransition(
+                    this,
+                    FetchingInfo(job = job, taskId = id),
+                ) { it == Idle }
+            ) {
+                job.start()
             }
+            return
         }
         fetchInfo()
     }

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.junkfood.seal.App
+import com.junkfood.seal.BuildConfig
 import com.junkfood.seal.UpdateDownloadService
 import java.io.File
 import java.net.HttpURLConnection
@@ -42,6 +43,11 @@ object AppUpdateManager {
     // instead of falling back to 0.0.0 and flagging the same release as new.
     private val VERSION_RE =
         Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)\.?(\d+))?""")
+
+    // Strict release tag pattern for remote GitHub releases: anchored end-to-end
+    // so path separators, "..", or arbitrary suffixes cannot slip into APK filenames.
+    private val SAFE_RELEASE_TAG_RE =
+        Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)\.?(\d+))?$""")
 
     sealed interface State {
         data object Idle : State
@@ -116,6 +122,31 @@ object AppUpdateManager {
         compareValuesBy(a, b, { it.major }, { it.minor }, { it.patch }, { it.channelRank }, { it.build })
 
     /**
+     * Validates a remote release tag strictly and strips a leading "v".
+     * Rejects path separators, traversal sequences, or unexpected suffixes.
+     */
+    internal fun sanitizeReleaseTag(rawTag: String): String? {
+        val trimmed = rawTag.trim().removePrefix("v")
+        if (!SAFE_RELEASE_TAG_RE.matches(trimmed)) return null
+        return trimmed
+    }
+
+    /**
+     * Builds the target APK file inside [updatesDir] for [version], returning null
+     * if [version] is not a strict release tag or escapes [updatesDir].
+     */
+    internal fun apkFileForVersion(updatesDir: File, version: String): File? {
+        val safeVersion = sanitizeReleaseTag(version) ?: return null
+        val target = File(updatesDir, "Sleeve-$safeVersion-release.apk")
+        val base =
+            updatesDir.canonicalPath.let {
+                if (it.endsWith(File.separator)) it else it + File.separator
+            }
+        if (!target.canonicalPath.startsWith(base)) return null
+        return target
+    }
+
+    /**
      * Which releases a channel may install: a stable channel refuses GitHub
      * prereleases, a beta channel takes both. Pure so the predicate is testable
      * without MMKV or the network.
@@ -153,6 +184,7 @@ object AppUpdateManager {
      * First re-arms a finished download that survived process death.
      */
     suspend fun checkIfStale(context: Context) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         restoreReadyDownload(context)
         if (System.currentTimeMillis() - lastCheckAt < CHECK_INTERVAL_MS) return
         check(context)
@@ -168,6 +200,7 @@ object AppUpdateManager {
      * that no cold start can resume; they are garbage.
      */
     private suspend fun restoreReadyDownload(context: Context) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         val current = mutableState.value
         if (current is State.Ready || current is State.Downloading) return
         withContext(Dispatchers.IO) {
@@ -205,6 +238,10 @@ object AppUpdateManager {
     }
 
     suspend fun check(context: Context) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) {
+            mutableState.value = State.Idle
+            return
+        }
         // A download in flight owns the state; a Ready APK does not — the scan
         // below may prove it stale (installed meanwhile) or keep it.
         if (mutableState.value is State.Downloading) return
@@ -264,12 +301,12 @@ object AppUpdateManager {
                             )
                         }
                         .mapNotNull { release ->
-                            val tag =
+                            val rawTag =
                                 release["tag_name"]
                                     ?.jsonPrimitive
                                     ?.content
-                                    ?.removePrefix("v")
                                     ?: return@mapNotNull null
+                            val tag = sanitizeReleaseTag(rawTag) ?: return@mapNotNull null
                             val version = parseVersionOrNull(tag) ?: return@mapNotNull null
                             val asset =
                                 releaseAsset(release, supportedAbis)
@@ -349,6 +386,7 @@ object AppUpdateManager {
      * shade) does not cancel it; the service reports progress and the final
      * install notification. */
     fun startDownload(context: Context, version: String, apkUrl: String, digest: String? = null) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         if (mutableState.value is State.Downloading) return
         val intent =
             Intent(context, UpdateDownloadService::class.java)
@@ -370,6 +408,7 @@ object AppUpdateManager {
         apkUrl: String,
         digest: String? = null,
     ): State? {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return null
         if (!transferClaimed.compareAndSet(false, true)) return null
         try {
             downloadCancelled = false
@@ -380,7 +419,9 @@ object AppUpdateManager {
                     // a truncated file where a finished installable APK lives.
                     val dir =
                         File(context.getExternalFilesDir(null), "updates").apply { mkdirs() }
-                    val target = File(dir, "Sleeve-$version-release.apk")
+                    val target =
+                        apkFileForVersion(dir, version)
+                            ?: return@withContext State.Failed("Invalid update version tag")
                     val part = File(dir, target.name + ".part")
                     runCatching {
                             val conn = URL(apkUrl).openConnection() as HttpURLConnection
@@ -415,7 +456,7 @@ object AppUpdateManager {
                                     }
                                 }
                             }
-                            part.renameTo(target)
+                            if (!part.renameTo(target)) error("Could not finalize update APK")
                             // Gate the install: a tampered or corrupted APK must
                             // never reach the installer, and must not be left on
                             // disk for the next cold-start scan to resurrect.
@@ -458,6 +499,7 @@ object AppUpdateManager {
         apkUrl: String,
         digest: String?,
     ) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         when (terminal) {
             is State.Ready -> NotificationUtil.notifyUpdateReady(terminal.version, terminal.file.absolutePath)
             is State.Failed -> NotificationUtil.notifyUpdateFailed(version, terminal.message, apkUrl, digest)
@@ -468,10 +510,12 @@ object AppUpdateManager {
     /** Stops the running download at the next chunk boundary; keeps any
      * previously finished APK untouched. */
     fun cancelDownload() {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         downloadCancelled = true
     }
 
     fun install(context: Context, file: File) {
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) return
         // The installer takes over here; the "tap to install" notification's
         // job is done either way (the process dies on a self-update).
         NotificationUtil.cancelUpdateNotifications()

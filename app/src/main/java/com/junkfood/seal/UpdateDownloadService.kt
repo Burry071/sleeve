@@ -49,11 +49,15 @@ class UpdateDownloadService : Service(), KoinComponent {
         if (intent?.getBooleanExtra(EXTRA_ENGINE_UPDATE, false) == true) {
             return startEngineUpdate(intent.getStringExtra(NotificationActionReceiver.TASK_ID_KEY), startId)
         }
+        if (!BuildConfig.ENABLE_IN_APP_UPDATER) {
+            stopSafely(startId)
+            return START_NOT_STICKY
+        }
         val version = intent?.getStringExtra(EXTRA_VERSION)
         val apkUrl = intent?.getStringExtra(EXTRA_APK_URL)
         val digest = intent?.getStringExtra(EXTRA_APK_DIGEST)
         if (version.isNullOrEmpty() || apkUrl.isNullOrEmpty()) {
-            stopSelf(startId)
+            stopSafely(startId)
             return START_NOT_STICKY
         }
         // A start already in flight owns the transfer, but every
@@ -113,6 +117,22 @@ class UpdateDownloadService : Service(), KoinComponent {
                 }
             }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Satisfies Android 12+'s startForegroundService() contract before stopping
+     * when the service was launched for a disabled or malformed APK update.
+     */
+    private fun stopSafely(startId: Int) {
+        runCatching {
+            startForeground(
+                NotificationUtil.UPDATE_NOTIFICATION_ID,
+                NotificationUtil.notifyUpdateDownloading("", 0),
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+        NotificationUtil.cancelUpdateNotifications()
+        stopSelf(startId)
     }
 
     /**

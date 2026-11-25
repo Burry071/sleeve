@@ -222,7 +222,8 @@ def _v1_tracks(kind, obj_id, token):
 
 def _via_anon_token(kind, obj_id):
     token = _anon_token()
-    return _v1_tracks(kind, obj_id, token)
+    title, tracks = _v1_tracks(kind, obj_id, token)
+    return {"ok": True, "kind": kind, "title": title, "tracks": tracks}
 
 
 # ---------------------------------------------------------------- strategy 3
@@ -251,7 +252,8 @@ def _via_client_credentials(kind, obj_id, client_id, client_secret):
     token = data.get("access_token") or ""
     if not token:
         raise RuntimeError("creds: no access_token in response")
-    return _v1_tracks(kind, obj_id, token)
+    title, tracks = _v1_tracks(kind, obj_id, token)
+    return {"ok": True, "kind": kind, "title": title, "tracks": tracks}
 
 
 def resolve(url, client_id="", client_secret=""):

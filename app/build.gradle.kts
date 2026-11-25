@@ -26,7 +26,12 @@ val currentVersionCode = currentVersion.code.toInt()
 chaquopy {
     defaultConfig {
         version = "3.13"
-        buildPython("C:/Users/User/AppData/Local/Python/bin/python.exe")
+        val buildPythonPath =
+            (project.findProperty("BUILD_PYTHON") as? String)
+                ?: System.getenv("BUILD_PYTHON")
+        if (!buildPythonPath.isNullOrBlank()) {
+            buildPython(buildPythonPath)
+        }
     }
 }
 
@@ -116,17 +121,20 @@ android {
         create("generic") {
             dimension = "publishChannel"
             isDefault = true
+            buildConfigField("boolean", "ENABLE_IN_APP_UPDATER", "true")
         }
 
         create("githubPreview") {
             dimension = "publishChannel"
             applicationIdSuffix = ".preview"
             resValue("string", "app_name", "Sleeve Preview")
+            buildConfigField("boolean", "ENABLE_IN_APP_UPDATER", "true")
         }
 
         create("fdroid") {
             dimension = "publishChannel"
             versionName = "$baseVersionName-(F-Droid)"
+            buildConfigField("boolean", "ENABLE_IN_APP_UPDATER", "false")
         }
     }
 
