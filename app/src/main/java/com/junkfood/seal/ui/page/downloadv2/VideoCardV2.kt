@@ -149,6 +149,8 @@ fun VideoListItem(
     statusLine: Int? = null,
     statusText: String? = null,
     progress: Float? = null,
+    postProcessing: Boolean = false,
+    footerContent: (@Composable () -> Unit)? = null,
     actionButton: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
@@ -164,6 +166,8 @@ fun VideoListItem(
             statusLine = statusLine,
             statusText = statusText,
             progress = progress,
+            postProcessing = postProcessing,
+            footerContent = footerContent,
             actionButton = actionButton,
             onButtonClick = onButtonClick,
         )
@@ -182,71 +186,87 @@ fun VideoListItem(
     statusLine: Int? = null,
     statusText: String? = null,
     progress: Float? = null,
+    postProcessing: Boolean = false,
+    footerContent: (@Composable () -> Unit)? = null,
     actionButton: (@Composable () -> Unit)? = null,
     onButtonClick: () -> Unit,
 ) {
-    Row(modifier = modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.Top) {
-        Box(modifier = Modifier) {
-            ListItemImage(modifier = Modifier, thumbnailModel = thumbnailModel)
-            Box(
-                modifier =
-                    Modifier.matchParentSize().background(
-                        brush =
-                            Brush.verticalGradient(
-                                0.55f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = 0.36f),
-                            )
-                    )
-            )
-            VideoInfoLabel(
-                modifier = Modifier.align(Alignment.BottomEnd),
-                duration = duration,
-                fileSizeApprox = fileSizeApprox,
-            )
-        }
-        Box {
-            Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                TitleText(
-                    modifier = Modifier,
-                    title = title,
-                    uploader = uploader,
-                    contentPadding = PaddingValues(),
+    Column(modifier = modifier) {
+        Row(modifier = Modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.Top) {
+            Box(modifier = Modifier) {
+                ListItemImage(modifier = Modifier, thumbnailModel = thumbnailModel)
+                Box(
+                    modifier =
+                        Modifier.matchParentSize().background(
+                            brush =
+                                Brush.verticalGradient(
+                                    0.55f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.36f),
+                                )
+                        )
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                stateIndicator?.invoke()
-                // The same one-line status the card shows: a list row that
-                // only said "Error" hid which error it was.
-                if (statusText != null || statusLine != null) {
-                    Text(
-                        text = statusText ?: stringResource(statusLine!!),
-                        modifier = Modifier.padding(top = 2.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                VideoInfoLabel(
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                    duration = duration,
+                    fileSizeApprox = fileSizeApprox,
+                )
+            }
+            Box {
+                Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                    TitleText(
+                        modifier = Modifier,
+                        title = title,
+                        uploader = uploader,
+                        contentPadding = PaddingValues(),
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    stateIndicator?.invoke()
+                    // The same one-line status the card shows: a list row that
+                    // only said "Error" hid which error it was.
+                    if (statusText != null || statusLine != null) {
+                        Text(
+                            text = statusText ?: stringResource(statusLine!!),
+                            modifier = Modifier.padding(top = 2.dp),
+                            style =
+                                MaterialTheme.typography.bodySmall.copy(
+                                    fontFeatureSettings = "tnum"
+                                ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (postProcessing) {
+                        LinearWavyProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                        )
+                    } else if (progress != null && progress >= 0f) {
+                        LinearWavyProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        )
+                    }
+                    // The card's action, in a row: cancel, resume, retry or play
+                    // without opening the sheet first.
+                    actionButton?.let {
+                        Box(modifier = Modifier.padding(top = 4.dp)) { it() }
+                    }
                 }
-                if (progress != null && progress >= 0f) {
-                    LinearWavyProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                IconButton(
+                    onButtonClick,
+                    modifier = Modifier.align(Alignment.BottomEnd).offset(x = 8.dp, y = 8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = stringResource(R.string.show_more_actions),
+                        modifier = Modifier.size(20.dp),
                     )
-                }
-                // The card's action, in a row: cancel, resume, retry or play
-                // without opening the sheet first.
-                actionButton?.let {
-                    Box(modifier = Modifier.padding(top = 4.dp)) { it() }
                 }
             }
-            IconButton(
-                onButtonClick,
-                modifier = Modifier.align(Alignment.BottomEnd).offset(x = 8.dp, y = 8.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.MoreVert,
-                    contentDescription = stringResource(R.string.show_more_actions),
-                    modifier = Modifier.size(20.dp),
-                )
+        }
+        if (footerContent != null) {
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                footerContent()
             }
         }
     }
@@ -369,7 +389,8 @@ fun VideoCardV2(
                             end = 16.dp,
                             bottom = if (footerContent != null) 6.dp else 12.dp,
                         ),
-                    style = MaterialTheme.typography.bodySmall,
+                    style =
+                        MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -662,37 +683,52 @@ fun ListItemStateText(
     modifier: Modifier = Modifier,
     isDarkTheme: Boolean = LocalDarkTheme.current.isDarkTheme(),
     downloadState: Task.DownloadState,
+    matchPhase: MatchPhase = MatchPhase.None,
 ) {
     val sizeModifier = Modifier.size(14.dp)
+    val held = matchPhase == MatchPhase.Held
 
     AnimatedContent(
-        downloadState,
+        downloadState to held,
         transitionSpec = {
             materialSharedAxisY(initialOffsetY = { it / 5 }, targetOffsetY = { -it / 5 })
         },
-        contentKey = { it::class.simpleName },
-    ) { downloadState ->
+        contentKey = { (state, isHeld) -> "${state::class.simpleName}:$isHeld" },
+    ) { (downloadState, isHeld) ->
         // Same wording as the card pill: the list used to say "Downloaded" for
-        // a warning-completed file and "Enqueued" for a metered-parked one.
-        val text = statePillText(downloadState)
+        // a warning-completed file, "Enqueued" for a metered-parked one, and
+        // "Canceled" for a held match.
+        val text =
+            if (isHeld) stringResource(R.string.match_held_badge)
+            else statePillText(downloadState)
         Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
             when (downloadState) {
                 is Canceled -> {
                     Icon(
-                        imageVector = Icons.Outlined.Cancel,
+                        imageVector =
+                            if (isHeld) Icons.Rounded.Warning else Icons.Outlined.Cancel,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = sizeModifier,
                     )
                 }
                 is Completed -> {
-                    val color = GreenTonalPalettes.accent1(if (isDarkTheme) 80.0 else 40.0)
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = color,
-                        modifier = sizeModifier,
-                    )
+                    if (downloadState.warning.isNotBlank()) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = sizeModifier,
+                        )
+                    } else {
+                        val color = GreenTonalPalettes.accent1(if (isDarkTheme) 80.0 else 40.0)
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = color,
+                            modifier = sizeModifier,
+                        )
+                    }
                 }
                 is Error -> {
                     Icon(

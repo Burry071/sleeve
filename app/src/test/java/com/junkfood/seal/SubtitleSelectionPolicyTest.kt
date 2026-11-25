@@ -70,4 +70,17 @@ class SubtitleSelectionPolicyTest {
         assertEquals("en,ja", SubtitleSelectionPolicy.buildLanguagePatterns("en,", listOf("ja", "en")))
         assertEquals("en", SubtitleSelectionPolicy.buildLanguagePatterns(" en , ", listOf("en")))
     }
+
+    @Test
+    fun `auto-caption-only video seeds selectedAutoCaptions without polluting selectedSubtitles`() {
+        val selection =
+            SubtitleSelectionPolicy.initialSelection(
+                subtitles = emptyMap(),
+                autoCaptions = mapOf("en-orig" to track(), "es" to track()),
+                enabled = true,
+                patterns = "en.*,es",
+            )
+        assertTrue(selection.subtitles.isEmpty())
+        assertEquals(listOf("en-orig", "es"), selection.autoCaptions)
+    }
 }

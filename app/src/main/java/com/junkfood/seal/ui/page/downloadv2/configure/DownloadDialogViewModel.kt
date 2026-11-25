@@ -13,6 +13,7 @@ import com.junkfood.seal.ghostengine.GhostEngine.GalleryItem
 import com.junkfood.seal.ghostengine.GhostEngine.SpotifyTrack
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.NetworkPolicy
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.SPOTIFY_CLIENT_ID
 import com.junkfood.seal.util.SPOTIFY_CLIENT_SECRET
@@ -58,7 +59,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     sealed interface SelectionState {
         data object Idle : SelectionState
 
-        data class PlaylistSelection(val result: PlaylistResult) : SelectionState
+        data class PlaylistSelection(
+            val result: PlaylistResult,
+            val preferences: DownloadUtil.DownloadPreferences =
+                DownloadUtil.DownloadPreferences.EMPTY,
+        ) : SelectionState
 
         /** [audioOnly] is the type the user picked before the fetch; the
          * format page honours it instead of re-reading the global preference.
@@ -69,6 +74,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             val audioOnly: Boolean = false,
             val splitByChapter: Boolean = false,
             val convertAudio: Boolean = false,
+            val preferences: DownloadUtil.DownloadPreferences =
+                DownloadUtil.DownloadPreferences.EMPTY,
         ) : SelectionState
 
         data class MetadataTracks(
@@ -185,6 +192,18 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mRouteRequestFlow.value = null
     }
 
+    /**
+     * A gallery match resolved asynchronously from [Action.ShowSheet] or
+     * [Action.ProceedWithURLs]. Handed back to the host so [Action.FetchGallery]
+     * passes through [PendingMetered] like every other download-starting action.
+     */
+    private val mPendingGalleryFlow = MutableStateFlow<Action.FetchGallery?>(null)
+    val pendingGalleryFlow = mPendingGalleryFlow.asStateFlow()
+
+    fun consumePendingGallery() {
+        mPendingGalleryFlow.value = null
+    }
+
     private val sheetState
         get() = sheetStateFlow.value
 
@@ -217,6 +236,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
+        galleryCandidateUrl(action.urlList)?.let { candidate ->
+            probeGalleryOrConfigure(action.urlList, candidate)
+            return
+        }
         mSheetStateFlow.update { SheetState.Configure(action.urlList) }
     }
 
@@ -235,7 +258,10 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                             when (info) {
                                 is PlaylistResult -> {
                                     mSelectionStateFlow.update {
-                                        SelectionState.PlaylistSelection(result = info)
+                                        SelectionState.PlaylistSelection(
+                                            result = info,
+                                            preferences = preferences,
+                                        )
                                     }
                                 }
 
@@ -244,6 +270,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                                         SelectionState.FormatSelection(
                                             info = info,
                                             splitByChapter = preferences.splitByChapter,
+                                            preferences = preferences,
                                         )
                                     }
                                 }
@@ -277,12 +304,18 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     )
                     .onSuccess { info ->
                         withContext(Dispatchers.Main) {
+                            val resolvedPreferences =
+                                preferences.copy(
+                                    extractAudio = audioOnly,
+                                    convertAudio = audioOnly && preferences.convertAudio,
+                                )
                             mSelectionStateFlow.update {
                                 SelectionState.FormatSelection(
                                     info = info,
                                     audioOnly = audioOnly,
-                                    splitByChapter = preferences.splitByChapter,
-                                    convertAudio = audioOnly && preferences.convertAudio,
+                                    splitByChapter = resolvedPreferences.splitByChapter,
+                                    convertAudio = resolvedPreferences.convertAudio,
+                                    preferences = resolvedPreferences,
                                 )
                             }
                             hideDialog()
@@ -329,6 +362,7 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     }
 
     private fun hideDialog() {
+        mPendingGalleryFlow.value = null
         mSheetValueFlow.update { SheetValue.Hidden }
         // Success paths only hide the sheet; they never park the state. Without
         // this the next open resurrects a Loading whose job is already gone.
@@ -348,28 +382,12 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
             fetchAudible(Action.FetchAudible(audibleUrl))
             return
         }
-        urlList?.firstOrNull { !isVideoFirstHost(it) }?.let { candidate ->
+        galleryCandidateUrl(urlList)?.let { candidate ->
             // gallery-dl check runs on IO (first call loads ~300 site modules);
-            // a hit routes to the gallery flow, a miss falls through to Configure.
+            // a hit routes to the gallery flow via PendingMetered, a miss falls
+            // through to Configure.
             mSheetValueFlow.update { SheetValue.Expanded }
-            val job =
-                viewModelScope.launch(Dispatchers.IO) {
-                    val matched =
-                        runCatching { GhostEngine.galleryMatches(candidate) }
-                            .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
-                            .getOrDefault(false)
-                    Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
-                    withContext(Dispatchers.Main) {
-                        if (matched) {
-                            fetchGallery(Action.FetchGallery(candidate))
-                        } else {
-                            mSheetStateFlow.update { SheetState.Configure(urlList) }
-                        }
-                    }
-                }
-            mSheetStateFlow.update {
-                SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
-            }
+            probeGalleryOrConfigure(urlList!!, candidate)
             return
         }
         if (!urlList.isNullOrEmpty()) {
@@ -380,18 +398,31 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
         mSheetValueFlow.update { SheetValue.Expanded }
     }
 
-// instagram.com belongs here: the anonymous embed resolves reels to their
-// poster JPG, so the gallery pre-route silently downloaded an image, skipped
-// the preference sheet, and never fetched the video. yt-dlp is the lane that
-// returns the actual reel; letting the sheet open also keeps IG consistent
-// with the other video hosts.
-private val VIDEO_FIRST_HOSTS: Regex =
-    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it|instagram\\.com")
-
-    /** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
-    private fun isVideoFirstHost(url: String) =
-        VIDEO_FIRST_HOSTS
-            .containsMatchIn(url)
+    private fun probeGalleryOrConfigure(urlList: List<String>, candidate: String) {
+        val job =
+            viewModelScope.launch(Dispatchers.IO) {
+                val matched =
+                    runCatching { GhostEngine.galleryMatches(candidate) }
+                        .onFailure { Log.e(TAG, "galleryMatches error: ${it.message}") }
+                        .getOrDefault(false)
+                Log.i(TAG, "gallery pre-route: candidate=$candidate matched=$matched")
+                withContext(Dispatchers.Main) {
+                    if (matched) {
+                        if (!NetworkPolicy.canStartDownloads()) {
+                            // Park off Loading so dismissing the metered dialog
+                            // never leaves the sheet on a finished job's spinner.
+                            mSheetStateFlow.update { SheetState.Configure(urlList) }
+                        }
+                        mPendingGalleryFlow.value = Action.FetchGallery(candidate)
+                    } else {
+                        mSheetStateFlow.update { SheetState.Configure(urlList) }
+                    }
+                }
+            }
+        mSheetStateFlow.update {
+            SheetState.Loading(taskKey = "Gallery_$candidate", job = job)
+        }
+    }
 
     private fun fetchGallery(action: Action.FetchGallery) {
         if (resolveThrottled("gallery", action.url)) return
@@ -556,6 +587,7 @@ private val VIDEO_FIRST_HOSTS: Regex =
      * already gone.
      */
     private fun resetFlow() {
+        mPendingGalleryFlow.value = null
         if (sheetState is SheetState.Loading) cancel()
         mSheetStateFlow.update { SheetState.InputUrl }
         resetSelectionState()
@@ -590,3 +622,19 @@ internal fun DownloadDialogViewModel.Action.startsDownload(): Boolean =
         is DownloadDialogViewModel.Action.FetchFormats,
         DownloadDialogViewModel.Action.Cancel -> false
     }
+
+// instagram.com belongs here: the anonymous embed resolves reels to their
+// poster JPG, so the gallery pre-route silently downloaded an image, skipped
+// the preference sheet, and never fetched the video. yt-dlp is the lane that
+// returns the actual reel; letting the sheet open also keeps IG consistent
+// with the other video hosts.
+private val VIDEO_FIRST_HOSTS: Regex =
+    Regex("youtube\\.com|youtu\\.be|vimeo\\.com|twitch\\.tv|tiktok\\.com|twitter\\.com|x\\.com|reddit\\.com|redd\\.it|instagram\\.com")
+
+/** Hosts whose video flows yt-dlp already serves well stay on yt-dlp. */
+internal fun isVideoFirstHost(url: String): Boolean = VIDEO_FIRST_HOSTS.containsMatchIn(url)
+
+/** First URL eligible for gallery-dl pre-routing (not Spotify/Audible and not video-first). */
+internal fun galleryCandidateUrl(urlList: List<String>?): String? =
+    urlList?.firstOrNull { !isVideoFirstHost(it) }
+

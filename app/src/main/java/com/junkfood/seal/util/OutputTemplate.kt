@@ -159,6 +159,25 @@ object OutputTemplate {
                 )
         }
 
+        if (template.startsWith('/') || template.startsWith('\\')) {
+            issues +=
+                Issue(
+                    start = 0,
+                    length = 1,
+                    messageRes = R.string.output_template_issue_illegal_char,
+                    severity = Severity.BLOCK,
+                )
+        }
+        traversalSegmentOffsets(template).forEach { offset ->
+            issues +=
+                Issue(
+                    start = offset,
+                    length = 2,
+                    messageRes = R.string.output_template_issue_illegal_char,
+                    severity = Severity.BLOCK,
+                )
+        }
+
         var i = 0
         while (i < template.length) {
             val c = template[i]
@@ -207,10 +226,11 @@ object OutputTemplate {
         return issues
     }
 
-    /** Null unless the template can produce a name: the two requirements must hold. */
+    /** Null unless the template can produce a safe name: requirements and path safety must hold. */
     fun preview(template: String, sample: Sample = Sample()): String? {
         if (!template.contains(DownloadUtil.BASENAME)) return null
         if (!template.endsWith(DownloadUtil.EXTENSION)) return null
+        if (hasUnsafePath(template)) return null
         val out = StringBuilder()
         var i = 0
         while (i < template.length) {
@@ -268,6 +288,41 @@ object OutputTemplate {
             in numericFields -> "1"
             else -> name
         }
+
+    /**
+     * Neutralize a user-supplied template by stripping leading path separators
+     * and removing `..` / `.` traversal segments.
+     */
+    fun sanitize(template: String): String {
+        if (template.isEmpty()) return template
+        val trimmed = template.trimStart('/', '\\')
+        if (trimmed.isEmpty()) return ""
+        return trimmed
+            .split('/', '\\')
+            .filter { it.isNotEmpty() && it != ".." && it != "." }
+            .joinToString("/")
+    }
+
+    private fun hasUnsafePath(template: String): Boolean =
+        template.startsWith('/') ||
+            template.startsWith('\\') ||
+            traversalSegmentOffsets(template).isNotEmpty()
+
+    private fun traversalSegmentOffsets(template: String): List<Int> {
+        val offsets = mutableListOf<Int>()
+        var segStart = 0
+        var i = 0
+        while (i <= template.length) {
+            if (i == template.length || template[i] == '/' || template[i] == '\\') {
+                if (i - segStart == 2 && template[segStart] == '.' && template[segStart + 1] == '.') {
+                    offsets += segStart
+                }
+                segStart = i + 1
+            }
+            i++
+        }
+        return offsets
+    }
 
     private fun Char.isAsciiLetter(): Boolean = this in 'a'..'z' || this in 'A'..'Z'
 }

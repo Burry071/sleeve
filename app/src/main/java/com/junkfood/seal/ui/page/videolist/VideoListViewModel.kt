@@ -59,9 +59,9 @@ class VideoListViewModel(private val downloader: DownloaderV2) : ViewModel() {
         }
 
     val fileSizeMapFlow =
-        videoListFlow.flowOn(Dispatchers.IO).map { list ->
-            list.associate { it.id to it.videoPath.getFileSize() }
-        }
+        videoListFlow
+            .map { list -> list.associate { it.id to it.videoPath.getFileSize() } }
+            .flowOn(Dispatchers.IO)
 
     fun clickVideoFilter() {
         if (mutableStateFlow.value.videoFilter)

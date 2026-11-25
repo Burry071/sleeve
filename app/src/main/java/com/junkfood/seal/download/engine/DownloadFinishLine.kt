@@ -135,6 +135,7 @@ internal suspend fun onFinishDownloading(
                     moveFilesToSdcard(
                             sdcardUri = sdcardUri,
                             tempPath = context.getSdcardTempDir(videoInfo.id),
+                            keepImages = galleryDirect,
                             onCopied = { copiedName, destUri ->
                                 if (copiedName == exported?.name) exportUri = destUri
                             },

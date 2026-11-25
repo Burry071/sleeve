@@ -97,6 +97,10 @@ internal fun cataloguePageUrl(track: Task.TypeInfo.MetadataTrack): String? {
         URLEncoder.encode(terms, "UTF-8").replace("+", "%20")
 }
 
+/** True when at least one row can actually resume (held books are excluded). */
+internal fun hasResumableBatchEntries(entries: List<Pair<Task, Task.State>>): Boolean =
+    BatchOps.resumeTargets(entries).isNotEmpty()
+
 /**
  * One playlist download: a summary header with batch actions and compact song
  * rows that reuse the single-download card's state pill and action button, so
@@ -118,6 +122,7 @@ fun PlaylistBatchCard(
     onSongAction: (Task, UiAction) -> Unit,
 ) {
     val summary = remember(entries) { BatchOps.summary(entries) }
+    val canResume = remember(entries) { hasResumableBatchEntries(entries) }
     val reviewCount = remember(entries) { MatchOps.reviewCount(entries) }
     val canStartDownloads by NetworkPolicy.canStartFlow.collectAsStateWithLifecycle()
     // Rows the metered gate parked (both Idle and ReadyWithInfo). Empty on Wi-Fi,
@@ -237,7 +242,7 @@ fun PlaylistBatchCard(
                 if (summary.unfinished > 0) {
                     TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                 }
-                if (summary.canceled + summary.failed > 0) {
+                if (canResume) {
                     TextButton(onClick = onResume) { Text(stringResource(R.string.resume)) }
                 }
                 // The single review entry: only after the batch finishes and

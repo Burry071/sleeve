@@ -1,6 +1,13 @@
 package com.junkfood.seal
 
+import com.junkfood.seal.ui.page.downloadv2.configure.applySessionAudioConvertChip
+import com.junkfood.seal.ui.page.downloadv2.configure.initialSuggestedSelected
+import com.junkfood.seal.ui.page.downloadv2.configure.partitionFormats
+import com.junkfood.seal.ui.page.downloadv2.configure.resolveSessionConvertAudio
+import com.junkfood.seal.util.CONVERT_M4A
+import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.DownloadType
+import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.FormatSelectionPolicy
 import com.junkfood.seal.util.FormatSelectionPolicy.Section
@@ -342,5 +349,84 @@ class FormatSelectionPolicyTest {
         )
         assertTrue(FormatSelectionPolicy.splitWithClips(splitSelected = true, clips = emptyList()))
         assertFalse(FormatSelectionPolicy.splitWithClips(splitSelected = false, clips = emptyList()))
+    }
+
+    // --- Format partitioning (Instagram DASH reels + absent codecs) -----------------
+
+    @Test
+    fun partitionFormatsRoutesInstagramVideoOnlyWithNullAcodecIntoVideoOnly() {
+        val igVideoLow =
+            Format(formatId = "ig-v-720", vcodec = "avc1.64001f", acodec = null, ext = "mp4")
+        val igVideoHigh =
+            Format(formatId = "ig-v-1080", vcodec = "avc1.64002a", acodec = null, ext = "mp4")
+        val igAudio =
+            Format(formatId = "ig-a-128", vcodec = null, acodec = "mp4a.40.2", ext = "m4a", abr = 128.0)
+        val muxed = muxed("18", 720.0)
+        val storyboard = Format(formatId = "sb0", vcodec = "none", acodec = "none", ext = "mhtml")
+
+        val partitioned = partitionFormats(listOf(igVideoLow, igVideoHigh, igAudio, muxed, storyboard))
+
+        assertEquals(listOf("ig-v-1080", "ig-v-720"), partitioned.videoOnly.map { it.formatId })
+        assertEquals(listOf("ig-a-128"), partitioned.audioOnly.map { it.formatId })
+        assertEquals(listOf("18"), partitioned.videoAudio.map { it.formatId })
+        // Selecting the video-only reel track can now auto-pair with the audio track.
+        assertEquals(0, FormatSelectionPolicy.audioPairIndex(emptyList(), partitioned.audioOnly))
+    }
+
+    // --- Audio -> Custom initial suggested state ------------------------------------
+
+    @Test
+    fun audioCustomNeverStartsWithSuggestedSelected() {
+        val suggested = listOf(audio("251", 160.0))
+        assertFalse(initialSuggestedSelected(audioOnly = true, suggestedFormats = suggested))
+        assertTrue(initialSuggestedSelected(audioOnly = false, suggestedFormats = suggested))
+        assertFalse(initialSuggestedSelected(audioOnly = false, suggestedFormats = emptyList()))
+    }
+
+    // --- Configure sheet convertAudio override + MP3 chip format --------------------
+
+    @Test
+    fun switchingFromAudioToVideoIgnoresStaleConvertAudioOverride() {
+        assertTrue(
+            resolveSessionConvertAudio(
+                selectedType = DownloadType.Audio,
+                override = true,
+                settingsConvertAudio = false,
+            )
+        )
+        assertFalse(
+            resolveSessionConvertAudio(
+                selectedType = DownloadType.Video,
+                override = true,
+                settingsConvertAudio = true,
+            )
+        )
+        assertFalse(
+            resolveSessionConvertAudio(
+                selectedType = DownloadType.Playlist,
+                override = true,
+                settingsConvertAudio = true,
+            )
+        )
+    }
+
+    @Test
+    fun tappingMp3ChipForcesMp3FormatEvenWhenSettingsDefaultToM4a() {
+        val base = DownloadUtil.DownloadPreferences.EMPTY.copy(audioConvertFormat = CONVERT_M4A)
+        val afterMp3 =
+            applySessionAudioConvertChip(
+                sessionPreferences = base,
+                basePreferences = base,
+                convertAudio = true,
+            )
+        assertEquals(CONVERT_MP3, afterMp3.audioConvertFormat)
+
+        val afterOriginal =
+            applySessionAudioConvertChip(
+                sessionPreferences = afterMp3,
+                basePreferences = base,
+                convertAudio = false,
+            )
+        assertEquals(CONVERT_M4A, afterOriginal.audioConvertFormat)
     }
 }

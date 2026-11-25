@@ -14,11 +14,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.junkfood.seal.ui.common.LocalDarkTheme
 import com.junkfood.seal.ui.common.SettingsProvider
@@ -330,6 +334,19 @@ class QuickDownloadActivity : ComponentActivity() {
                         mutableStateOf(DownloadUtil.DownloadPreferences.createFromPreferences())
                     }
 
+                    val lifecycleOwner = LocalLifecycleOwner.current
+                    DisposableEffect(lifecycleOwner) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_RESUME) {
+                                NetworkPolicy.refreshCanStart()
+                                preferences =
+                                    DownloadUtil.DownloadPreferences.createFromPreferences()
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                    }
+
                     val sheetValue = viewModel.sheetValueFlow.collectAsStateWithLifecycle().value
 
                     val state = viewModel.sheetStateFlow.collectAsStateWithLifecycle().value
@@ -339,12 +356,27 @@ class QuickDownloadActivity : ComponentActivity() {
                     val selectionState =
                         viewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
+                    val pendingGallery by
+                        viewModel.pendingGalleryFlow.collectAsStateWithLifecycle()
+                    LaunchedEffect(pendingGallery) {
+                        val action = pendingGallery ?: return@LaunchedEffect
+                        viewModel.consumePendingGallery()
+                        postSheetAction(action)
+                    }
+
                     // Composition has to outlive the hide animation, so this is
                     // an observation of the sheet itself rather than a latch that
                     // a missed completion could leave stuck on.
                     val showDialog =
                         sheetValue == DownloadDialogViewModel.SheetValue.Expanded ||
                             sheetState.isVisible
+
+                    LaunchedEffect(sheetValue, state) {
+                        if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
+                            preferences =
+                                DownloadUtil.DownloadPreferences.createFromPreferences()
+                        }
+                    }
 
                     LaunchedEffect(sheetValue) {
                         if (sheetValue != DownloadDialogViewModel.SheetValue.Hidden) {

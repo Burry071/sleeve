@@ -6,6 +6,7 @@ import androidx.core.graphics.drawable.IconCompat
 import com.junkfood.seal.QuickDownloadActivity
 import android.content.Intent
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -20,6 +21,10 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.DownloaderV2Impl
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
@@ -69,8 +74,17 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 private const val TAG = "App"
+private const val IMAGE_DISK_CACHE_MAX_BYTES = 50L * 1024 * 1024
+private const val LOW_RAM_THRESHOLD_BYTES = 4L * 1024 * 1024 * 1024
 
-class App : Application() {
+internal fun imageMemoryCachePercentForRam(totalRamBytes: Long, isLowRamDevice: Boolean): Double =
+    if (isLowRamDevice || (totalRamBytes > 0L && totalRamBytes <= LOW_RAM_THRESHOLD_BYTES)) {
+        0.12
+    } else {
+        0.20
+    }
+
+class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         MMKV.initialize(this)
@@ -145,6 +159,32 @@ class App : Application() {
                 exitProcess(1)
             }
         }
+    }
+
+    override fun newImageLoader(): ImageLoader {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val totalRamBytes =
+            if (am != null) {
+                val memInfo = ActivityManager.MemoryInfo()
+                am.getMemoryInfo(memInfo)
+                memInfo.totalMem
+            } else {
+                0L
+            }
+        val memoryPercent = imageMemoryCachePercentForRam(totalRamBytes, am?.isLowRamDevice == true)
+        return ImageLoader.Builder(this)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(memoryPercent)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(IMAGE_DISK_CACHE_MAX_BYTES)
+                    .build()
+            }
+            .build()
     }
 
     private fun startCrashReportActivity(th: Throwable) {

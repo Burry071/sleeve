@@ -51,9 +51,58 @@ import com.junkfood.seal.ui.component.LongTapTextButton
 import com.junkfood.seal.ui.component.OutlinedButtonWithIcon
 import com.junkfood.seal.ui.component.SealModalBottomSheetM2
 import com.junkfood.seal.ui.theme.SealTheme
+import com.junkfood.seal.util.ArchiveIndex
 import com.junkfood.seal.util.FileUtil
+import com.junkfood.seal.util.FileUtil.getArchiveFile
 import com.junkfood.seal.util.ToastUtil
+import com.junkfood.seal.util.youTubeIdFrom
+import java.net.URI
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Best-effort `(extractorKey, videoId)` pair for [ArchiveIndex.forget] so a
+ * Library re-download clears the previous yt-dlp archive entry first.
+ */
+internal fun archiveKeyFor(info: DownloadedVideoInfo): Pair<String, String>? {
+    val url = info.videoUrl.trim()
+    if (url.isBlank()) return null
+    val extractor = info.extractor.trim()
+    if (
+        extractor.isBlank() ||
+            extractor.equals("Unknown", ignoreCase = true) ||
+            extractor.equals("file", ignoreCase = true)
+    ) {
+        val ytId = youTubeIdFrom(url) ?: return null
+        return "youtube" to ytId
+    }
+    youTubeIdFrom(url)?.let { return extractor to it }
+    val uri = runCatching { URI(url) }.getOrNull() ?: return null
+    val segments = uri.path.orEmpty().split('/').filter { it.isNotBlank() }
+    val id =
+        when (extractor.lowercase()) {
+            "instagram" -> {
+                val idx = segments.indexOfFirst { it in setOf("reel", "reels", "p", "tv") }
+                segments.getOrNull(idx + 1)
+            }
+            "tiktok" -> {
+                val idx = segments.indexOfFirst { it == "video" || it == "photo" }
+                segments.getOrNull(idx + 1)?.takeIf { it.all(Char::isDigit) }
+            }
+            "twitter" -> {
+                val idx = segments.indexOfFirst { it == "status" || it == "statuses" }
+                segments.getOrNull(idx + 1)?.takeIf { it.all(Char::isDigit) }
+            }
+            "vimeo" -> segments.lastOrNull()?.takeIf { it.all(Char::isDigit) }
+            "reddit" -> {
+                val idx = segments.indexOfFirst { it == "comments" }
+                segments.getOrNull(idx + 1)
+            }
+            else -> segments.lastOrNull()?.takeIf { it.length in 5..64 && !it.contains('.') }
+        }
+    return id?.takeIf { it.isNotBlank() }?.let { extractor to it }
+}
 
 @Composable
 fun VideoDetailDrawer(
@@ -73,14 +122,24 @@ fun VideoDetailDrawer(
     val onReDownload =
         remember(info) {
             {
-                context.startActivity(
-                    Intent().apply {
-                        action = Intent.ACTION_SEND
-                        setPackage(context.packageName)
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, info.videoUrl)
+                if (info.videoUrl.isNotBlank()) {
+                    scope.launch {
+                        archiveKeyFor(info)?.let { (extractorKey, videoId) ->
+                            withContext(Dispatchers.IO) {
+                                runCatching { with(FileUtil) { context.getArchiveFile() } }
+                                    .onSuccess { ArchiveIndex.forget(it, extractorKey, videoId) }
+                            }
+                        }
+                        context.startActivity(
+                            Intent().apply {
+                                action = Intent.ACTION_SEND
+                                setPackage(context.packageName)
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, info.videoUrl)
+                            }
+                        )
                     }
-                )
+                }
             }
         }
 
@@ -100,9 +159,11 @@ fun VideoDetailDrawer(
                 onDelete()
             },
             onOpenLink = {
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                onDismissRequest()
-                uriHandler.openUri(videoUrl)
+                if (videoUrl.isNotBlank()) {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDismissRequest()
+                    uriHandler.openUri(videoUrl)
+                }
             },
             onShareFile = {
                 view.slightHapticFeedback()
@@ -173,23 +234,25 @@ fun VideoDetailDrawerImpl(
                         )
                     }
             }
-            Row(modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth()) {
-                LongTapTextButton(
-                    onClick = {
-                        clipboardManager.setText(AnnotatedString(url))
-                        ToastUtil.makeToast(context.getString(R.string.link_copied))
-                    },
-                    onClickLabel = stringResource(id = R.string.copy_link),
-                    onLongClick = onOpenLink,
-                    onLongClickLabel = stringResource(R.string.open_url),
-                ) {
-                    Icon(Icons.Outlined.Link, stringResource(R.string.video_url))
-                    Text(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        text = url,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+            if (url.isNotBlank()) {
+                Row(modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth()) {
+                    LongTapTextButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(url))
+                            ToastUtil.makeToast(context.getString(R.string.link_copied))
+                        },
+                        onClickLabel = stringResource(id = R.string.copy_link),
+                        onLongClick = onOpenLink,
+                        onLongClickLabel = stringResource(R.string.open_url),
+                    ) {
+                        Icon(Icons.Outlined.Link, stringResource(R.string.video_url))
+                        Text(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            text = url,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
 
@@ -213,7 +276,7 @@ fun VideoDetailDrawerImpl(
                         icon = Icons.Outlined.Share,
                         text = stringResource(R.string.share),
                     )
-                } else {
+                } else if (url.isNotBlank()) {
                     FilledTonalButtonWithIcon(
                         onClick = onReDownload,
                         icon = Icons.Outlined.FileDownload,

@@ -550,7 +550,7 @@ fun VideoListPage(viewModel: VideoListViewModel = koinViewModel(), onNavigateBac
     }
 
     if (showBottomSheet) {
-        val isFileAvailable = fileSizeMap[currentVideoInfo.id] != 0L
+        val isFileAvailable = (fileSizeMap[currentVideoInfo.id] ?: 0L) > 0L
         VideoDetailDrawer(
             sheetState = sheetState,
             info = currentVideoInfo,

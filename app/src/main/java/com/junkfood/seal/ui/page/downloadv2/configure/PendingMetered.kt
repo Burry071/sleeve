@@ -61,8 +61,10 @@ class PendingMetered {
     }
 
     fun allowAlways() {
-        CELLULAR_DOWNLOAD.updateBoolean(true)
-        resumeParked()
+        applyAllowAlways(
+            persistCellularAllowed = { CELLULAR_DOWNLOAD.updateBoolean(true) },
+            resume = ::resumeParked,
+        )
     }
 
     private fun resumeParked() {
@@ -70,6 +72,15 @@ class PendingMetered {
         parked = null
         proceed()
     }
+}
+
+internal fun applyAllowAlways(
+    persistCellularAllowed: () -> Unit,
+    resume: () -> Unit,
+) {
+    persistCellularAllowed()
+    NetworkPolicy.refreshCanStart()
+    resume()
 }
 
 @Composable

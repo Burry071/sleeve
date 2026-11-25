@@ -123,7 +123,7 @@ import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
 import com.junkfood.seal.util.AUDIO_CONVERT
 import com.junkfood.seal.util.AUDIO_FORMAT
 import com.junkfood.seal.util.AUDIO_QUALITY
-import com.junkfood.seal.util.COOKIES
+import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.CUSTOM_COMMAND
 import com.junkfood.seal.util.CookieFileStatus
 import com.junkfood.seal.util.DatabaseUtil
@@ -468,6 +468,13 @@ fun FormatPage(
     fun close() =
         scope.launch { sheetState.hide() }.invokeOnCompletion { onDismissRequest() }
 
+    val resolvedPreferences =
+        if (state.preferences == DownloadUtil.DownloadPreferences.EMPTY) {
+            DownloadUtil.DownloadPreferences.createFromPreferences()
+        } else {
+            state.preferences
+        }
+
     SealModalBottomSheet(
         sheetState = sheetState,
         onDismissRequest = onDismissRequest,
@@ -479,6 +486,7 @@ fun FormatPage(
             audioOnly = state.audioOnly,
             splitByChapter = state.splitByChapter,
             convertAudio = state.convertAudio,
+            basePreferences = resolvedPreferences,
             onNavigateBack = { close() },
         )
     }
@@ -564,16 +572,25 @@ private fun ConfigurePage(
     }
     var sessionSplitByChapter by remember { mutableStateOf(false) }
     val sessionConvertAudio =
-        convertAudioOverride
-            ?: FormatSelectionPolicy
-                .sessionOptions(selectedType, preferences.convertAudio)
-                .convertAudio
+        resolveSessionConvertAudio(
+            selectedType = selectedType,
+            override = convertAudioOverride,
+            settingsConvertAudio = preferences.convertAudio,
+        )
     val session =
         FormatSession(
             convertAudio = sessionConvertAudio,
             splitByChapter = sessionSplitByChapter,
             preferences = sessionPreferences,
-            onConvertAudioChange = { convertAudioOverride = it },
+            onConvertAudioChange = { convert ->
+                convertAudioOverride = convert
+                sessionPreferences =
+                    applySessionAudioConvertChip(
+                        sessionPreferences = sessionPreferences,
+                        basePreferences = preferences,
+                        convertAudio = convert,
+                    )
+            },
             onSplitByChapterChange = { sessionSplitByChapter = it },
             onPreferencesChange = { sessionPreferences = it },
         )
@@ -598,6 +615,11 @@ private fun ConfigurePage(
     LaunchedEffect(selectedType) {
         if (selectedType == Playlist) {
             useFormatSelection = false
+        }
+        if (selectedType != Audio) {
+            convertAudioOverride = null
+            sessionPreferences =
+                sessionPreferences.copy(audioConvertFormat = preferences.audioConvertFormat)
         }
     }
 
@@ -768,6 +790,7 @@ private fun ConfigurePage(
 fun ConfigurePagePlaylistVariant(
     modifier: Modifier = Modifier,
     initialDownloadType: DownloadType,
+    initialSplitByChapter: Boolean = false,
     preferences: DownloadUtil.DownloadPreferences,
     onPresetEdit: (DownloadType?) -> Unit = {},
     onDismissRequest: () -> Unit,
@@ -780,13 +803,24 @@ fun ConfigurePagePlaylistVariant(
     var convertAudioOverride by remember(preferences.convertAudio) {
         mutableStateOf<Boolean?>(null)
     }
-    var sessionSplitByChapter by remember { mutableStateOf(false) }
+    var sessionSplitByChapter by remember(initialSplitByChapter) {
+        mutableStateOf(initialSplitByChapter)
+    }
     var sessionPreferences by remember(preferences) { mutableStateOf(preferences) }
     val sessionConvertAudio =
-        convertAudioOverride
-            ?: FormatSelectionPolicy
-                .sessionOptions(selectedType, preferences.convertAudio)
-                .convertAudio
+        resolveSessionConvertAudio(
+            selectedType = selectedType,
+            override = convertAudioOverride,
+            settingsConvertAudio = preferences.convertAudio,
+        )
+
+    LaunchedEffect(selectedType) {
+        if (selectedType != Audio) {
+            convertAudioOverride = null
+            sessionPreferences =
+                sessionPreferences.copy(audioConvertFormat = preferences.audioConvertFormat)
+        }
+    }
 
     Column {
         Column(modifier = modifier.padding(horizontal = 20.dp)) {
@@ -823,7 +857,15 @@ fun ConfigurePagePlaylistVariant(
                 preference = sessionPreferences,
                 selectedType = selectedType,
                 convertAudio = sessionConvertAudio,
-                onConvertAudioChange = { convertAudioOverride = it },
+                onConvertAudioChange = { convert ->
+                    convertAudioOverride = convert
+                    sessionPreferences =
+                        applySessionAudioConvertChip(
+                            sessionPreferences = sessionPreferences,
+                            basePreferences = preferences,
+                            convertAudio = convert,
+                        )
+                },
                 splitByChapter = sessionSplitByChapter,
                 onSplitByChapterChange = { sessionSplitByChapter = it },
                 onPreferencesChange = { sessionPreferences = it },
@@ -884,10 +926,8 @@ private fun AdditionalSettings(
                 enabled = selectedType != Command,
                 onClick = {
                     if (isQuickDownload) {
-                        COOKIES.updateBoolean(!cookies)
-                        onPreferencesChange(
-                            DownloadUtil.DownloadPreferences.createFromPreferences()
-                        )
+                        // This sheet's copy only: Settings keeps its own default.
+                        onPreferencesChange(preference.copy(cookies = !cookies))
                     } else {
                         showCookiesDialog = true
                     }
@@ -964,13 +1004,35 @@ private fun AdditionalSettings(
                 onCookieProfileClicked = { onNavigateToCookieGeneratorPage(it.url) },
                 isCookiesEnabled = cookies,
                 onCookiesToggled = {
-                    COOKIES.updateBoolean(!cookies)
+                    // Keep cookie override strictly scoped to this session.
                     onPreferencesChange(preference.copy(cookies = !cookies))
                 },
             )
         }
     }
 }
+
+internal fun resolveSessionConvertAudio(
+    selectedType: DownloadType?,
+    override: Boolean?,
+    settingsConvertAudio: Boolean,
+): Boolean {
+    if (!FormatSelectionPolicy.showsAudioConversion(selectedType)) return false
+    return override
+        ?: FormatSelectionPolicy
+            .sessionOptions(selectedType, settingsConvertAudio)
+            .convertAudio
+}
+
+internal fun applySessionAudioConvertChip(
+    sessionPreferences: DownloadUtil.DownloadPreferences,
+    basePreferences: DownloadUtil.DownloadPreferences,
+    convertAudio: Boolean,
+): DownloadUtil.DownloadPreferences =
+    sessionPreferences.copy(
+        audioConvertFormat =
+            if (convertAudio) CONVERT_MP3 else basePreferences.audioConvertFormat
+    )
 
 @Composable
 fun ExpandableTitle(

@@ -6,6 +6,7 @@ import androidx.compose.ui.res.stringResource
 import com.junkfood.seal.R
 import com.junkfood.seal.download.CompletedNote
 import com.junkfood.seal.download.ErrorReason
+import com.junkfood.seal.download.PostProcessing
 import com.junkfood.seal.download.Task.DownloadState
 import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Error
@@ -101,3 +102,87 @@ fun cookieRowRes(status: CookieFileStatus): Int =
         !status.parseable -> R.string.cookies_row_unparseable
         else -> R.string.cookies_row_entries
     }
+
+private val YT_DLP_PROGRESS_REGEX =
+    Regex(
+        """\[download]\s+(?:\d+(?:\.\d+)?%\s+of\s+~?\s*)?([0-9.]+\s*[KMGTP]?i?B)(?:\s+in\s+\S+)?(?:\s+at\s+([0-9.]+\s*[KMGTP]?i?B/s|Unknown\s+B/s))?(?:\s+ETA\s+(\S+))?""",
+        RegexOption.IGNORE_CASE,
+    )
+
+private val ARIA2_PROGRESS_REGEX =
+    Regex(
+        """\[#[0-9a-f]+\s+([0-9.]+\s*[KMGTP]?i?B/[0-9.]+\s*[KMGTP]?i?B)\([^)]*\).*?DL:([0-9.]+\s*[KMGTP]?i?B)(?:\s+ETA:([^\]]+))?]""",
+        RegexOption.IGNORE_CASE,
+    )
+
+private val NM3U8_STATS_REGEX =
+    Regex(
+        """([0-9.]+\s*[KMGTP]?i?B\s*/\s*[0-9.]+\s*[KMGTP]?i?B)(?:\s+([0-9.]+\s*[KMGTP]?i?B/s))?(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?""",
+        RegexOption.IGNORE_CASE,
+    )
+
+/**
+ * Crisp single-line transfer summary (engine, bytes, speed, ETA) extracted from
+ * [DownloadState.Running.progressText]. Returns null for blank text,
+ * post-processing log lines, or non-transfer chatter such as file paths.
+ */
+fun runningTransferLine(progressText: String): String? {
+    val line = progressText.lineSequence().lastOrNull { it.isNotBlank() }?.trim() ?: return null
+    if (PostProcessing.inProgress(line)) return null
+
+    if (line.startsWith("Ghost:", ignoreCase = true)) {
+        return line.replace(" • ", " · ")
+    }
+
+    if (line.startsWith("N_m3u8DL-RE:", ignoreCase = true)) {
+        val body = line.substringAfter(':').trim()
+        val match = NM3U8_STATS_REGEX.find(body)
+        if (match != null) {
+            val bytes = match.groupValues[1].replace(Regex("\\s+"), "")
+            val speed = match.groupValues[2].trim().takeIf { it.isNotEmpty() }
+            val eta = match.groupValues[3].trim().takeIf { it.isNotEmpty() }
+            return buildList {
+                    add("N_m3u8DL-RE")
+                    add(bytes)
+                    if (speed != null) add(speed)
+                    if (eta != null) add("ETA $eta")
+                }
+                .joinToString(" · ")
+        }
+        return if (body.isNotEmpty()) "N_m3u8DL-RE · $body" else null
+    }
+
+    ARIA2_PROGRESS_REGEX.find(line)?.let { match ->
+        val bytes = match.groupValues[1].trim()
+        val speed = "${match.groupValues[2].trim()}/s"
+        val eta = match.groupValues[3].trim().takeIf { it.isNotEmpty() }
+        return buildList {
+                add("aria2c")
+                add(bytes)
+                add(speed)
+                if (eta != null) add("ETA $eta")
+            }
+            .joinToString(" · ")
+    }
+
+    YT_DLP_PROGRESS_REGEX.find(line)?.let { match ->
+        val size = match.groupValues[1].replace(Regex("\\s+"), "")
+        val speed =
+            match.groupValues[2]
+                .replace(Regex("\\s+"), "")
+                .takeIf { it.isNotEmpty() && !it.startsWith("Unknown", ignoreCase = true) }
+        val eta =
+            match.groupValues[3]
+                .trim()
+                .takeIf { it.isNotEmpty() && !it.equals("Unknown", ignoreCase = true) }
+        return buildList {
+                add("yt-dlp")
+                add(size)
+                if (speed != null) add(speed)
+                if (eta != null) add("ETA $eta")
+            }
+            .joinToString(" · ")
+    }
+
+    return null
+}

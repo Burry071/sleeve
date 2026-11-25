@@ -27,11 +27,23 @@ import com.google.accompanist.web.AccompanistWebViewClient
 import com.google.accompanist.web.WebView
 import com.google.accompanist.web.rememberWebViewState
 import com.google.android.material.R
-import com.junkfood.seal.util.PreferenceUtil.updateString
-import com.junkfood.seal.util.USER_AGENT_STRING
 import com.junkfood.seal.util.connectWithDelimiter
 
 private const val TAG = "WebViewPage"
+
+private val ALLOWED_WEBVIEW_SCHEMES = setOf("http", "https")
+
+internal fun isAllowedWebViewScheme(scheme: String?): Boolean =
+    scheme?.lowercase() in ALLOWED_WEBVIEW_SCHEMES
+
+internal fun isAllowedWebViewUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val trimmed = url.trim()
+    val schemeEnd = trimmed.indexOf("://")
+    if (schemeEnd <= 0) return false
+    val scheme = trimmed.substring(0, schemeEnd)
+    return isAllowedWebViewScheme(scheme)
+}
 
 data class Cookie(
     val domain: String = "",
@@ -84,7 +96,8 @@ fun WebViewPage(cookiesViewModel: CookiesViewModel, onDismissRequest: () -> Unit
 
     val cookieManager = CookieManager.getInstance()
     val cookieSet = remember { mutableSetOf<Cookie>() }
-    val websiteUrl = state.editingCookieProfile.url
+    val websiteUrl =
+        state.editingCookieProfile.url.trim().takeIf { isAllowedWebViewUrl(it) } ?: "about:blank"
     val webViewState = rememberWebViewState(websiteUrl)
 
     Scaffold(
@@ -119,7 +132,7 @@ fun WebViewPage(cookiesViewModel: CookiesViewModel, onDismissRequest: () -> Unit
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean {
-                    return if (request?.url?.scheme?.contains("http") == true)
+                    return if (isAllowedWebViewScheme(request?.url?.scheme))
                         super.shouldOverrideUrlLoading(view, request)
                     else true
                 }
@@ -138,7 +151,8 @@ fun WebViewPage(cookiesViewModel: CookiesViewModel, onDismissRequest: () -> Unit
                         javaScriptCanOpenWindowsAutomatically = true
                         javaScriptEnabled = true
                         domStorageEnabled = true
-                        USER_AGENT_STRING.updateString(userAgentString)
+                        allowFileAccess = false
+                        allowContentAccess = false
                     }
                     cookieManager.setAcceptThirdPartyCookies(this, true)
                 }

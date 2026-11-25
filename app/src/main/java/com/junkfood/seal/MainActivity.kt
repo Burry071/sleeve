@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import com.junkfood.seal.ui.common.LocalDarkTheme
+import com.junkfood.seal.ui.common.Route
 import com.junkfood.seal.ui.common.SettingsProvider
 import com.junkfood.seal.ui.page.AppEntry
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel
@@ -63,9 +64,11 @@ class MainActivity : AppCompatActivity() {
     // Single-instance launch mode delivers a cold-start share intent to
     // onCreate, so both entry points must route through the same handler.
     private fun handleIntent(intent: Intent) {
-        intent.getStringExtra(NotificationUtil.EXTRA_OPEN_ROUTE)?.let { route ->
+        intent.getStringExtra(NotificationUtil.EXTRA_OPEN_ROUTE)?.let { rawRoute ->
             intent.removeExtra(NotificationUtil.EXTRA_OPEN_ROUTE)
-            dialogViewModel.requestRoute(route)
+            allowedExternalRouteOrNull(rawRoute)?.let { safeRoute ->
+                dialogViewModel.requestRoute(safeRoute)
+            }
             return
         }
         intent.getStringExtra(NotificationUtil.EXTRA_REVIEW_BATCH_ID)?.let { batchId ->
@@ -110,5 +113,29 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+
+        private val ALLOWED_EXTERNAL_ROUTES: Set<String> =
+            setOf(
+                Route.HOME,
+                Route.DOWNLOADS,
+                Route.TASK_LIST,
+                Route.SETTINGS,
+                Route.SETTINGS_PAGE,
+                Route.ABOUT,
+                Route.APPEARANCE,
+                Route.CREDITS,
+                Route.DARK_THEME,
+                Route.DOWNLOAD_DIRECTORY,
+                Route.DOWNLOAD_FORMAT,
+                Route.GENERAL_DOWNLOAD_PREFERENCES,
+                Route.INTERACTION,
+                Route.LANGUAGES,
+                Route.NETWORK_PREFERENCES,
+                Route.SUBTITLE_PREFERENCES,
+                Route.TROUBLESHOOTING,
+            )
+
+        internal fun allowedExternalRouteOrNull(route: String?): String? =
+            route?.takeIf { it in ALLOWED_EXTERNAL_ROUTES }
     }
 }

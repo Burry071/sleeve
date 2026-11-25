@@ -7,9 +7,24 @@ import com.junkfood.seal.util.AUDIO_FILE_EXTENSIONS
 import com.junkfood.seal.util.AudioVerify
 import com.junkfood.seal.util.DirectMediaRules
 import com.junkfood.seal.util.M4bExportResult
+import com.junkfood.seal.util.M4bTags
+import com.junkfood.seal.util.ProcessRunResult
 import com.junkfood.seal.util.VideoInfo
+import com.junkfood.seal.util.buildFfmpegArgs
+import com.junkfood.seal.util.estimatedOutputBytes
+import com.junkfood.seal.util.requiredFreeBytesForExport
 import com.junkfood.seal.util.runExportGuarded
+import com.junkfood.seal.util.runProcessCancellable
+import com.junkfood.seal.util.runWithCopyFallback
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -20,7 +35,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * Chapters arrive as float seconds in the resolved extractor's `chapters[]`;
@@ -193,5 +210,176 @@ class M4bExportGuardTest {
         job.join()
 
         assertTrue(cleaned)
+    }
+}
+
+class M4bHardeningTest {
+
+    @get:Rule val tmp = TemporaryFolder()
+
+    private class FakeProcess(
+        output: String = "",
+        private val code: Int = 0,
+        private val latch: CountDownLatch = CountDownLatch(0),
+    ) : Process() {
+        private val alive = AtomicBoolean(latch.count > 0)
+        val forciblyDestroyed = AtomicBoolean(false)
+        private val input = ByteArrayInputStream(output.toByteArray(Charsets.UTF_8))
+        private val err = ByteArrayInputStream(ByteArray(0))
+        private val out = ByteArrayOutputStream()
+
+        override fun getOutputStream(): OutputStream = out
+
+        override fun getInputStream(): InputStream = input
+
+        override fun getErrorStream(): InputStream = err
+
+        override fun waitFor(): Int {
+            latch.await()
+            alive.set(false)
+            return code
+        }
+
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean {
+            val done = latch.await(timeout, unit)
+            if (done) alive.set(false)
+            return done
+        }
+
+        override fun exitValue(): Int {
+            if (alive.get()) throw IllegalThreadStateException("process still alive")
+            return code
+        }
+
+        override fun isAlive(): Boolean = alive.get()
+
+        override fun destroy() {
+            alive.set(false)
+            latch.countDown()
+        }
+
+        override fun destroyForcibly(): Process {
+            forciblyDestroyed.set(true)
+            destroy()
+            return this
+        }
+    }
+
+    @Test
+    fun `free space check does not double-count source length already on disk`() {
+        val source = tmp.newFile("book.m4a").apply { writeBytes(ByteArray(1_000_000)) }
+
+        val copyRequired = requiredFreeBytesForExport(source, copyAudio = true, durationMs = 60_000L)
+        assertEquals(estimatedOutputBytes(source, copyAudio = true, durationMs = 60_000L), copyRequired)
+        assertEquals(1_050_000L, copyRequired)
+
+        val transcodeRequired =
+            requiredFreeBytesForExport(source, copyAudio = false, durationMs = 10_000L)
+        assertEquals(
+            estimatedOutputBytes(source, copyAudio = false, durationMs = 10_000L),
+            transcodeRequired,
+        )
+        assertEquals(184_000L, transcodeRequired)
+    }
+
+    @Test
+    fun `running process is forcibly destroyed when cancelled mid-flight`() {
+        val latch = CountDownLatch(1)
+        val proc = FakeProcess(latch = latch)
+        val checks = AtomicInteger(0)
+
+        val result =
+            runProcessCancellable(
+                startProcess = { proc },
+                // Active before launch and on first poll, cancelled on next poll.
+                isActive = { checks.incrementAndGet() <= 2 },
+                pollIntervalMs = 10L,
+            )
+
+        assertEquals(ProcessRunResult.Cancelled, result)
+        assertTrue(proc.forciblyDestroyed.get())
+        assertFalse(proc.isAlive)
+    }
+
+    @Test
+    fun `process output draining caps retained tail buffer`() {
+        val largeOutput = (1..2000).joinToString("") { "x" } + "END_MARKER"
+        val proc = FakeProcess(output = largeOutput, code = 0)
+
+        val result =
+            runProcessCancellable(
+                startProcess = { proc },
+                isActive = { true },
+                pollIntervalMs = 10L,
+                maxTailChars = 64,
+            )
+
+        val exited = result as ProcessRunResult.Exited
+        assertEquals(0, exited.exitCode)
+        assertEquals(64, exited.outputTail.length)
+        assertTrue(exited.outputTail.endsWith("END_MARKER"))
+    }
+
+    @Test
+    fun `stream copy failure falls back once to AAC transcode`() {
+        val scratch = File(tmp.root, "book.m4b.tmp")
+        val attempts = mutableListOf<Boolean>()
+
+        val result =
+            runWithCopyFallback(
+                copyAudio = true,
+                scratch = scratch,
+                isActive = { true },
+            ) { useCopy ->
+                attempts.add(useCopy)
+                if (useCopy) {
+                    scratch.writeBytes(byteArrayOf(1, 2))
+                    ProcessRunResult.Exited(1, "opus not supported in ipod container")
+                } else {
+                    assertFalse("stale scratch must be cleared before fallback", scratch.exists())
+                    scratch.writeBytes(byteArrayOf(1, 2, 3, 4))
+                    ProcessRunResult.Exited(0, "")
+                }
+            }
+
+        assertEquals(listOf(true, false), attempts)
+        val exited = result as ProcessRunResult.Exited
+        assertEquals(0, exited.exitCode)
+        assertTrue(scratch.isFile && scratch.length() == 4L)
+    }
+
+    @Test
+    fun `cancelled stream copy deletes scratch and does not retry AAC`() {
+        val scratch = File(tmp.root, "cancelled.m4b.tmp")
+        val attempts = mutableListOf<Boolean>()
+
+        val result =
+            runWithCopyFallback(
+                copyAudio = true,
+                scratch = scratch,
+                isActive = { false },
+            ) { useCopy ->
+                attempts.add(useCopy)
+                scratch.writeBytes(byteArrayOf(9, 9))
+                ProcessRunResult.Cancelled
+            }
+
+        assertEquals(listOf(true), attempts)
+        assertEquals(ProcessRunResult.Cancelled, result)
+        assertFalse(scratch.exists())
+    }
+
+    @Test
+    fun `ffmpeg args switch codec between copy and AAC transcode`() {
+        val tags = M4bTags(title = "Dune", artist = "Frank Herbert", albumArtist = "", album = "", track = 1)
+        val copyArgs =
+            buildFfmpegArgs("/lib/libffmpeg.so", "/in.m4a", "/meta.txt", "/out.m4b.tmp", tags, copyAudio = true)
+        val aacArgs =
+            buildFfmpegArgs("/lib/libffmpeg.so", "/in.m4a", "/meta.txt", "/out.m4b.tmp", tags, copyAudio = false)
+
+        assertTrue(copyArgs.contains("copy"))
+        assertFalse(copyArgs.contains("aac"))
+        assertTrue(aacArgs.contains("aac"))
+        assertTrue(aacArgs.contains("128k"))
     }
 }

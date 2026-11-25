@@ -100,7 +100,9 @@ import com.junkfood.seal.ui.page.download.VideoSelectionSlider
 import com.junkfood.seal.ui.page.settings.general.DialogCheckBoxItem
 import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.ui.theme.generateLabelColor
+import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.Chapter
+import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.EMBED_SUBTITLE
 import com.junkfood.seal.util.Format
 import com.junkfood.seal.util.FormatSelectionPolicy
@@ -132,11 +134,45 @@ private data class FormatConfig(
     val videoClips: List<VideoClip>,
     val splitByChapter: Boolean,
     val convertAudio: Boolean,
+    val forceMp3: Boolean,
     val newTitle: String,
     val selectedSubtitles: List<String>,
     val selectedAutoCaptions: List<String>,
     val suggested: Boolean,
 )
+
+internal data class PartitionedFormats(
+    val videoOnly: List<Format>,
+    val audioOnly: List<Format>,
+    val videoAudio: List<Format>,
+)
+
+/**
+ * Splits [formats] using [Format.isAudioOnly], [Format.isVideoOnly], and
+ * [Format.containsVideo] so DASH streams whose absent codec is `null` or
+ * `"unknown"` (e.g., Instagram Reels video-only tracks) land in [PartitionedFormats.videoOnly]
+ * and auto-pair with audio instead of being misclassified as muxed video.
+ */
+internal fun partitionFormats(formats: List<Format>): PartitionedFormats {
+    val videoOnly = mutableListOf<Format>()
+    val audioOnly = mutableListOf<Format>()
+    val videoAudio = mutableListOf<Format>()
+    for (format in formats) {
+        when {
+            format.isAudioOnly() -> audioOnly.add(format)
+            format.containsVideo() && format.isVideoOnly() -> videoOnly.add(format)
+            format.containsVideo() -> videoAudio.add(format)
+        }
+    }
+    return PartitionedFormats(
+        videoOnly = videoOnly.reversed(),
+        audioOnly = audioOnly.reversed(),
+        videoAudio = videoAudio.reversed(),
+    )
+}
+
+internal fun initialSuggestedSelected(audioOnly: Boolean, suggestedFormats: List<Format>): Boolean =
+    !audioOnly && suggestedFormats.isNotEmpty()
 
 @Composable
 fun FormatPage(
@@ -145,21 +181,22 @@ fun FormatPage(
     audioOnly: Boolean = false,
     splitByChapter: Boolean = false,
     convertAudio: Boolean = false,
+    basePreferences: DownloadUtil.DownloadPreferences =
+        DownloadUtil.DownloadPreferences.createFromPreferences(),
     downloader: DownloaderV2 = koinInject(),
     onNavigateBack: () -> Unit = {},
 ) {
     if (videoInfo.formats.isNullOrEmpty()) return
     val mergeAudioStream = MERGE_MULTI_AUDIO_STREAM.getBoolean()
-    val subtitleLanguageRegex = SUBTITLE_LANGUAGE.getString()
-    val downloadSubtitle = SUBTITLE.getBoolean()
-    val initialSelectedSubtitles =
-        if (downloadSubtitle) {
-            videoInfo
-                .run { subtitles.keys + automaticCaptions.keys }
-                .filterWithRegex(subtitleLanguageRegex)
-        } else {
-            emptySet()
-        }
+    val subtitleLanguageRegex = basePreferences.subtitleLanguage.ifBlank { SUBTITLE_LANGUAGE.getString() }
+    val downloadSubtitle = basePreferences.downloadSubtitle
+    val initialSubtitles =
+        SubtitleSelectionPolicy.initialSelection(
+            subtitles = videoInfo.subtitles,
+            autoCaptions = videoInfo.automaticCaptions,
+            enabled = downloadSubtitle,
+            patterns = subtitleLanguageRegex,
+        )
 
     var showUpdateSubtitleDialog by remember { mutableStateOf(false) }
 
@@ -174,7 +211,8 @@ fun FormatPage(
         initialSplitByChapter = splitByChapter,
         initialConvertAudio = convertAudio,
         mergeAudioStream = !audioOnly && mergeAudioStream,
-        selectedSubtitleCodes = initialSelectedSubtitles,
+        selectedSubtitleCodes = initialSubtitles.subtitles.toSet(),
+        selectedAutoCaptionCodes = initialSubtitles.autoCaptions.toSet(),
         isClippingAvailable =
             FormatSelectionPolicy.clippingAvailable(VIDEO_CLIP.getBoolean(), videoInfo.duration),
     ) { config ->
@@ -184,6 +222,10 @@ fun FormatPage(
                     (selectedSubtitles + selectedAutoCaptions)
                         .run { this - this.filterWithRegex(subtitleLanguageRegex) }
                         .toSet()
+
+                val effectivePreferences =
+                    if (forceMp3) basePreferences.copy(audioConvertFormat = CONVERT_MP3)
+                    else basePreferences
 
                 downloader.enqueue(
                     TaskFactory.createWithConfigurations(
@@ -197,6 +239,7 @@ fun FormatPage(
                         selectedAutoCaptions = selectedAutoCaptions,
                         audioOnly = audioOnly,
                         suggested = suggested,
+                        basePreferences = effectivePreferences,
                     )
                 )
 
@@ -319,48 +362,53 @@ private fun FormatPageImpl(
     mergeAudioStream: Boolean = false,
     isClippingAvailable: Boolean = false,
     selectedSubtitleCodes: Set<String>,
+    selectedAutoCaptionCodes: Set<String> = emptySet(),
     onNavigateBack: () -> Unit = {},
     onDownloadPressed: (FormatConfig) -> Unit = { _ -> },
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     if (videoInfo.formats.isNullOrEmpty()) return
-    val videoOnlyFormats =
-        videoInfo.formats.filter { it.vcodec != "none" && it.acodec == "none" }.reversed()
-    val audioOnlyFormats =
-        videoInfo.formats.filter { it.acodec != "none" && it.vcodec == "none" }.reversed()
-    val videoAudioFormats =
-        videoInfo.formats.filter { it.acodec != "none" && it.vcodec != "none" }.reversed()
+    val partitioned = remember(videoInfo) { partitionFormats(videoInfo.formats) }
+    val videoOnlyFormats = partitioned.videoOnly
+    val audioOnlyFormats = partitioned.audioOnly
+    val videoAudioFormats = partitioned.videoAudio
 
     val duration = videoInfo.duration ?: 0.0
 
-    var videoOnlyItemLimit by remember { mutableIntStateOf(6) }
-    var audioOnlyItemLimit by remember { mutableIntStateOf(6) }
-    var videoAudioItemLimit by remember { mutableIntStateOf(6) }
+    var videoOnlyItemLimit by remember(videoInfo) { mutableIntStateOf(6) }
+    var audioOnlyItemLimit by remember(videoInfo) { mutableIntStateOf(6) }
+    var videoAudioItemLimit by remember(videoInfo) { mutableIntStateOf(6) }
 
     val suggestedFormats =
         remember(videoInfo, audioOnly) {
             FormatSelectionPolicy.suggestedFormats(videoInfo, audioOnly)
         }
 
-    val isSuggestedFormatAvailable = !audioOnly && suggestedFormats.isNotEmpty()
+    val isSuggestedFormatAvailable = initialSuggestedSelected(audioOnly, suggestedFormats)
 
-    // Starts on the suggested set whenever there is one, so the CTA is never stranded
-    // by an extractor that reports formats but no requestedFormats.
-    var isSuggestedFormatSelected by remember { mutableStateOf(suggestedFormats.isNotEmpty()) }
+    // Starts on the suggested set whenever the suggested card is actually shown,
+    // never in Audio -> Custom mode where the audio list owns the initial pick.
+    var isSuggestedFormatSelected by
+        remember(videoInfo, audioOnly) { mutableStateOf(isSuggestedFormatAvailable) }
 
-    var selectedVideoAudioFormat by remember { mutableIntStateOf(NOT_SELECTED) }
-    var selectedVideoOnlyFormat by remember { mutableIntStateOf(NOT_SELECTED) }
-    val selectedAudioOnlyFormats = remember {
-        mutableStateListOf<Int>().apply {
-            if (audioOnly) {
-                FormatSelectionPolicy.bestAudioIndex(audioOnlyFormats)
-                    .takeIf { it != NOT_SELECTED }
-                    ?.let(::add)
+    var selectedVideoAudioFormat by
+        remember(videoInfo, audioOnly) { mutableIntStateOf(NOT_SELECTED) }
+    var selectedVideoOnlyFormat by
+        remember(videoInfo, audioOnly) { mutableIntStateOf(NOT_SELECTED) }
+    val selectedAudioOnlyFormats =
+        remember(videoInfo, audioOnly) {
+            mutableStateListOf<Int>().apply {
+                if (audioOnly) {
+                    FormatSelectionPolicy.bestAudioIndex(audioOnlyFormats)
+                        .takeIf { it != NOT_SELECTED }
+                        ?.let(::add)
+                }
             }
         }
-    }
-    var convertAudio by remember { mutableStateOf(initialConvertAudio) }
+    var convertAudio by
+        remember(videoInfo, audioOnly, initialConvertAudio) { mutableStateOf(initialConvertAudio) }
+    var mp3ChipTapped by remember(videoInfo, audioOnly) { mutableStateOf(false) }
     val audioFallback = audioOnly && audioOnlyFormats.isEmpty()
     val context = LocalContext.current
 
@@ -383,9 +431,11 @@ private fun FormatPageImpl(
             )
         }
 
-    var isClippingVideo by remember { mutableStateOf(false) }
+    var isClippingVideo by remember(videoInfo) { mutableStateOf(false) }
     // The sheet's split chip seeds this session's value; the toggle here can still change it.
-    var isSplittingVideo by remember { mutableStateOf(initialSplitByChapter) }
+    var isSplittingVideo by remember(videoInfo, initialSplitByChapter) {
+        mutableStateOf(initialSplitByChapter)
+    }
     val isSplitByChapterAvailable = !videoInfo.chapters.isNullOrEmpty()
 
     val videoDurationRange = 0f..(videoInfo.duration?.toFloat() ?: 0f)
@@ -393,8 +443,8 @@ private fun FormatPageImpl(
     var showRenameDialog by remember { mutableStateOf(false) }
     var showSubtitleSelectionDialog by remember { mutableStateOf(false) }
 
-    var videoClipDuration by remember { mutableStateOf(videoDurationRange) }
-    var videoTitle by remember { mutableStateOf("") }
+    var videoClipDuration by remember(videoInfo) { mutableStateOf(videoDurationRange) }
+    var videoTitle by remember(videoInfo) { mutableStateOf("") }
 
     val suggestedSubtitleMap: Map<String, List<SubtitleFormat>> =
         videoInfo.subtitles.takeIf { it.isNotEmpty() }
@@ -410,27 +460,32 @@ private fun FormatPageImpl(
 
     val lazyGridState = rememberLazyGridState()
 
-    val formatList: List<Format> by remember(suggestedFormats) {
-        derivedStateOf {
-            mutableListOf<Format>().apply {
-                if (isSuggestedFormatSelected) {
-                    addAll(suggestedFormats)
-                } else {
-                    selectedAudioOnlyFormats.forEach { index ->
-                        add(audioOnlyFormats.elementAt(index))
+    val formatList: List<Format> by
+        remember(videoInfo, audioOnly, suggestedFormats) {
+            derivedStateOf {
+                mutableListOf<Format>().apply {
+                    if (isSuggestedFormatSelected) {
+                        addAll(suggestedFormats)
+                    } else {
+                        selectedAudioOnlyFormats.forEach { index ->
+                            audioOnlyFormats.getOrNull(index)?.let { add(it) }
+                        }
+                        videoAudioFormats.getOrNull(selectedVideoAudioFormat)?.let { add(it) }
+                        videoOnlyFormats.getOrNull(selectedVideoOnlyFormat)?.let { add(it) }
                     }
-                    videoAudioFormats.getOrNull(selectedVideoAudioFormat)?.let { add(it) }
-                    videoOnlyFormats.getOrNull(selectedVideoOnlyFormat)?.let { add(it) }
                 }
             }
         }
-    }
 
-    val selectedSubtitles = remember {
-        mutableStateListOf<String>().apply { addAll(selectedSubtitleCodes) }
-    }
+    val selectedSubtitles =
+        remember(videoInfo, selectedSubtitleCodes) {
+            mutableStateListOf<String>().apply { addAll(selectedSubtitleCodes) }
+        }
 
-    val selectedAutoCaptions = remember { mutableStateListOf<String>() }
+    val selectedAutoCaptions =
+        remember(videoInfo, selectedAutoCaptionCodes) {
+            mutableStateListOf<String>().apply { addAll(selectedAutoCaptionCodes) }
+        }
 
     Scaffold(
         modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -472,6 +527,7 @@ private fun FormatPageImpl(
                                     splitByChapter =
                                         FormatSelectionPolicy.splitWithClips(isSplittingVideo, clips),
                                     convertAudio = convertAudio,
+                                    forceMp3 = convertAudio && mp3ChipTapped,
                                     newTitle = videoTitle,
                                     selectedSubtitles = selectedSubtitles,
                                     selectedAutoCaptions = selectedAutoCaptions,
@@ -725,12 +781,18 @@ private fun FormatPageImpl(
                         ) {
                             VideoFilterChip(
                                 selected = !convertAudio,
-                                onClick = { convertAudio = false },
+                                onClick = {
+                                    convertAudio = false
+                                    mp3ChipTapped = false
+                                },
                                 label = stringResource(R.string.audio_source_original),
                             )
                             VideoFilterChip(
                                 selected = convertAudio,
-                                onClick = { convertAudio = true },
+                                onClick = {
+                                    convertAudio = true
+                                    mp3ChipTapped = true
+                                },
                                 label = stringResource(R.string.audio_source_mp3),
                             )
                         }
@@ -1086,7 +1148,7 @@ private fun SubtitleSelectionDialog(
     val suggestedSubtitlesFiltered =
         suggestedSubtitles.filterWithSearchText(searchText).sortedWithSelection(selectedSubtitles)
     val autoCaptionsFiltered =
-        autoCaptions.filterWithSearchText(searchText).sortedWithSelection(selectedSubtitles)
+        autoCaptions.filterWithSearchText(searchText).sortedWithSelection(selectedAutoCaptions)
 
     SealDialog(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,

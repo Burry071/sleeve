@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -74,10 +75,26 @@ fun MatchReviewSheet(
     onAcceptAll: () -> Unit,
 ) {
     val flagged = remember(entries) { MatchOps.flaggedEntries(entries) }
-    val picks = remember(flagged) {
-        mutableStateMapOf<String, String>().apply {
-            flagged.forEach { (task, state) ->
-                state.match?.selectedUrl?.let { put(task.uiKey, it) }
+    val picks =
+        remember(batch.id) {
+            mutableStateMapOf<String, String>().apply {
+                flagged.forEach { (task, state) ->
+                    state.match?.selectedUrl?.let { put(task.uiKey, it) }
+                }
+            }
+        }
+    LaunchedEffect(flagged) {
+        val activeKeys = flagged.mapTo(mutableSetOf()) { it.first.uiKey }
+        picks.keys.toList().forEach { key -> if (key !in activeKeys) picks.remove(key) }
+        flagged.forEach { (task, state) ->
+            val match = state.match
+            val currentPick = picks[task.uiKey]
+            val candidateUrls = match?.candidates?.map { it.url }.orEmpty()
+            val pickStillValid = currentPick != null && currentPick in candidateUrls
+            if (match == null) {
+                picks.remove(task.uiKey)
+            } else if (match.phase == MatchPhase.SwapPending || !pickStillValid) {
+                picks[task.uiKey] = match.selectedUrl
             }
         }
     }
@@ -91,6 +108,7 @@ fun MatchReviewSheet(
     var results by remember { mutableStateOf<List<SwapResult>>(emptyList()) }
     var applyFailed by remember { mutableStateOf(false) }
     var searchFailedFor by remember { mutableStateOf<String?>(null) }
+    var searchingKeys by remember { mutableStateOf(emptySet<String>()) }
     // One paste field and one query field per row, keyed by the row's stable
     // list key: two held songs in one batch must never share either.
     val pastedLinks = remember(flagged) { mutableStateMapOf<String, String>() }
@@ -132,8 +150,9 @@ fun MatchReviewSheet(
     fun searchRow(task: Task) {
         val track = task.type as? Task.TypeInfo.MetadataTrack ?: return
         val query = (queries[task.uiKey] ?: metadataQuery(track)).trim()
-        if (query.isBlank() || running) return
-        searchFailedFor = null
+        if (query.isBlank() || running || task.uiKey in searchingKeys) return
+        if (searchFailedFor == task.uiKey) searchFailedFor = null
+        searchingKeys = searchingKeys + task.uiKey
         scope.launch {
             try {
                 if (!onSearchAgain(task, query)) searchFailedFor = task.uiKey
@@ -141,6 +160,8 @@ fun MatchReviewSheet(
                 throw e
             } catch (_: Throwable) {
                 searchFailedFor = task.uiKey
+            } finally {
+                searchingKeys = searchingKeys - task.uiKey
             }
         }
     }
@@ -334,6 +355,8 @@ fun MatchReviewSheet(
                                             } else {
                                                 applyFailed = true
                                             }
+                                        } catch (e: CancellationException) {
+                                            throw e
                                         } catch (_: Throwable) {
                                             applyFailed = true
                                         } finally {
@@ -403,7 +426,8 @@ fun MatchReviewSheet(
                         // problems, so every field below is keyed by this
                         // row: typing a link or terms never leaks to another.
                         val track = task.type as? Task.TypeInfo.MetadataTrack
-                        val busy = running || pending
+                        val rowSearching = task.uiKey in searchingKeys
+                        val busy = running || pending || rowSearching
                         if (match.parts.isEmpty()) {
                             Text(
                                 text = stringResource(R.string.match_paste_link_hint),
@@ -456,7 +480,14 @@ fun MatchReviewSheet(
                                     onClick = { searchRow(task) },
                                     enabled = !busy && queryValue.isNotBlank(),
                                 ) {
-                                    Text(stringResource(R.string.match_search_again))
+                                    if (rowSearching) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                    } else {
+                                        Text(stringResource(R.string.match_search_again))
+                                    }
                                 }
                             }
                             if (searchFailedFor == task.uiKey) {
@@ -540,11 +571,10 @@ fun MatchReviewSheet(
                 Text(stringResource(R.string.accept_all))
             }
             Spacer(modifier = Modifier.width(8.dp))
-            // Once a swap is queued the row is no longer flagged, so the apply
-            // button would sit there disabled; Done is the exit that matches
-            // the finished state.
-            val queued = results.any { it.outcome == SwapOutcome.Queued }
-            if (queued) {
+            // Only switch to Done when a swap succeeded and no remaining
+            // flagged selection is queued to swap; picking another flagged row
+            // immediately re-arms Apply swaps so multi-row batches are never locked out.
+            if (showDonePrimaryCta(results = results, pendingSwapsCount = swaps.size, running = running)) {
                 Button(onClick = onDismissRequest) { Text(stringResource(R.string.done)) }
             } else {
                 Button(onClick = { applySwaps() }, enabled = swaps.isNotEmpty() && !running) {
@@ -561,6 +591,18 @@ fun MatchReviewSheet(
         }
     }
 }
+
+/**
+ * True when the primary CTA should switch to "Done": at least one swap was
+ * queued, no apply is currently running, and the user has no remaining pending
+ * swap selections waiting to be applied.
+ */
+internal fun showDonePrimaryCta(
+    results: List<SwapResult>,
+    pendingSwapsCount: Int,
+    running: Boolean,
+): Boolean =
+    !running && pendingSwapsCount == 0 && results.any { it.outcome == SwapOutcome.Queued }
 
 /** One user-safe line per song; the reason stays short by contract. */
 @Composable
