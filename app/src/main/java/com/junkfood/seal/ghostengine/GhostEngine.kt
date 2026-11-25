@@ -3,6 +3,7 @@ package com.junkfood.seal.ghostengine
 import android.content.Context
 import com.junkfood.seal.pythonbridge.AudibleBridge
 import com.junkfood.seal.pythonbridge.ChaquopyGateway
+import com.junkfood.seal.pythonbridge.GalleryBridge
 import com.junkfood.seal.pythonbridge.GhostSegmentedBridge
 import com.junkfood.seal.pythonbridge.SpotifyBridge
 import kotlinx.coroutines.flow.StateFlow
@@ -53,6 +54,19 @@ object GhostEngine {
 
     val progressFlow: StateFlow<EngineProgress?> = GhostSegmentedBridge.progressFlow
 
+    /** Aggregate per-task progress map keyed by engine task id. */
+    val allProgressFlow: StateFlow<Map<String, EngineProgress>> =
+        GhostSegmentedBridge.allProgressFlow
+
+    /** Dedicated progress stream for [taskId], isolated from concurrent transfers. */
+    fun progressFlowFor(taskId: String): StateFlow<EngineProgress?> =
+        GhostSegmentedBridge.progressFlowFor(taskId)
+
+    /** Remove a finished or cancelled task from tracked progress flows. */
+    fun clearProgress(taskId: String) {
+        GhostSegmentedBridge.clearProgress(taskId)
+    }
+
     /** Enqueue a resolved direct URL. Returns the engine task id. */
     suspend fun download(
         url: String,
@@ -64,10 +78,10 @@ object GhostEngine {
         GhostSegmentedBridge.download(url, headers, outputDir, fileName, subworkerCount)
 
     /**
-     * Poll engine progress into [progressFlow] until the task settles, and
-     * return that terminal snapshot.
+     * Poll engine progress into [progressFlowFor] (and legacy [progressFlow])
+     * until the task settles, and return that terminal snapshot.
      *
-     * The return value — never [progressFlow] — is the caller's verdict. When
+     * The return value — never a shared flow — is the caller's verdict. When
      * the engine cannot be read after its retry budget, an ERROR snapshot for
      * [taskId] is returned instead of null.
      */
@@ -182,26 +196,26 @@ object GhostEngine {
     )
 
     /** True when a gallery-dl site module claims this URL. Loads lazily; call on IO. */
-    fun galleryMatches(url: String): Boolean = GhostSegmentedBridge.galleryMatches(url)
+    fun galleryMatches(url: String): Boolean = GalleryBridge.galleryMatches(url)
 
     /**
      * Preload the gallery-dl extractor registry once per install (cold import
      * of ~300 site modules) and surface any import error to the log.
      */
     fun preloadGallery() {
-        GhostSegmentedBridge.preloadGallery()
+        GalleryBridge.preloadGallery()
     }
 
     /** Resolve a page into direct media items (image sites, albums, sniffed pages). */
     fun galleryResolve(url: String, cookiesFile: String = ""): Result<Pair<String, List<GalleryItem>>> =
-        GhostSegmentedBridge.galleryResolve(url, cookiesFile)
+        GalleryBridge.galleryResolve(url, cookiesFile)
 
     /** Anonymous Instagram fallback: public post/reel embed page. */
     fun instagramEmbed(url: String): Result<List<GalleryItem>> =
-        GhostSegmentedBridge.instagramEmbed(url)
+        GalleryBridge.instagramEmbed(url)
 
     /** Last-resort HTML pass: og:video / twitter:player:stream / video src / m3u8+mpd. */
-    fun sniffMedia(url: String): Result<List<GalleryItem>> = GhostSegmentedBridge.sniffMedia(url)
+    fun sniffMedia(url: String): Result<List<GalleryItem>> = GalleryBridge.sniffMedia(url)
 
     /**
      * Quality-ranked candidate picking (spotDL-adapted scoring): name/artist

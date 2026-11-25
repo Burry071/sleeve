@@ -2,7 +2,6 @@ package com.junkfood.seal.ui.page.downloadv2
 
 import android.Manifest
 import android.content.Intent
-import android.content.res.Configuration
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.AnimationState
@@ -76,14 +75,12 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -128,7 +125,6 @@ import com.junkfood.seal.download.SwapResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.TaskKind
 import com.junkfood.seal.download.phase
-import com.junkfood.seal.download.Task.DownloadState.Canceled
 import com.junkfood.seal.download.Task.DownloadState.Completed
 import com.junkfood.seal.download.Task.DownloadState.Error
 import com.junkfood.seal.download.Task.DownloadState.FetchingInfo
@@ -155,12 +151,10 @@ import com.junkfood.seal.ui.page.downloadv2.configure.MetadataTracksPage
 import com.junkfood.seal.ui.page.downloadv2.configure.PendingMetered
 import com.junkfood.seal.ui.page.downloadv2.configure.PendingMeteredDialog
 import com.junkfood.seal.ui.page.downloadv2.configure.PlaylistSelectionPage
-import com.junkfood.seal.ui.page.downloadv2.configure.PreferencesMock
 import com.junkfood.seal.ui.page.downloadv2.configure.dialogScreen
 import com.junkfood.seal.ui.page.downloadv2.configure.startsDownload
 import com.junkfood.seal.ui.page.download.NotificationPermissionDialog
 import com.junkfood.seal.ui.svg.drawablevectors.download
-import com.junkfood.seal.ui.theme.SealTheme
 import com.junkfood.seal.util.DownloadErrorMessages
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
@@ -172,10 +166,7 @@ import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.getErrorReport
 import com.junkfood.seal.util.makeToast
 import com.junkfood.seal.util.retainedShareCandidate
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -332,7 +323,9 @@ fun DownloadPageV2(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 NetworkPolicy.refreshCanStart()
-                preferences = DownloadUtil.DownloadPreferences.createFromPreferences()
+                val latest = DownloadUtil.DownloadPreferences.createFromPreferences()
+                preferences = latest
+                dialogViewModel.updateConfigureSession { it.withBasePreferences(latest) }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -451,6 +444,7 @@ fun DownloadPageV2(
 
     val sheetValue by dialogViewModel.sheetValueFlow.collectAsStateWithLifecycle()
     val state by dialogViewModel.sheetStateFlow.collectAsStateWithLifecycle()
+    val configureSession by dialogViewModel.configureSessionFlow.collectAsStateWithLifecycle()
 
     val selectionState = dialogViewModel.selectionStateFlow.collectAsStateWithLifecycle().value
 
@@ -492,7 +486,12 @@ fun DownloadPageV2(
             sheetState = sheetState,
             config = Config(),
             preferences = preferences,
-            onPreferencesUpdate = { preferences = it },
+            onPreferencesUpdate = { updated ->
+                preferences = updated
+                dialogViewModel.updateConfigureSession { it.withBasePreferences(updated) }
+            },
+            configureSession = configureSession,
+            onConfigureSessionUpdate = dialogViewModel::updateConfigureSession,
             onActionPost = { postAction(it) },
         )
     }
@@ -1439,95 +1438,6 @@ private fun InterruptedRestoreHint(onDismiss: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
-        }
-    }
-}
-
-internal class DownloadPageV2Test {
-    private val mockDownloader =
-        object : DownloaderV2 {
-            private val map = mutableStateMapOf<Task, Task.State>()
-
-            init {
-                val viewState =
-                    Task.ViewState(title = "Sample title", uploader = "dummy video uploader")
-                val list =
-                    listOf(
-                        Task.State(Idle, null, viewState),
-                        Task.State(Canceled(Task.RestartableAction.Download), null, viewState),
-                        Task.State(Completed(null), null, viewState),
-                    )
-                map.run {
-                    repeat(9) {
-                        put(Task(url = "$it", preferences = PreferencesMock), list[it % 3])
-                    }
-                }
-                val scope = CoroutineScope(SupervisorJob())
-
-                scope.launch(Dispatchers.Default) {
-                    while (true) {
-                        delay(1000)
-                        val newEntries =
-                            map.toMap().map { (task, state) ->
-                                val newDownloadState =
-                                    when (state.downloadState) {
-                                        is Canceled -> Idle
-                                        is Completed -> Idle
-                                        is Error -> Idle
-                                        is FetchingInfo -> ReadyWithInfo
-                                        Idle -> FetchingInfo(Job(), task.id)
-                                        ReadyWithInfo -> Running(Job(), task.id)
-                                        is Running -> {
-                                            val preState: Running = state.downloadState
-                                            if (preState.progress >= 1f) Completed(null)
-                                            else preState.copy(progress = preState.progress + 0.1f)
-                                        }
-                                    }
-                                task to state.copy(downloadState = newDownloadState)
-                            }
-                        Snapshot.withMutableSnapshot {
-                            newEntries.forEach { (task, state) ->
-                                delay(100)
-                                map[task] = state
-                            }
-                        }
-                    }
-                }
-            }
-
-            override fun getTaskStateMap(): SnapshotStateMap<Task, Task.State> {
-                return map
-            }
-
-            override fun cancel(task: Task): Boolean {
-                return false
-            }
-
-            override fun restart(task: Task) {}
-
-            override fun enqueue(task: Task) {}
-
-            override fun enqueue(task: Task, state: Task.State) {}
-
-            override fun remove(task: Task): Boolean {
-                return true
-            }
-        }
-
-    @Composable
-    @Preview(name = "Light", uiMode = Configuration.UI_MODE_NIGHT_NO)
-    @Preview(name = "Tablet", device = "spec:width=600dp,height=800dp,dpi=240")
-    private fun Preview() {
-
-        val downloader: DownloaderV2 = mockDownloader
-        SealTheme {
-            Column() {
-                DownloadPageImplV2(
-                    taskDownloadStateMap = downloader.getTaskStateMap(),
-                    onActionPost = { task, state -> },
-                    onMenuOpen = {},
-                )
-            }
         }
     }
 }

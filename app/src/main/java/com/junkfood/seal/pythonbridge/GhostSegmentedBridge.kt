@@ -2,8 +2,8 @@ package com.junkfood.seal.pythonbridge
 
 import android.content.Context
 import android.util.Log
-import com.chaquo.python.Python
 import com.junkfood.seal.ghostengine.GhostEngine
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -13,15 +13,98 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 
 /**
- * Transfers and page resolution through `sleeve_engine.py`, which follows the
- * Ghost Downloader (GPL-3.0) task/step model.
+ * Thread-safe registry of per-task segmented transfer progress.
+ *
+ * Isolates each engine task in its own [StateFlow] so concurrent transfers
+ * never overwrite or conflate one another's UI mirror, while still feeding the
+ * aggregate [allProgressFlow] and the legacy single-slot [latestProgressFlow].
+ * Terminal snapshots are retained up to [maxCompletedHistory] entries (FIFO
+ * eviction) and can also be removed eagerly via [remove].
+ */
+internal class TaskProgressRegistry(
+    private val maxCompletedHistory: Int = DEFAULT_MAX_COMPLETED_HISTORY,
+) {
+    init {
+        require(maxCompletedHistory >= 1) { "maxCompletedHistory must be at least 1" }
+    }
+
+    private val lock = Any()
+    private val taskFlows = ConcurrentHashMap<String, MutableStateFlow<EngineProgress?>>()
+    private val completedOrder = ArrayDeque<String>()
+
+    private val _latestProgress = MutableStateFlow<EngineProgress?>(null)
+    val latestProgressFlow: StateFlow<EngineProgress?> = _latestProgress.asStateFlow()
+
+    private val _allProgress = MutableStateFlow<Map<String, EngineProgress>>(emptyMap())
+    val allProgressFlow: StateFlow<Map<String, EngineProgress>> = _allProgress.asStateFlow()
+
+    /** Dedicated progress stream for [taskId], isolated from all other tasks. */
+    fun flowFor(taskId: String): StateFlow<EngineProgress?> =
+        synchronized(lock) {
+            taskFlows.computeIfAbsent(taskId) { MutableStateFlow(null) }.asStateFlow()
+        }
+
+    /** Record [progress] for its task and enforce bounded terminal history. */
+    fun update(progress: EngineProgress) {
+        val taskId = progress.taskId
+        synchronized(lock) {
+            val slot = taskFlows.computeIfAbsent(taskId) { MutableStateFlow(progress) }
+            slot.value = progress
+            _latestProgress.value = progress
+
+            val next = LinkedHashMap(_allProgress.value)
+            next[taskId] = progress
+
+            if (progress.isTerminal()) {
+                completedOrder.remove(taskId)
+                completedOrder.addLast(taskId)
+                while (completedOrder.size > maxCompletedHistory) {
+                    val evicted = completedOrder.removeFirst()
+                    if (evicted != taskId) {
+                        taskFlows.remove(evicted)
+                        next.remove(evicted)
+                    }
+                }
+            } else {
+                completedOrder.remove(taskId)
+            }
+            _allProgress.value = next.toMap()
+        }
+    }
+
+    /** Remove [taskId] from per-task and aggregate tracking (e.g., on cleanup or cancel). */
+    fun remove(taskId: String) {
+        synchronized(lock) {
+            taskFlows.remove(taskId)
+            completedOrder.remove(taskId)
+            val current = _allProgress.value
+            if (taskId in current) {
+                val next = LinkedHashMap(current)
+                next.remove(taskId)
+                _allProgress.value = next.toMap()
+            }
+            if (_latestProgress.value?.taskId == taskId) {
+                _latestProgress.value = null
+            }
+        }
+    }
+
+    /** Number of currently tracked per-task flows (active + retained terminal history). */
+    fun trackedCount(): Int = synchronized(lock) { taskFlows.size }
+
+    companion object {
+        const val DEFAULT_MAX_COMPLETED_HISTORY = 32
+    }
+}
+
+/**
+ * Segmented HTTP transfers through `sleeve_engine.py`, which follows the Ghost
+ * Downloader (GPL-3.0) task/step model. Page-resolution bridges live in
+ * [GalleryBridge].
  */
 object GhostSegmentedBridge {
     private const val TAG = "GhostEngine"
@@ -37,8 +120,19 @@ object GhostSegmentedBridge {
 
     fun isAvailable(): Boolean = ChaquopyGateway.engineAvailable()
 
-    private val progress = MutableStateFlow<GhostEngine.EngineProgress?>(null)
-    val progressFlow: StateFlow<GhostEngine.EngineProgress?> = progress.asStateFlow()
+    private val progressRegistry = TaskProgressRegistry()
+
+    val progressFlow: StateFlow<EngineProgress?> = progressRegistry.latestProgressFlow
+
+    val allProgressFlow: StateFlow<Map<String, EngineProgress>> =
+        progressRegistry.allProgressFlow
+
+    fun progressFlowFor(taskId: String): StateFlow<EngineProgress?> =
+        progressRegistry.flowFor(taskId)
+
+    fun clearProgress(taskId: String) {
+        progressRegistry.remove(taskId)
+    }
 
     /** Enqueue a resolved direct URL. Returns the engine task id. */
     suspend fun download(
@@ -57,32 +151,33 @@ object GhostSegmentedBridge {
                     """{"headers":${ChaquopyGateway.json.encodeToString<Map<String, String>>(headers)},"outputDir":${ChaquopyGateway.json.encodeToString<String>(outputDir ?: "")},"fileName":${ChaquopyGateway.json.encodeToString<String>(fileName ?: "")},"subworkerCount":$subworkerCount}"""
                 val taskId =
                     call("add_uri", url, optionsJson) { it["taskId"]!!.jsonPrimitive.content }
-                progress.value =
-                    GhostEngine.EngineProgress(
+                progressRegistry.update(
+                    EngineProgress(
                         taskId,
                         GhostEngine.TaskState.RUNNING,
                         0,
                         0,
                         0,
                     )
+                )
                 taskId
             }
         }
 
     /**
-     * Poll engine progress into [progressFlow] until the task settles, and
-     * return that terminal snapshot.
+     * Poll engine progress into [progressFlowFor] (and legacy [progressFlow])
+     * until the task settles, and return that terminal snapshot.
      *
-     * The return value — never [progressFlow] — is the caller's verdict. When
+     * The return value — never a shared flow — is the caller's verdict. When
      * the engine cannot be read after [MAX_POLL_RETRIES] retries, an ERROR
      * snapshot for [taskId] is returned instead of null: a caller must never
      * have to guess which task a shared flow currently holds.
      */
-    suspend fun watch(taskId: String): GhostEngine.EngineProgress? =
-        withContext<GhostEngine.EngineProgress?>(Dispatchers.IO) {
-            var lastGood: GhostEngine.EngineProgress? = null
+    suspend fun watch(taskId: String): EngineProgress? =
+        withContext<EngineProgress?>(Dispatchers.IO) {
+            var lastGood: EngineProgress? = null
             var consecutiveFailures = 0
-            var terminal: GhostEngine.EngineProgress? = null
+            var terminal: EngineProgress? = null
             try {
                 pollLoop@ while (true) {
                     ensureActive()
@@ -98,6 +193,7 @@ object GhostSegmentedBridge {
                             terminal =
                                 lastGood?.takeIf { it.isTerminal() }
                                     ?: unreadableSnapshot(taskId, lastGood)
+                            progressRegistry.update(terminal)
                             break@pollLoop
                         }
                         consecutiveFailures++
@@ -107,7 +203,7 @@ object GhostSegmentedBridge {
                     consecutiveFailures = 0
                     lastGood = snap
                     // UI-only mirror: callers use the returned snapshot, not this.
-                    progress.value = snap
+                    progressRegistry.update(snap)
                     if (snap.isTerminal()) {
                         terminal = snap
                         break@pollLoop
@@ -128,9 +224,9 @@ object GhostSegmentedBridge {
      */
     fun unreadableSnapshot(
         taskId: String,
-        lastGood: GhostEngine.EngineProgress?,
-    ): GhostEngine.EngineProgress =
-        GhostEngine.EngineProgress(
+        lastGood: EngineProgress?,
+    ): EngineProgress =
+        EngineProgress(
             taskId = taskId,
             state = GhostEngine.TaskState.ERROR,
             downloadedBytes = lastGood?.downloadedBytes ?: 0L,
@@ -140,167 +236,36 @@ object GhostSegmentedBridge {
         )
 
     /** One read of the engine; null when this poll could not be parsed. */
-    private fun poll(taskId: String): GhostEngine.EngineProgress? =
+    private fun poll(taskId: String): EngineProgress? =
         runCatching {
                 call("progress", taskId) { obj ->
-                    val rawState = obj["state"]!!.jsonPrimitive.content
-                    GhostEngine.EngineProgress(
-                        taskId = taskId,
-                        state = parseState(rawState, taskId),
-                        downloadedBytes = obj["downloaded"]!!.jsonPrimitive.longOrNull ?: 0,
-                        totalBytes = obj["total"]!!.jsonPrimitive.longOrNull ?: -1,
-                        speedBps = obj["speedBps"]!!.jsonPrimitive.longOrNull ?: 0,
-                        error = obj["error"]?.jsonPrimitive?.content ?: "",
-                    )
+                    parseEngineProgress(taskId, obj) { raw ->
+                        Log.w(TAG, "unknown engine state '$raw' for task $taskId; treating as ERROR")
+                    }
                 }
             }
             .getOrNull()
 
-    /**
-     * An unrecognised state is a broken contract between the engine and this
-     * parser, but ERROR is the only safe verdict. Name the value that arrived
-     * so the log says what the engine sent instead of only what we assumed.
-     */
-    private fun parseState(raw: String, taskId: String): GhostEngine.TaskState =
-        runCatching { GhostEngine.TaskState.valueOf(raw.uppercase()) }
-            .getOrElse {
-                Log.w(TAG, "unknown engine state '$raw' for task $taskId; treating as ERROR")
-                GhostEngine.TaskState.ERROR
-            }
-
-    private fun GhostEngine.EngineProgress.isTerminal(): Boolean =
-        state != GhostEngine.TaskState.WAITING && state != GhostEngine.TaskState.RUNNING
-
     fun cancel(taskId: String) {
-        runCatching { ChaquopyGateway.ensureStarted(); ChaquopyGateway.module().callAttr("cancel", taskId) }
+        runCatching {
+            ChaquopyGateway.ensureStarted()
+            ChaquopyGateway.module().callAttr("cancel", taskId)
+        }
+        progressRegistry.remove(taskId)
     }
 
     /** Settings action: download a test payload through the full segmented path. */
-    suspend fun selfTest(context: Context): Result<GhostEngine.SelfTestResult> =
+    suspend fun selfTest(context: Context): Result<SelfTestResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val dir = context.cacheDir.resolve("engine-selftest").apply { mkdirs() }
-                call("self_test", dir.absolutePath) { obj ->
-                    GhostEngine.SelfTestResult(
-                        ok = obj["ok"]!!.jsonPrimitive.content == "true",
-                        bytes = obj["bytes"]!!.jsonPrimitive.longOrNull ?: 0,
-                        seconds = obj["seconds"]!!.jsonPrimitive.content.toDoubleOrNull() ?: 0.0,
-                        speedBps = obj["speedBps"]!!.jsonPrimitive.longOrNull ?: 0,
-                        workers = obj["workers"]!!.jsonPrimitive.content.toIntOrNull() ?: 0,
-                        state = obj["state"]?.jsonPrimitive?.content ?: "",
-                        error = obj["error"]?.jsonPrimitive?.content ?: "",
-                    )
-                }
+                call("self_test", dir.absolutePath) { obj -> parseSelfTestResult(obj) }
             }
         }
 
     private fun <T> call(
         function: String,
         vararg args: Any?,
-        parse: (kotlinx.serialization.json.JsonObject) -> T,
+        parse: (JsonObject) -> T,
     ): T = ChaquopyGateway.call(ChaquopyGateway.ENGINE_MODULE, function, *args, parse = parse)
-
-    /** True when a gallery-dl site module claims this URL. Loads lazily; call on IO. */
-    fun galleryMatches(url: String): Boolean =
-        runCatching {
-            ChaquopyGateway.ensureStarted()
-            ChaquopyGateway.module().callAttr("gallery_matches", url).toString() == "True"
-        }.getOrDefault(false)
-
-    /**
-     * Preload the gallery-dl extractor registry once per install (cold import
-     * of ~300 site modules) and surface any import error to the log.
-     */
-    fun preloadGallery() {
-        runCatching {
-            ChaquopyGateway.ensureStarted()
-            val reply = ChaquopyGateway.module().callAttr("gallery_warmup").toString()
-            val obj = ChaquopyGateway.json.parseToJsonElement(reply).jsonObject
-            if (obj["ok"]?.jsonPrimitive?.content == "true") {
-                Log.i(
-                    "GhostEngine",
-                    "gallery-dl registry warm in ${obj["seconds"]?.jsonPrimitive?.content}s",
-                )
-            } else {
-                Log.w(
-                    "GhostEngine",
-                    "gallery-dl warmup failed: ${obj["error"]?.jsonPrimitive?.content}",
-                )
-            }
-        }.onFailure { Log.w("GhostEngine", "gallery-dl warmup unavailable: ${it.message}") }
-    }
-
-    /** Resolve a page into direct media items (image sites, albums, sniffed pages). */
-    fun galleryResolve(
-        url: String,
-        cookiesFile: String = "",
-    ): Result<Pair<String, List<GhostEngine.GalleryItem>>> =
-        runCatching {
-            ChaquopyGateway.ensureStarted()
-            val reply =
-                ChaquopyGateway.module()
-                    .callAttr("gallery_resolve", url, cookiesFile)
-                    .toString()
-            val obj = ChaquopyGateway.json.parseToJsonElement(reply).jsonObject
-            if (obj["ok"]?.jsonPrimitive?.content != "true") {
-                error(obj["error"]?.jsonPrimitive?.content ?: "gallery resolve failed")
-            }
-            val items =
-                obj["items"]!!.jsonArray.mapNotNull { el ->
-                    runCatching {
-                        val t = el.jsonObject
-                        GhostEngine.GalleryItem(
-                            url = t["url"]!!.jsonPrimitive.content,
-                            filename = t["filename"]?.jsonPrimitive?.content ?: "",
-                            referer = t["referer"]?.jsonPrimitive?.content ?: "",
-                            category = t["category"]?.jsonPrimitive?.content ?: "",
-                        )
-                    }.getOrNull()
-                }
-            obj["category"]?.jsonPrimitive?.content.orEmpty() to items
-        }
-
-    /** Anonymous Instagram fallback: public post/reel embed page. */
-    fun instagramEmbed(url: String): Result<List<GhostEngine.GalleryItem>> =
-        runCatching {
-            ChaquopyGateway.ensureStarted()
-            val reply = ChaquopyGateway.module().callAttr("instagram_embed", url).toString()
-            val obj = ChaquopyGateway.json.parseToJsonElement(reply).jsonObject
-            if (obj["ok"]?.jsonPrimitive?.content != "true") {
-                error(obj["error"]?.jsonPrimitive?.content ?: "instagram embed failed")
-            }
-            obj["items"]!!.jsonArray.mapNotNull { el ->
-                runCatching {
-                    val t = el.jsonObject
-                    GhostEngine.GalleryItem(
-                        url = t["url"]!!.jsonPrimitive.content,
-                        filename = t["filename"]?.jsonPrimitive?.content ?: "",
-                        referer = t["referer"]?.jsonPrimitive?.content ?: "",
-                        category = "instagram-embed",
-                    )
-                }.getOrNull()
-            }
-        }
-
-    /** Last-resort HTML pass: og:video / twitter:player:stream / video src / m3u8+mpd. */
-    fun sniffMedia(url: String): Result<List<GhostEngine.GalleryItem>> =
-        runCatching {
-            ChaquopyGateway.ensureStarted()
-            val reply = ChaquopyGateway.module().callAttr("sniff_media", url).toString()
-            val obj = ChaquopyGateway.json.parseToJsonElement(reply).jsonObject
-            if (obj["ok"]?.jsonPrimitive?.content != "true") {
-                error(obj["error"]?.jsonPrimitive?.content ?: "sniff failed")
-            }
-            obj["items"]!!.jsonArray.mapNotNull { el ->
-                runCatching {
-                    val t = el.jsonObject
-                    GhostEngine.GalleryItem(
-                        url = t["url"]!!.jsonPrimitive.content,
-                        filename = t["filename"]?.jsonPrimitive?.content ?: "",
-                        referer = t["referer"]?.jsonPrimitive?.content ?: "",
-                        category = "sniff",
-                    )
-                }.getOrNull()
-            }
-        }
 }

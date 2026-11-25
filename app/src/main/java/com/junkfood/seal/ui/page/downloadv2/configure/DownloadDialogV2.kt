@@ -1,113 +1,41 @@
 package com.junkfood.seal.ui.page.downloadv2.configure
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.ModalBottomSheetValue
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.SettingsSuggest
-import androidx.compose.material.icons.filled.VideoFile
-import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.FileDownload
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NewLabel
-import androidx.compose.material.icons.outlined.SettingsSuggest
-import androidx.compose.material.icons.outlined.VideoFile
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.SheetValue
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.junkfood.seal.App
 import com.junkfood.seal.R
-import com.junkfood.seal.ui.common.HapticFeedback.longPressHapticFeedback
 import com.junkfood.seal.ui.common.motion.materialSharedAxisX
 import com.junkfood.seal.ui.component.ButtonChip
 import com.junkfood.seal.ui.component.DrawerSheetSubtitle
-import com.junkfood.seal.ui.component.OutlinedButtonWithIcon
 import com.junkfood.seal.ui.component.SealModalBottomSheet
-import com.junkfood.seal.ui.component.SealModalBottomSheetM2Variant
-import com.junkfood.seal.ui.component.SingleChoiceChip
-import com.junkfood.seal.ui.component.SingleChoiceSegmentedButton
-import com.junkfood.seal.ui.component.VideoFilterChip
 import com.junkfood.seal.ui.page.command.TemplatePickerDialog
-import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.Download
-import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.FetchInfo
-import com.junkfood.seal.ui.page.downloadv2.configure.ActionButton.StartTask
-import com.junkfood.seal.ui.page.downloadv2.cookieRowRes
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Action
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SelectionState
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SheetState.Configure
@@ -115,18 +43,8 @@ import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.Sh
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SheetState.InputUrl
 import com.junkfood.seal.ui.page.downloadv2.configure.DownloadDialogViewModel.SheetState.Loading
 import com.junkfood.seal.ui.page.settings.command.CommandTemplateDialog
-import com.junkfood.seal.ui.page.settings.format.AudioQuickSettingsDialog
-import com.junkfood.seal.ui.page.settings.format.VideoQuickSettingsDialog
-import com.junkfood.seal.ui.page.settings.network.CookiesQuickSettingsDialog
 import com.junkfood.seal.ui.theme.SealTheme
-import com.junkfood.seal.util.AUDIO_CONVERSION_FORMAT
-import com.junkfood.seal.util.AUDIO_CONVERT
-import com.junkfood.seal.util.AUDIO_FORMAT
-import com.junkfood.seal.util.AUDIO_QUALITY
-import com.junkfood.seal.util.CONVERT_MP3
 import com.junkfood.seal.util.CUSTOM_COMMAND
-import com.junkfood.seal.util.CookieFileStatus
-import com.junkfood.seal.util.DatabaseUtil
 import com.junkfood.seal.util.DownloadType
 import com.junkfood.seal.util.DownloadType.Audio
 import com.junkfood.seal.util.DownloadType.Command
@@ -135,33 +53,13 @@ import com.junkfood.seal.util.DownloadType.Video
 import com.junkfood.seal.util.DownloadType.entries
 import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FORMAT_SELECTION
-import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FormatSelectionPolicy
-import com.junkfood.seal.util.PreferenceStrings
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.PreferenceUtil.getBoolean
 import com.junkfood.seal.util.PreferenceUtil.getInt
-import com.junkfood.seal.util.PreferenceUtil.updateBoolean
 import com.junkfood.seal.util.PreferenceUtil.updateInt
 import com.junkfood.seal.util.TEMPLATE_ID
-import com.junkfood.seal.util.ToastUtil
-import com.junkfood.seal.util.USE_CUSTOM_AUDIO_PRESET
-import com.junkfood.seal.util.VIDEO_FORMAT
-import com.junkfood.seal.util.VIDEO_QUALITY
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
-@Composable
-private fun DownloadType.label(): String =
-    stringResource(
-        when (this) {
-            Audio -> R.string.audio
-            Video -> R.string.video
-            Command -> R.string.commands
-            Playlist -> R.string.playlist
-        }
-    )
 
 val PreferencesMock = DownloadUtil.DownloadPreferences.EMPTY
 
@@ -201,6 +99,8 @@ fun DownloadDialog(
     preferences: DownloadUtil.DownloadPreferences,
     onPreferencesUpdate: (DownloadUtil.DownloadPreferences) -> Unit,
     state: DownloadDialogViewModel.SheetState = InputUrl,
+    configureSession: ConfigureSessionState? = null,
+    onConfigureSessionUpdate: ((ConfigureSessionState) -> ConfigureSessionState) -> Unit = {},
     onActionPost: (Action) -> Unit = {},
 ) {
     var showVideoPresetDialog by remember { mutableStateOf(false) }
@@ -216,12 +116,12 @@ fun DownloadDialog(
             state = state,
             config = config,
             preferences = preferences,
+            configureSession = configureSession,
+            onConfigureSessionUpdate = onConfigureSessionUpdate,
             onPresetEdit = { type ->
                 when (type) {
                     Audio -> showAudioPresetDialog = true
-
                     Video -> showVideoPresetDialog = true
-
                     else -> {}
                 }
             },
@@ -230,111 +130,19 @@ fun DownloadDialog(
     }
 
     if (showVideoPresetDialog) {
-        var res by remember(preferences) { mutableIntStateOf(preferences.videoResolution) }
-        var format by remember(preferences) { mutableIntStateOf(preferences.videoFormat) }
-
-        VideoQuickSettingsDialog(
-            videoResolution = res,
-            videoFormatPreference = format,
-            onResolutionSelect = { res = it },
-            onFormatSelect = { format = it },
+        VideoPresetQuickSettingsDialog(
+            preferences = preferences,
             onDismissRequest = { showVideoPresetDialog = false },
-            onSave = {
-                VIDEO_FORMAT.updateInt(format)
-                VIDEO_QUALITY.updateInt(res)
-                onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
-            },
+            onPreferencesUpdate = onPreferencesUpdate,
         )
     }
 
     if (showAudioPresetDialog) {
-        var quality by remember(preferences) { mutableIntStateOf(preferences.audioQuality) }
-        var customPreset by
-            remember(preferences) { mutableStateOf(preferences.useCustomAudioPreset) }
-        var conversionFmt by
-            remember(preferences) { mutableIntStateOf(preferences.audioConvertFormat) }
-        var convertAudio by remember(preferences) { mutableStateOf(preferences.convertAudio) }
-        var preferredFormat by remember(preferences) { mutableIntStateOf(preferences.audioFormat) }
-
-        AudioQuickSettingsDialog(
-            modifier = Modifier,
+        AudioPresetQuickSettingsDialog(
             preferences = preferences,
-            audioQuality = quality,
-            onQualitySelect = { quality = it },
-            useCustomAudioPreset = customPreset,
-            onCustomPresetToggle = { customPreset = it },
-            convertAudio = convertAudio,
-            onConvertToggled = { convertAudio = it },
-            conversionFormat = conversionFmt,
-            onConversionSelect = { conversionFmt = it },
-            preferredFormat = preferredFormat,
-            onPreferredSelect = { preferredFormat = it },
             onDismissRequest = { showAudioPresetDialog = false },
-            onSave = {
-                AUDIO_QUALITY.updateInt(quality)
-                USE_CUSTOM_AUDIO_PRESET.updateBoolean(customPreset)
-                AUDIO_CONVERSION_FORMAT.updateInt(conversionFmt)
-                AUDIO_CONVERT.updateBoolean(convertAudio)
-                AUDIO_FORMAT.updateInt(preferredFormat)
-                onPreferencesUpdate(DownloadUtil.DownloadPreferences.createFromPreferences())
-            },
+            onPreferencesUpdate = onPreferencesUpdate,
         )
-    }
-}
-
-@Composable
-private fun ErrorPage(modifier: Modifier = Modifier, state: Error, onActionPost: (Action) -> Unit) {
-    val view = LocalView.current
-    val clipboardManager = LocalClipboardManager.current
-    // Actions carry their link when they have one, so an error for a source
-    // this page never enumerated (Audible, a future action) still renders.
-    val url = state.action.url
-    // C6: the friendly field wins, the transient throwable is the fallback.
-    val message = state.message.ifBlank { state.throwable.message.orEmpty() }
-    Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(
-            imageVector = Icons.Outlined.ErrorOutline,
-            contentDescription = null,
-            modifier = Modifier.size(40.dp),
-        )
-        Text(
-            text = stringResource(R.string.fetch_info_error_msg),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 12.dp),
-        )
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier =
-                Modifier.padding(vertical = 16.dp, horizontal = 20.dp)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-            maxLines = 20,
-            overflow = TextOverflow.Clip,
-        )
-
-        Row(modifier = Modifier) {
-            FilledTonalButton(onClick = { onActionPost(state.action) }) { Text("Retry") }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = {
-                    view.longPressHapticFeedback()
-                    clipboardManager.setText(
-                        AnnotatedString(
-                            buildString {
-                                append(App.getVersionReport())
-                                url?.let { append("\nURL: ").append(it) }
-                                append('\n').append(message)
-                            }
-                        )
-                    )
-                    ToastUtil.makeToast(R.string.error_copied)
-                }
-            ) {
-                Text(stringResource(R.string.copy_error_report))
-            }
-        }
     }
 }
 
@@ -344,6 +152,8 @@ private fun DownloadDialogContent(
     state: DownloadDialogViewModel.SheetState,
     config: Config,
     preferences: DownloadUtil.DownloadPreferences,
+    configureSession: ConfigureSessionState?,
+    onConfigureSessionUpdate: ((ConfigureSessionState) -> ConfigureSessionState) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
@@ -354,15 +164,17 @@ private fun DownloadDialogContent(
         transitionSpec = {
             materialSharedAxisX(initialOffsetX = { it / 4 }, targetOffsetX = { -it / 4 })
         },
-    ) { state ->
-        when (state) {
+    ) { targetState ->
+        when (targetState) {
             is Configure -> {
-                check(state.urlList.isNotEmpty())
-                if (state.urlList.size == 1) {
+                check(targetState.urlList.isNotEmpty())
+                if (targetState.urlList.size == 1) {
                     ConfigurePage(
-                        url = state.urlList.first(),
+                        url = targetState.urlList.first(),
                         config = config,
                         preferences = preferences,
+                        configureSession = configureSession,
+                        onConfigureSessionUpdate = onConfigureSessionUpdate,
                         onPresetEdit = onPresetEdit,
                         onConfigSave = {
                             Config.updatePreferences(newValue = it, oldValue = config)
@@ -384,14 +196,18 @@ private fun DownloadDialogContent(
                     )
                 } else {
                     ConfigurePagePlaylistVariant(
-                        initialDownloadType = config.downloadType ?: Video,
+                        initialDownloadType =
+                            FormatSelectionPolicy.fallbackType(
+                                config.downloadType ?: Video,
+                                listOf(Video, Audio),
+                            ) ?: Video,
                         preferences = preferences,
                         onPresetEdit = onPresetEdit,
                         onDismissRequest = { onActionPost(Action.HideSheet) },
                     ) { sessionPreferences ->
                         onActionPost(
                             Action.DownloadWithPreset(
-                                urlList = state.urlList,
+                                urlList = targetState.urlList,
                                 preferences = sessionPreferences,
                             )
                         )
@@ -400,7 +216,7 @@ private fun DownloadDialogContent(
             }
 
             is Error -> {
-                ErrorPage(state = state, onActionPost = onActionPost)
+                ErrorPage(state = targetState, onActionPost = onActionPost)
             }
 
             is Loading -> {
@@ -419,38 +235,6 @@ private fun DownloadDialogContent(
                 )
             }
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Preview
-@Composable
-private fun ErrorPreview() {
-    SealModalBottomSheet(
-        onDismissRequest = {},
-        sheetState =
-            with(LocalDensity.current) {
-                SheetState(
-                    initialValue = SheetValue.Expanded,
-                    skipPartiallyExpanded = true,
-                    velocityThreshold = { 56.dp.toPx() },
-                    positionalThreshold = { 125.dp.toPx() },
-                )
-            },
-    ) {
-        ErrorPage(
-            state =
-                Error(
-                    action =
-                        Action.FetchFormats(
-                            url = "",
-                            audioOnly = true,
-                            preferences = PreferencesMock,
-                        ),
-                    throwable = Exception("Not good"),
-                ),
-            onActionPost = {},
-        )
     }
 }
 
@@ -493,11 +277,9 @@ fun FormatPage(
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-/*@Preview(name = "Dark", uiMode = Configuration.UI_MODE_NIGHT_YES)
-@Preview(name = "Light", uiMode = Configuration.UI_MODE_NIGHT_NO)*/
 @Composable
 private fun ConfigurePagePreview() {
-    SealTheme() {
+    SealTheme {
         SealModalBottomSheet(
             sheetState =
                 with(LocalDensity.current) {
@@ -546,53 +328,60 @@ private fun ConfigurePage(
     url: String = "",
     config: Config,
     preferences: DownloadUtil.DownloadPreferences,
+    configureSession: ConfigureSessionState? = null,
+    onConfigureSessionUpdate: ((ConfigureSessionState) -> ConfigureSessionState) -> Unit = {},
     settingChips: @Composable (DownloadType?, FormatSession) -> Unit,
     onPresetEdit: (DownloadType?) -> Unit = {},
     onConfigSave: (Config) -> Unit,
     onActionPost: (Action) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    // A stored type the sheet does not offer (Command hidden in Settings, or a
-    // stale value) would leave every tab unselected and the action disabled.
-    var selectedType by remember(config) {
+    var localSession by remember(config) {
         mutableStateOf(
-            config.downloadType?.let { FormatSelectionPolicy.fallbackType(it, config.typeEntries) }
-                ?: config.typeEntries.firstOrNull()
+            ConfigureSessionState.fromConfig(
+                basePreferences = preferences,
+                config = config,
+            )
         )
     }
-    var useFormatSelection by remember(config) { mutableStateOf(config.useFormatSelection) }
-    // Chips below mutate this copy only; Settings keeps its own values, so
-    // nothing leaks into the next download.
-    var sessionPreferences by remember(preferences) { mutableStateOf(preferences) }
-    // Both start fresh for every sheet opening: split defaults off, and an untouched
-    // conversion chip follows the Settings default (for the Audio type only). The chips
-    // below change this task's override, never the Settings value itself.
-    var convertAudioOverride by remember(preferences.convertAudio) {
-        mutableStateOf<Boolean?>(null)
+    LaunchedEffect(preferences) {
+        localSession = localSession.withBasePreferences(preferences)
     }
-    var sessionSplitByChapter by remember { mutableStateOf(false) }
+
+    val activeSession = configureSession ?: localSession
+    val updateSession: ((ConfigureSessionState) -> ConfigureSessionState) -> Unit =
+        if (configureSession != null) {
+            onConfigureSessionUpdate
+        } else {
+            { transform -> localSession = transform(localSession) }
+        }
+
+    // A stored type the sheet does not offer (Command hidden in Settings, or a
+    // stale value) would leave every tab unselected and the action disabled.
+    val selectedType =
+        FormatSelectionPolicy.fallbackType(activeSession.selectedType, config.typeEntries)
+            ?: config.typeEntries.firstOrNull()
+    val useFormatSelection = activeSession.useFormatSelection
     val sessionConvertAudio =
         resolveSessionConvertAudio(
             selectedType = selectedType,
-            override = convertAudioOverride,
-            settingsConvertAudio = preferences.convertAudio,
+            override = activeSession.convertAudioOverride,
+            settingsConvertAudio = activeSession.basePreferences.convertAudio,
         )
     val session =
         FormatSession(
             convertAudio = sessionConvertAudio,
-            splitByChapter = sessionSplitByChapter,
-            preferences = sessionPreferences,
+            splitByChapter = activeSession.splitByChapter,
+            preferences = activeSession.sessionPreferences,
             onConvertAudioChange = { convert ->
-                convertAudioOverride = convert
-                sessionPreferences =
-                    applySessionAudioConvertChip(
-                        sessionPreferences = sessionPreferences,
-                        basePreferences = preferences,
-                        convertAudio = convert,
-                    )
+                updateSession { it.setConvertAudio(convert) }
             },
-            onSplitByChapterChange = { sessionSplitByChapter = it },
-            onPreferencesChange = { sessionPreferences = it },
+            onSplitByChapterChange = { split ->
+                updateSession { it.toggleSplitByChapter(split) }
+            },
+            onPreferencesChange = { updated ->
+                updateSession { it.updateSessionPreferences(updated) }
+            },
         )
     val canProceed = selectedType in config.typeEntries
 
@@ -612,17 +401,6 @@ private fun ConfigurePage(
             templateList.find { it.id == TEMPLATE_ID.getInt() } ?: templateList.firstOrNull()
         }
 
-    LaunchedEffect(selectedType) {
-        if (selectedType == Playlist) {
-            useFormatSelection = false
-        }
-        if (selectedType != Audio) {
-            convertAudioOverride = null
-            sessionPreferences =
-                sessionPreferences.copy(audioConvertFormat = preferences.audioConvertFormat)
-        }
-    }
-
     Column {
         Column(modifier = modifier.padding(horizontal = 20.dp)) {
             Header(
@@ -634,7 +412,7 @@ private fun ConfigurePage(
             DownloadTypeSelectionGroup(
                 typeEntries = config.typeEntries,
                 selectedType = selectedType,
-                onSelect = { selectedType = it },
+                onSelect = { type -> updateSession { it.selectType(type) } },
             )
             Column(modifier = Modifier.animateContentSize()) {
                 if (selectedType != Command) {
@@ -644,17 +422,17 @@ private fun ConfigurePage(
                     )
                     Preset(
                         modifier = Modifier,
-                        preference = preferences,
+                        preference = activeSession.basePreferences,
                         selected = !useFormatSelection,
                         downloadType = selectedType,
-                        onClick = { useFormatSelection = false },
+                        onClick = { updateSession { it.setUseFormatSelection(false) } },
                         showEditIcon = !useFormatSelection && selectedType != Playlist,
                         onEdit = { onPresetEdit(selectedType) },
                     )
                     Custom(
                         selected = useFormatSelection,
                         enabled = selectedType != Playlist,
-                        onClick = { useFormatSelection = true },
+                        onClick = { updateSession { it.setUseFormatSelection(true) } },
                     )
                 } else {
                     if (showTemplateSelectionDialog) {
@@ -728,10 +506,10 @@ private fun ConfigurePage(
                     Action.DownloadWithPreset(
                         urlList = listOf(url),
                         preferences =
-                            sessionPreferences.copy(
+                            activeSession.sessionPreferences.copy(
                                 extractAudio = FormatSelectionPolicy.audioOnly(selectedType),
                                 convertAudio = sessionConvertAudio,
-                                splitByChapter = sessionSplitByChapter,
+                                splitByChapter = activeSession.splitByChapter,
                             ),
                     )
                 )
@@ -747,8 +525,7 @@ private fun ConfigurePage(
                     onActionPost(
                         Action.FetchPlaylist(
                             url = url,
-                            preferences =
-                                sessionPreferences.copy(splitByChapter = sessionSplitByChapter),
+                            preferences = activeSession.effectivePlaylistPreferences(),
                         )
                     )
                 } else {
@@ -757,9 +534,9 @@ private fun ConfigurePage(
                             url = url,
                             audioOnly = FormatSelectionPolicy.audioOnly(selectedType),
                             preferences =
-                                sessionPreferences.copy(
+                                activeSession.sessionPreferences.copy(
                                     convertAudio = sessionConvertAudio,
-                                    splitByChapter = sessionSplitByChapter,
+                                    splitByChapter = activeSession.splitByChapter,
                                 ),
                         )
                     )
@@ -777,7 +554,7 @@ private fun ConfigurePage(
                         Action.RunCommand(
                             url = url,
                             template = selectedTemplate,
-                            preferences = sessionPreferences,
+                            preferences = activeSession.sessionPreferences,
                         )
                     )
                 }
@@ -796,30 +573,20 @@ fun ConfigurePagePlaylistVariant(
     onDismissRequest: () -> Unit,
     onDownload: (DownloadUtil.DownloadPreferences) -> Unit,
 ) {
-
-    var selectedType by remember(initialDownloadType) { mutableStateOf(initialDownloadType) }
-    // Same per-session rule as the single-video sheet: the chip overrides this
-    // batch only, and an untouched chip follows the Settings default.
-    var convertAudioOverride by remember(preferences.convertAudio) {
-        mutableStateOf<Boolean?>(null)
-    }
-    var sessionSplitByChapter by remember(initialSplitByChapter) {
-        mutableStateOf(initialSplitByChapter)
-    }
-    var sessionPreferences by remember(preferences) { mutableStateOf(preferences) }
-    val sessionConvertAudio =
-        resolveSessionConvertAudio(
-            selectedType = selectedType,
-            override = convertAudioOverride,
-            settingsConvertAudio = preferences.convertAudio,
+    var sessionState by remember(initialDownloadType, initialSplitByChapter) {
+        mutableStateOf(
+            ConfigureSessionState(
+                basePreferences = preferences,
+                selectedType = initialDownloadType,
+                useFormatSelection = false,
+                sessionPreferences = preferences,
+                splitByChapter = initialSplitByChapter,
+                convertAudioOverride = null,
+            )
         )
-
-    LaunchedEffect(selectedType) {
-        if (selectedType != Audio) {
-            convertAudioOverride = null
-            sessionPreferences =
-                sessionPreferences.copy(audioConvertFormat = preferences.audioConvertFormat)
-        }
+    }
+    LaunchedEffect(preferences) {
+        sessionState = sessionState.withBasePreferences(preferences)
     }
 
     Column {
@@ -832,8 +599,8 @@ fun ConfigurePagePlaylistVariant(
             DrawerSheetSubtitle(text = stringResource(id = R.string.download_type))
             DownloadTypeSelectionGroup(
                 typeEntries = listOf(Video, Audio),
-                selectedType = selectedType,
-                onSelect = { selectedType = it },
+                selectedType = sessionState.selectedType,
+                onSelect = { type -> sessionState = sessionState.selectType(type) },
             )
             DrawerSheetSubtitle(
                 text = stringResource(id = R.string.format_selection),
@@ -841,12 +608,12 @@ fun ConfigurePagePlaylistVariant(
             )
             Preset(
                 modifier = Modifier,
-                preference = sessionPreferences,
+                preference = sessionState.sessionPreferences,
                 selected = true,
-                downloadType = selectedType,
-                onClick = { onPresetEdit(selectedType) },
+                downloadType = sessionState.selectedType,
+                onClick = { onPresetEdit(sessionState.selectedType) },
                 showEditIcon = true,
-                onEdit = { onPresetEdit(selectedType) },
+                onEdit = { onPresetEdit(sessionState.selectedType) },
             )
         }
         var expanded by remember { mutableStateOf(false) }
@@ -854,546 +621,34 @@ fun ConfigurePagePlaylistVariant(
             AdditionalSettings(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 isQuickDownload = false,
-                preference = sessionPreferences,
-                selectedType = selectedType,
-                convertAudio = sessionConvertAudio,
+                preference = sessionState.sessionPreferences,
+                selectedType = sessionState.selectedType,
+                convertAudio = sessionState.convertAudio,
                 onConvertAudioChange = { convert ->
-                    convertAudioOverride = convert
-                    sessionPreferences =
-                        applySessionAudioConvertChip(
-                            sessionPreferences = sessionPreferences,
-                            basePreferences = preferences,
-                            convertAudio = convert,
-                        )
+                    sessionState = sessionState.setConvertAudio(convert)
                 },
-                splitByChapter = sessionSplitByChapter,
-                onSplitByChapterChange = { sessionSplitByChapter = it },
-                onPreferencesChange = { sessionPreferences = it },
+                splitByChapter = sessionState.splitByChapter,
+                onSplitByChapterChange = { split ->
+                    sessionState = sessionState.toggleSplitByChapter(split)
+                },
+                onPreferencesChange = { updated ->
+                    sessionState = sessionState.updateSessionPreferences(updated)
+                },
             )
         }
 
         ActionButtons(
             modifier = Modifier.padding(horizontal = 20.dp),
             canProceed = true,
-            selectedType = selectedType,
+            selectedType = sessionState.selectedType,
             useFormatSelection = false,
             onCancel = onDismissRequest,
             onDownload = {
-                onDownload(
-                    sessionPreferences.copy(
-                        extractAudio = FormatSelectionPolicy.audioOnly(selectedType),
-                        convertAudio = sessionConvertAudio,
-                        splitByChapter = sessionSplitByChapter,
-                    )
-                )
+                onDownload(sessionState.effectivePreferences())
                 onDismissRequest()
             },
             onFetchInfo = { throw IllegalStateException() },
             onTaskStart = { throw IllegalStateException() },
         )
-    }
-}
-
-@Composable
-private fun AdditionalSettings(
-    modifier: Modifier = Modifier,
-    isQuickDownload: Boolean,
-    selectedType: DownloadType?,
-    preference: DownloadUtil.DownloadPreferences,
-    convertAudio: Boolean,
-    onConvertAudioChange: (Boolean) -> Unit,
-    splitByChapter: Boolean,
-    onSplitByChapterChange: (Boolean) -> Unit,
-    onNavigateToCookieGeneratorPage: (String) -> Unit = {},
-    onPreferencesChange: (DownloadUtil.DownloadPreferences) -> Unit,
-) {
-    val context = LocalContext.current
-    val cookiesProfiles by DatabaseUtil.getCookiesFlow().collectAsStateWithLifecycle(emptyList())
-    var showCookiesDialog by rememberSaveable { mutableStateOf(false) }
-    var cookieStatus by remember { mutableStateOf<CookieFileStatus?>(null) }
-    LaunchedEffect(Unit) {
-        cookieStatus = withContext(Dispatchers.IO) { with(FileUtil) { context.readCookieStatus() } }
-    }
-
-    with(preference) {
-        Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            // Always present, profile rows or not: the file's state decides
-            // whether a cookie retry can work, so hiding the row hid the answer.
-            VideoFilterChip(
-                selected = preference.cookies,
-                // A command template is run verbatim; a cookie toggle would
-                // only land in preferences the command never reads.
-                enabled = selectedType != Command,
-                onClick = {
-                    if (isQuickDownload) {
-                        // This sheet's copy only: Settings keeps its own default.
-                        onPreferencesChange(preference.copy(cookies = !cookies))
-                    } else {
-                        showCookiesDialog = true
-                    }
-                },
-                label = stringResource(id = R.string.cookies),
-            )
-
-            VideoFilterChip(
-                selected = downloadSubtitle,
-                enabled = selectedType != Command,
-                onClick = {
-                    // This sheet's copy only: Settings keeps its own default.
-                    onPreferencesChange(preference.copy(downloadSubtitle = !downloadSubtitle))
-                },
-                label = stringResource(id = R.string.download_subtitles),
-            )
-            VideoFilterChip(
-                selected = createThumbnail,
-                enabled = selectedType != Command,
-                onClick = {
-                    onPreferencesChange(preference.copy(createThumbnail = !createThumbnail))
-                },
-                label = stringResource(R.string.create_thumbnail),
-            )
-        }
-
-        if (FormatSelectionPolicy.showsAudioConversion(selectedType)) {
-            Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                VideoFilterChip(
-                    selected = !convertAudio,
-                    onClick = { onConvertAudioChange(false) },
-                    label = stringResource(R.string.audio_source_original),
-                )
-                VideoFilterChip(
-                    selected = convertAudio,
-                    onClick = { onConvertAudioChange(true) },
-                    label = stringResource(R.string.audio_source_mp3),
-                )
-            }
-        }
-
-        Row(modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            VideoFilterChip(
-                selected = splitByChapter,
-                enabled = selectedType != Command,
-                onClick = { onSplitByChapterChange(!splitByChapter) },
-                label = stringResource(FormatSelectionPolicy.splitToggleLabel(selectedType)),
-            )
-        }
-
-        cookieStatus?.let { status ->
-            Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp)) {
-                Text(
-                    text = stringResource(cookieRowRes(status), status.entryCount),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = stringResource(R.string.cookies_row_stale_hint),
-                    modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        if (showCookiesDialog) {
-            CookiesQuickSettingsDialog(
-                onDismissRequest = { showCookiesDialog = false },
-                onConfirm = {},
-                cookieProfiles = cookiesProfiles,
-                onCookieProfileClicked = { onNavigateToCookieGeneratorPage(it.url) },
-                isCookiesEnabled = cookies,
-                onCookiesToggled = {
-                    // Keep cookie override strictly scoped to this session.
-                    onPreferencesChange(preference.copy(cookies = !cookies))
-                },
-            )
-        }
-    }
-}
-
-internal fun resolveSessionConvertAudio(
-    selectedType: DownloadType?,
-    override: Boolean?,
-    settingsConvertAudio: Boolean,
-): Boolean {
-    if (!FormatSelectionPolicy.showsAudioConversion(selectedType)) return false
-    return override
-        ?: FormatSelectionPolicy
-            .sessionOptions(selectedType, settingsConvertAudio)
-            .convertAudio
-}
-
-internal fun applySessionAudioConvertChip(
-    sessionPreferences: DownloadUtil.DownloadPreferences,
-    basePreferences: DownloadUtil.DownloadPreferences,
-    convertAudio: Boolean,
-): DownloadUtil.DownloadPreferences =
-    sessionPreferences.copy(
-        audioConvertFormat =
-            if (convertAudio) CONVERT_MP3 else basePreferences.audioConvertFormat
-    )
-
-@Composable
-fun ExpandableTitle(
-    modifier: Modifier = Modifier,
-    expanded: Boolean = false,
-    onClick: () -> Unit = {},
-    content: @Composable () -> Unit,
-) {
-    Column {
-        Spacer(Modifier.height(8.dp))
-        HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
-        Column(
-            modifier =
-                modifier
-                    .clickable(
-                        onClick = onClick,
-                        onClickLabel = stringResource(R.string.show_more_actions),
-                        enabled = !expanded,
-                    )
-                    .padding(top = 12.dp, bottom = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spacer(modifier = Modifier.width(24.dp))
-                Text(
-                    text = stringResource(R.string.additional_settings),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                if (!expanded) {
-                    Icon(
-                        imageVector = Icons.Outlined.ExpandMore,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(modifier = Modifier.width(32.dp))
-                }
-            }
-            AnimatedVisibility(expanded) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
-                    content()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SingleChoiceItem(
-    modifier: Modifier = Modifier,
-    title: String,
-    desc: String,
-    selected: Boolean,
-    icon: (@Composable () -> Unit)? = null,
-    action: (@Composable () -> Unit)? = null,
-    enabled: Boolean = true,
-    onClick: () -> Unit = {},
-) {
-    val corner by
-        animateDpAsState(
-            if (selected) 28.dp else 16.dp,
-            animationSpec =
-                spring(
-                    stiffness = Spring.StiffnessMedium,
-                    visibilityThreshold = Dp.VisibilityThreshold,
-                ),
-            label = "",
-        )
-    val color by
-        animateColorAsState(
-            if (selected) MaterialTheme.colorScheme.secondaryContainer
-            else MaterialTheme.colorScheme.surfaceContainerLow,
-            label = "",
-        )
-
-    Surface(
-        selected = selected,
-        onClick = onClick,
-        color = color,
-        shape = RoundedCornerShape(corner),
-        modifier = modifier.padding(vertical = 4.dp).run { if (!enabled) alpha(0.32f) else this },
-        enabled = enabled,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    icon?.invoke()
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = title, style = MaterialTheme.typography.titleMedium)
-                }
-                Text(
-                    text = desc,
-                    style = MaterialTheme.typography.bodySmall,
-                    minLines = 2,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 32.dp),
-                )
-            }
-            action?.invoke()
-        }
-    }
-}
-
-@Composable
-internal fun Header(modifier: Modifier = Modifier, icon: ImageVector, title: String) {
-    Column(modifier = modifier) {
-        Icon(
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-            imageVector = icon,
-            contentDescription = null,
-        )
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            modifier =
-                Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp, bottom = 8.dp),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-@Composable
-private fun DownloadTypeSelectionGroup(
-    modifier: Modifier = Modifier,
-    typeEntries: List<DownloadType>,
-    selectedType: DownloadType?,
-    onSelect: (DownloadType) -> Unit,
-) {
-    val typeCount = typeEntries.size
-    if (typeCount == DownloadType.entries.size) {
-        LazyRow(modifier = modifier) {
-            items(typeEntries) { type ->
-                SingleChoiceChip(
-                    selected = selectedType == type,
-                    label = type.label(),
-                    onClick = { onSelect(type) },
-                )
-            }
-        }
-    } else {
-        SingleChoiceSegmentedButtonRow(modifier = modifier.fillMaxWidth()) {
-            typeEntries.forEachIndexed { index, type ->
-                SingleChoiceSegmentedButton(
-                    selected = selectedType == type,
-                    onClick = { onSelect(type) },
-                    shape = SegmentedButtonDefaults.itemShape(index, typeCount),
-                ) {
-                    Text(text = type.label())
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Preset(
-    modifier: Modifier = Modifier,
-    preference: DownloadUtil.DownloadPreferences,
-    downloadType: DownloadType?,
-    selected: Boolean,
-    showEditIcon: Boolean,
-    onEdit: () -> Unit,
-    onClick: () -> Unit,
-) {
-    val description =
-        when (downloadType) {
-            Audio -> {
-                PreferenceStrings.getAudioPresetText(preference)
-            }
-
-            Video -> {
-                PreferenceStrings.getVideoPresetText(preference)
-            }
-
-            Playlist -> stringResource(R.string.preset_format_selection_desc)
-            else -> ""
-        }
-
-    SingleChoiceItem(
-        modifier = modifier,
-        title = stringResource(R.string.preset),
-        desc = description,
-        icon = {
-            Crossfade(selected, animationSpec = spring(stiffness = Spring.StiffnessMedium)) {
-                if (it) {
-                    Icon(
-                        imageVector = Icons.Filled.SettingsSuggest,
-                        null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Outlined.SettingsSuggest,
-                        null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        },
-        selected = selected,
-        action = {
-            Crossfade(showEditIcon, animationSpec = spring(stiffness = Spring.StiffnessMedium)) {
-                if (it) {
-                    Icon(
-                        imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = stringResource(R.string.edit),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        },
-        onClick = {
-            if (showEditIcon) {
-                onEdit()
-            } else {
-                onClick()
-            }
-        },
-    )
-}
-
-@Composable
-private fun Custom(
-    modifier: Modifier = Modifier,
-    selected: Boolean,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    SingleChoiceItem(
-        modifier = modifier,
-        title = stringResource(R.string.custom),
-        desc = stringResource(R.string.custom_format_selection_desc),
-        icon = {
-            Crossfade(selected, animationSpec = spring(stiffness = Spring.StiffnessMedium)) {
-                if (it) {
-                    Icon(
-                        imageVector = Icons.Filled.VideoFile,
-                        null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Outlined.VideoFile,
-                        null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        },
-        selected = selected,
-        enabled = enabled,
-        onClick = onClick,
-    )
-}
-
-private enum class ActionButton {
-    FetchInfo,
-    Download,
-    StartTask,
-}
-
-@Composable
-private fun ActionButton.Icon() {
-    Icon(
-        imageVector =
-            when (this) {
-                FetchInfo -> Icons.AutoMirrored.Filled.ArrowForward
-                Download -> Icons.Outlined.FileDownload
-                StartTask -> Icons.Filled.DownloadDone
-            },
-        contentDescription = null,
-        modifier = Modifier.size(18.dp),
-    )
-}
-
-@Composable
-private fun ActionButton.Label() {
-    Text(
-        stringResource(
-            when (this) {
-                FetchInfo -> R.string.proceed
-                Download -> R.string.download
-                StartTask -> R.string.start
-            }
-        ),
-        modifier = Modifier.padding(start = 8.dp),
-    )
-}
-
-@Composable
-private fun ActionButtons(
-    modifier: Modifier = Modifier,
-    canProceed: Boolean,
-    selectedType: DownloadType?,
-    useFormatSelection: Boolean,
-    onCancel: () -> Unit,
-    onFetchInfo: () -> Unit,
-    onDownload: () -> Unit,
-    onTaskStart: () -> Unit,
-) {
-    val action =
-        if (selectedType == Command) {
-            StartTask
-        } else if (selectedType == Playlist || useFormatSelection) {
-            FetchInfo
-        } else {
-            Download
-        }
-
-    val state = rememberLazyListState()
-    LazyRow(
-        modifier = modifier.fillMaxWidth().padding(top = 12.dp),
-        horizontalArrangement = Arrangement.End,
-        state = state,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        item {
-            OutlinedButtonWithIcon(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                onClick = onCancel,
-                icon = Icons.Outlined.Cancel,
-                text = stringResource(R.string.cancel),
-            )
-        }
-        item {
-            Button(
-                modifier = Modifier,
-                onClick = {
-                    when (action) {
-                        FetchInfo -> onFetchInfo()
-                        Download -> onDownload()
-                        StartTask -> onTaskStart()
-                    }
-                },
-                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
-                enabled = canProceed,
-            ) {
-                AnimatedContent(
-                    targetState = action,
-                    label = "",
-                    transitionSpec = {
-                        (fadeIn(animationSpec = tween(220, delayMillis = 90))).togetherWith(
-                            fadeOut(animationSpec = tween(90))
-                        )
-                    },
-                ) { action ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        action.Icon()
-                        action.Label()
-                    }
-                }
-            }
-        }
     }
 }

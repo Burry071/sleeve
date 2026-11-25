@@ -11,7 +11,6 @@ import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.FileUtil
 import com.junkfood.seal.util.FileUtil.getArchiveFile
 import com.junkfood.seal.util.FileUtil.getConfigFile
-import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.FORMAT_COMPATIBILITY
 import com.junkfood.seal.util.FORMAT_QUALITY
 import com.junkfood.seal.util.HIGH
@@ -27,11 +26,7 @@ private const val CROP_ARTWORK_COMMAND =
     """--ppa "ffmpeg: -c:v mjpeg -vf crop=\"'if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'\"""""
 
 internal fun YoutubeDLRequest.enableCookies(userAgentString: String): YoutubeDLRequest =
-    this.addOption("--cookies", context.getCookieFile().absolutePath).apply {
-        if (userAgentString.isNotEmpty()) {
-            addOption("--add-header", "User-Agent:$userAgentString")
-        }
-    }
+    DownloadUtil.enableCookies(this, userAgentString)
 
 /**
  * Reddit hard-blocks non-browser user agents before the extractor can even

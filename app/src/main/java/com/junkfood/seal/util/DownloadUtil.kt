@@ -11,28 +11,23 @@ import com.junkfood.seal.download.MatchResult
 import com.junkfood.seal.download.Task
 import com.junkfood.seal.download.engine.DirectMedia
 import com.junkfood.seal.download.engine.DownloadSettingsSnapshot
-import com.junkfood.seal.download.engine.ExtractionClients
 import com.junkfood.seal.download.engine.GhostHttpTransferEngine
 import com.junkfood.seal.download.engine.Nm3u8TransferEngine
 import com.junkfood.seal.download.engine.TransferJob
-import com.junkfood.seal.download.engine.YOUTUBE_CLIENT_LADDER
+import com.junkfood.seal.download.engine.YtDlpExtractor
 import com.junkfood.seal.download.engine.YtDlpTransferEngine
+import com.junkfood.seal.download.engine.formatSorter
 import com.junkfood.seal.download.engine.isSafeRemoteUrl as engineUrlIsSafe
 import com.junkfood.seal.download.engine.uniqueFileName as engineUniqueFileName
+import com.junkfood.seal.download.model.DownloadPreferencesFactory
 import com.junkfood.seal.ghostengine.GhostEngine
 import com.junkfood.seal.ui.page.settings.network.Cookie
-import com.junkfood.seal.util.FileUtil.getArchiveFile
 import com.junkfood.seal.util.FileUtil.getCookieFile
 import com.junkfood.seal.util.PreferenceUtil.COOKIE_HEADER
-import com.junkfood.seal.util.PreferenceUtil.getBoolean
-import com.junkfood.seal.util.PreferenceUtil.getInt
-import com.junkfood.seal.util.PreferenceUtil.getString
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
 import java.io.File
-import java.net.URL
-import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -84,48 +79,12 @@ object DownloadUtil {
         silent: Boolean = false,
         processId: String? = null,
     ): Result<YoutubeDLInfo> =
-        YoutubeDL.runCatching {
-            if (!silent) {
-                ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
-            }
-            val request = YoutubeDLRequest(playlistURL).maybeRedditUserAgent(playlistURL)
-            with(request) {
-                // Flat playlist browsing carries no formats, so it runs on
-                // yt-dlp's own client selection like every other rung.
-                //            addOption("--compat-options", "no-youtube-unavailable-videos")
-                addOption("--flat-playlist")
-                addOption("--dump-single-json")
-                addOption("-o", BASENAME)
-                addOption("-R", "1")
-                addOption("--socket-timeout", "5")
-                downloadPreferences.run {
-                    if (extractAudio) {
-                        addOption("-x")
-                    }
-                    applyFormatSorter(this, toFormatSorter())
-                    if (proxy) {
-                        enableProxy(proxyUrl)
-                    }
-                    if (forceIpv4) {
-                        addOption("-4")
-                    }
-                    if (cookies) {
-                        enableCookies(userAgentString)
-                    }
-                    if (restrictFilenames) {
-                        addOption("--restrict-filenames")
-                    }
-                }
-            }
-            // The task id lets a canceled match kill its yt-dlp search through
-            // destroyProcessById; playlist browsing keeps the URL key.
-            execute(request, processId ?: playlistURL).out.run {
-                val playlistInfo = jsonFormat.decodeFromString<PlaylistResult>(this)
-                if (playlistInfo.type != "playlist") {
-                    jsonFormat.decodeFromString<VideoInfo>(this)
-                } else playlistInfo
-            }
-        }
+        YtDlpExtractor.getPlaylistOrVideoInfo(
+            playlistURL = playlistURL,
+            downloadPreferences = downloadPreferences,
+            silent = silent,
+            processId = processId,
+        )
 
     internal fun buildMetadataQuery(
         track: GhostEngine.SpotifyTrack,
@@ -206,103 +165,18 @@ object DownloadUtil {
         MetadataMatch.resolveMetadataTrack(metadata, taskKey, preferences, isActive, queryOverride)
 
     @CheckResult
-    private fun getVideoInfo(
-        request: YoutubeDLRequest,
-        taskKey: String? = null,
-    ): Result<VideoInfo> =
-        request.runCatching {
-            val response: YoutubeDLResponse =
-                YoutubeDL.getInstance().execute(request, taskKey, null)
-            jsonFormat.decodeFromString(response.out)
-        }
-
-    @CheckResult
     fun fetchVideoInfoFromUrl(
         url: String,
         playlistIndex: Int? = null,
         taskKey: String? = null,
         preferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
-    ): Result<VideoInfo> {
-        with(preferences) {
-            // Extraction clients rotate on failure: YouTube's bot checks and
-            // rate limits are client-specific, so a request yt-dlp's default
-            // selection refuses often succeeds on the TV/embedded pair.
-            // Cancellation always stops the ladder.
-            val isYoutube = url.contains("youtube.com", true) || url.contains("youtu.be", true)
-            val clientLadder: List<String?> = if (isYoutube) YOUTUBE_CLIENT_LADDER else listOf(null)
-
-            var lastFailure: Throwable? = null
-            clientLadder.forEach { clients ->
-                val youtubeArgs =
-                    buildList {
-                            if (clients != null) add("player_client=$clients")
-                            if (autoSubtitle && !autoTranslatedSubtitles) {
-                                add("skip=translated_subs")
-                            }
-                        }
-                        .joinToString(separator = ";")
-                val request =
-                    YoutubeDLRequest(url)
-                        .maybeRedditUserAgent(url)
-                        .apply {
-                            addOption("-o", BASENAME)
-                            // One argument per extractor: a second
-                            // "youtube:…" option would have to be merged by
-                            // yt-dlp, and its precedence is not documented.
-                            if (youtubeArgs.isNotEmpty()) {
-                                addOption("--extractor-args", "youtube:$youtubeArgs")
-                            }
-                            if (restrictFilenames) {
-                                addOption("--restrict-filenames")
-                            }
-                            if (extractAudio) {
-                                addOption("-x")
-                            }
-                            applyFormatSorter(this@with, toFormatSorter())
-                            if (cookies) {
-                                enableCookies(userAgentString)
-                            }
-                            if (proxy) {
-                                enableProxy(proxyUrl)
-                            }
-                            if (forceIpv4) {
-                                addOption("-4")
-                            }
-                            /*            if (debug) {
-                                addOption("-v")
-                            }*/
-                            if (autoSubtitle) {
-                                addOption("--write-auto-subs")
-                            }
-                            if (playlistIndex != null) {
-                                addOption("--playlist-items", playlistIndex)
-                                addOption("--dump-json")
-                            } else {
-                                addOption("--dump-single-json")
-                            }
-                            addOption("-R", "1")
-                            addOption("--no-playlist")
-                            addOption("--socket-timeout", "5")
-                        }
-                val result = getVideoInfo(request, taskKey)
-                if (result.isSuccess) {
-                    // Only a rung that worked is worth replaying at download
-                    // time; a null win must be replayable too, so it is
-                    // recorded as a win rather than skipped.
-                    if (taskKey != null) ExtractionClients.record(taskKey, clients)
-                    return result
-                }
-                lastFailure = result.exceptionOrNull()
-                if (lastFailure is YoutubeDL.CanceledException) return Result.failure(lastFailure!!)
-                Log.w(
-                    TAG,
-                    "extraction failed${clients?.let { " (client $it)" } ?: ""}, " +
-                        "ladder continues: ${lastFailure?.message?.take(160)}",
-                )
-            }
-            return Result.failure(lastFailure ?: IllegalStateException("extraction failed"))
-        }
-    }
+    ): Result<VideoInfo> =
+        YtDlpExtractor.fetchVideoInfoFromUrl(
+            url = url,
+            playlistIndex = playlistIndex,
+            taskKey = taskKey,
+            preferences = preferences,
+        )
 
     @Serializable
     data class DownloadPreferences(
@@ -367,155 +241,25 @@ object DownloadUtil {
         val exportM4b: Boolean = false,
     ) {
         companion object {
-            val EMPTY =
-                DownloadPreferences(
-                    extractAudio = false,
-                    createThumbnail = false,
-                    downloadPlaylist = false,
-                    subdirectoryExtractor = false,
-                    subdirectoryPlaylistTitle = false,
-                    commandDirectory = "",
-                    downloadSubtitle = false,
-                    embedSubtitle = false,
-                    keepSubtitle = false,
-                    subtitleLanguage = "",
-                    autoSubtitle = false,
-                    autoTranslatedSubtitles = false,
-                    convertSubtitle = 0,
-                    concurrentFragments = 0,
-                    sponsorBlock = false,
-                    sponsorBlockCategory = "",
-                    cookies = false,
-                    aria2c = false,
-                    audioFormat = 0,
-                    audioQuality = 0,
-                    convertAudio = false,
-                    formatSorting = false,
-                    sortingFields = "",
-                    audioConvertFormat = 0,
-                    videoFormat = 0,
-                    formatIdString = "",
-                    videoResolution = 0,
-                    privateMode = false,
-                    rateLimit = false,
-                    maxDownloadRate = "",
-                    privateDirectory = false,
-                    cropArtwork = false,
-                    sdcard = false,
-                    sdcardUri = "",
-                    embedThumbnail = false,
-                    videoClips = emptyList(),
-                    splitByChapter = false,
-                    debug = false,
-                    proxy = false,
-                    proxyUrl = "",
-                    newTitle = "",
-                    userAgentString = "",
-                    outputTemplate = "",
-                    useDownloadArchive = false,
-                    embedMetadata = false,
-                    restrictFilenames = false,
-                    supportAv1HardwareDecoding = false,
-                    forceIpv4 = false,
-                    mergeAudioStream = false,
-                    mergeToMkv = false,
-                    useCustomAudioPreset = false,
-                    galleryDirect = false,
-                    exportM4b = false,
-                )
+            val EMPTY: DownloadPreferences = DownloadPreferencesFactory.EMPTY
 
-            fun createFromPreferences(): DownloadPreferences {
-                val downloadSubtitle = SUBTITLE.getBoolean()
-                val embedSubtitle = EMBED_SUBTITLE.getBoolean()
-                return DownloadPreferences(
-                    extractAudio = EXTRACT_AUDIO.getBoolean(),
-                    createThumbnail = THUMBNAIL.getBoolean(),
-                    downloadPlaylist = PLAYLIST.getBoolean(),
-                    subdirectoryExtractor = SUBDIRECTORY_EXTRACTOR.getBoolean(),
-                    subdirectoryPlaylistTitle = SUBDIRECTORY_PLAYLIST_TITLE.getBoolean(),
-                    commandDirectory = COMMAND_DIRECTORY.getString(),
-                    downloadSubtitle = downloadSubtitle,
-                    embedSubtitle = embedSubtitle,
-                    keepSubtitle = KEEP_SUBTITLE_FILES.getBoolean(),
-                    subtitleLanguage = SUBTITLE_LANGUAGE.getString(),
-                    autoSubtitle = AUTO_SUBTITLE.getBoolean(),
-                    autoTranslatedSubtitles = AUTO_TRANSLATED_SUBTITLES.getBoolean(),
-                    convertSubtitle = CONVERT_SUBTITLE.getInt(),
-                    concurrentFragments = CONCURRENT.getInt(),
-                    sponsorBlock = SPONSORBLOCK.getBoolean(),
-                    sponsorBlockCategory = PreferenceUtil.getSponsorBlockCategories(),
-                    cookies = COOKIES.getBoolean(),
-                    aria2c = ARIA2C.getBoolean(),
-                    useCustomAudioPreset = USE_CUSTOM_AUDIO_PRESET.getBoolean(),
-                    audioFormat = AUDIO_FORMAT.getInt(),
-                    audioQuality = AUDIO_QUALITY.getInt(),
-                    convertAudio = AUDIO_CONVERT.getBoolean(),
-                    formatSorting = FORMAT_SORTING.getBoolean(),
-                    sortingFields = SORTING_FIELDS.getString(),
-                    audioConvertFormat = PreferenceUtil.getAudioConvertFormat(),
-                    videoFormat = PreferenceUtil.getVideoFormat(),
-                    formatIdString = "",
-                    videoResolution = PreferenceUtil.getVideoResolution(),
-                    privateMode = PRIVATE_MODE.getBoolean(),
-                    rateLimit = RATE_LIMIT.getBoolean(),
-                    maxDownloadRate = PreferenceUtil.getMaxDownloadRate(),
-                    privateDirectory = PRIVATE_DIRECTORY.getBoolean(),
-                    cropArtwork = CROP_ARTWORK.getBoolean(),
-                    sdcard = SDCARD_DOWNLOAD.getBoolean(),
-                    sdcardUri = SDCARD_URI.getString(),
-                    embedThumbnail = EMBED_THUMBNAIL.getBoolean(),
-                    videoClips = emptyList(),
-                    splitByChapter = SPLIT_BY_CHAPTER.getBoolean(),
-                    debug = DEBUG.getBoolean(),
-                    proxy = PROXY.getBoolean(),
-                    proxyUrl = PROXY_URL.getString(),
-                    newTitle = "",
-                    userAgentString =
-                        USER_AGENT_STRING.run { if (USER_AGENT.getBoolean()) getString() else "" },
-                    outputTemplate = OUTPUT_TEMPLATE.getString(),
-                    useDownloadArchive = DOWNLOAD_ARCHIVE.getBoolean(),
-                    embedMetadata = EMBED_METADATA.getBoolean(),
-                    restrictFilenames = RESTRICT_FILENAMES.getBoolean(),
-                    supportAv1HardwareDecoding = checkIfAv1HardwareAccelerated(),
-                    forceIpv4 = FORCE_IPV4.getBoolean(),
-                    mergeAudioStream = false,
-                    mergeToMkv =
-                        (downloadSubtitle && embedSubtitle) || MERGE_OUTPUT_MKV.getBoolean(),
-                    galleryDirect = false,
-                    exportM4b = EXPORT_M4B.getBoolean(),
-                )
-            }
+            fun createFromPreferences(): DownloadPreferences =
+                DownloadPreferencesFactory.createFromPreferences()
         }
     }
 
-    private fun YoutubeDLRequest.enableCookies(userAgentString: String): YoutubeDLRequest =
-        this.addOption("--cookies", context.getCookieFile().absolutePath).apply {
+    internal fun enableCookies(
+        request: YoutubeDLRequest,
+        userAgentString: String,
+    ): YoutubeDLRequest =
+        request.addOption("--cookies", context.getCookieFile().absolutePath).apply {
             if (userAgentString.isNotEmpty()) {
                 addOption("--add-header", "User-Agent:$userAgentString")
             }
         }
 
-    /**
-     * Reddit hard-blocks non-browser user agents before the extractor can
-     * even reach the JSON API, so requests for reddit hosts present as the
-     * browser this device runs. Skipped when the user set a custom UA.
-     */
-    private fun YoutubeDLRequest.maybeRedditUserAgent(url: String): YoutubeDLRequest =
-        apply {
-            if (RedditResolver.isRedditHost(url) && !USER_AGENT.getBoolean()) {
-                addOption("--user-agent", RedditResolver.BROWSER_UA)
-            }
-        }
-
-    private fun YoutubeDLRequest.enableProxy(proxyUrl: String): YoutubeDLRequest =
-        this.addOption("--proxy", proxyUrl)
-
-    private fun YoutubeDLRequest.useDownloadArchive(): YoutubeDLRequest =
-        this.addOption("--download-archive", context.getArchiveFile().absolutePath)
-
     @CheckResult
     fun getCookieListFromDatabase(): Result<List<Cookie>> = CookieStore.listFromDatabase()
-
 
     fun List<Cookie>.toCookiesFileContent(): String =
         this.fold(StringBuilder(COOKIE_HEADER)) { acc, cookie ->
@@ -526,79 +270,8 @@ object DownloadUtil {
     fun getCookiesContentFromDatabase(): Result<String> =
         getCookieListFromDatabase().mapCatching { it.toCookiesFileContent() }
 
-    private fun YoutubeDLRequest.enableAria2c(): YoutubeDLRequest =
-        this.addOption("--downloader", "libaria2c.so")
-
     @CheckResult
-    private fun DownloadPreferences.toAudioFormatSorter(): String =
-        this.run {
-            if (!useCustomAudioPreset) return@run ""
-            val format =
-                when (audioFormat) {
-                    M4A -> "acodec:aac"
-                    OPUS -> "acodec:opus"
-                    else -> ""
-                }
-            val quality =
-                when (audioQuality) {
-                    HIGH -> "abr~192"
-                    MEDIUM -> "abr~128"
-                    LOW -> "abr~64"
-                    else -> ""
-                }
-            return@run connectWithDelimiter(format, quality, delimiter = ",")
-        }
-
-    @CheckResult
-    private fun DownloadPreferences.toVideoFormatSorter(): String =
-        this.run {
-            val format =
-                when (videoFormat) {
-                    FORMAT_COMPATIBILITY -> "proto,vcodec:h264,ext"
-                    FORMAT_QUALITY ->
-                        if (supportAv1HardwareDecoding) {
-                            "vcodec:av01"
-                        } else {
-                            "vcodec:vp9.2"
-                        }
-
-                    else -> ""
-                }
-            val res =
-                when (videoResolution) {
-                    1 -> "res:2160"
-                    2 -> "res:1440"
-                    3 -> "res:1080"
-                    4 -> "res:720"
-                    5 -> "res:480"
-                    6 -> "res:360"
-                    7 -> "+res"
-                    else -> ""
-                }
-            val sorter = if (videoFormat == FORMAT_COMPATIBILITY) {
-                connectWithDelimiter(format, res, delimiter = ",")
-            } else {
-                connectWithDelimiter(res, format, delimiter = ",")
-            }
-            return@run sorter
-        }
-
-    private fun YoutubeDLRequest.applyFormatSorter(
-        preferences: DownloadPreferences,
-        sorter: String,
-    ) =
-        preferences.run {
-            if (formatSorting && sortingFields.isNotEmpty()) addOption("-S", sortingFields)
-            else if (sorter.isNotEmpty()) addOption("-S", sorter) else {}
-        }
-
-    @CheckResult
-    fun DownloadPreferences.toFormatSorter(): String =
-        connectWithDelimiter(
-            this.toVideoFormatSorter(),
-            this.toAudioFormatSorter(),
-            delimiter = ",",
-        )
+    fun DownloadPreferences.toFormatSorter(): String = formatSorter(this)
 
     /** @return true when a lane registered this id and cancelled it. */
     fun cancelGhostTask(taskId: String): Boolean = GhostHttpTransferEngine.cancel(taskId)
@@ -743,32 +416,10 @@ object DownloadUtil {
 
 
     internal fun sanitizeCustomCommandUrls(raw: String): List<String> =
-        raw.split(Regex("\\s+"))
-            .asSequence()
-            .map { it.trim() }
-            .filter { token ->
-                if (token.isEmpty() || token.startsWith("-")) return@filter false
-                if (token.any { it.code < 0x20 || it.code == 0x7F }) return@filter false
-                val schemeEnd = token.indexOf("://")
-                if (schemeEnd <= 0) return@filter false
-                val scheme = token.substring(0, schemeEnd).lowercase()
-                if (scheme != "http" && scheme != "https") return@filter false
-                val afterScheme = token.substring(schemeEnd + 3)
-                val authEnd =
-                    afterScheme.indexOfAny(charArrayOf('/', '?', '#')).let {
-                        if (it == -1) afterScheme.length else it
-                    }
-                afterScheme.substring(0, authEnd).isNotBlank()
-            }
-            .toList()
+        YtDlpExtractor.sanitizeCustomCommandUrls(raw)
 
-    internal fun customCommandConfigFile(cacheDir: File, taskId: String): File {
-        val digest =
-            MessageDigest.getInstance("SHA-256")
-                .digest(taskId.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it) }
-        return File(cacheDir, "config_${digest.take(16)}.txt")
-    }
+    internal fun customCommandConfigFile(cacheDir: File, taskId: String): File =
+        YtDlpExtractor.customCommandConfigFile(cacheDir, taskId)
 
     @CheckResult
     fun executeCustomCommandTask(
@@ -788,28 +439,15 @@ object DownloadUtil {
             runCatching {
                 FileUtil.writeContentToFile(template.template, configFile)
                 val request =
-                    with(preferences) {
-                        YoutubeDLRequest(urlList).apply {
-                            commandDirectory.takeIf { it.isNotEmpty() }?.let { addOption("-P", it) }
-                            addOption("--newline")
-                            if (aria2c) {
-                                enableAria2c()
-                            }
-                            if (useDownloadArchive) {
-                                useDownloadArchive()
-                            }
-                            if (restrictFilenames) {
-                                addOption("--restrict-filenames")
-                            }
-                            addOption(
-                                "--config-locations",
-                                configFile.absolutePath,
-                            )
-                            if (cookies) {
-                                enableCookies(userAgentString)
-                            }
-                            addOption("--")
+                    YtDlpExtractor.buildCustomCommandBaseRequest(urlList, preferences).apply {
+                        addOption(
+                            "--config-locations",
+                            configFile.absolutePath,
+                        )
+                        if (preferences.cookies) {
+                            enableCookies(this, preferences.userAgentString)
                         }
+                        addOption("--")
                     }
 
                 YoutubeDL.getInstance()
@@ -819,8 +457,4 @@ object DownloadUtil {
             configFile.delete()
         }
     }
-
-    private fun checkIfAv1HardwareAccelerated(): Boolean =
-        DeviceCapabilities.av1HardwareAccelerated()
-
 }
